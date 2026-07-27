@@ -1,0 +1,2377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpsMatrix Scheduler</title>
+<style>
+  :root {
+    --bg: #eef1f4;
+    --surface: #ffffff;
+    --surface-2: #f7f9fa;
+    --ink: #1c2b33;
+    --muted: #5b7083;
+    --faint: #8fa3b0;
+    --line: #d8e0e6;
+    --line-soft: #e7edf1;
+    --brand: #0f6b62;
+    --brand-soft: #e2f0ee;
+    --brand-ink: #ffffff;
+    --accent: #d98e1f;
+    --accent-soft: #fbf1de;
+    --ok: #2e8f63;
+    --ok-soft: #e2f2ea;
+    --warn: #c07f16;
+    --warn-soft: #faeed7;
+    --danger: #c34444;
+    --danger-soft: #f9e7e7;
+    --mono: Consolas, "Cascadia Code", "SF Mono", monospace;
+    --sans: "Segoe UI", -apple-system, Roboto, "Helvetica Neue", sans-serif;
+    --shadow: 0 1px 3px rgba(28,43,51,.08), 0 4px 14px rgba(28,43,51,.06);
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: 14px; line-height: 1.45;
+  }
+  button { font-family: inherit; }
+  input, select, textarea { font-family: inherit; font-size: 13px; color: var(--ink); }
+  ::selection { background: var(--brand-soft); }
+
+  /* ---------- header ---------- */
+  header.app {
+    background: var(--surface); border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 18px; padding: 0 18px;
+    height: 54px; position: sticky; top: 0; z-index: 40;
+  }
+  .brand { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+  .brand .logo { font-weight: 700; font-size: 15px; letter-spacing: .04em; color: var(--brand); }
+  .brand .logo b { color: var(--ink); font-weight: 700; }
+  .brand .tag { font-family: var(--mono); font-size: 10.5px; color: var(--faint); letter-spacing: .08em; text-transform: uppercase; }
+  nav.tabs { display: flex; gap: 2px; height: 100%; }
+  nav.tabs button {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    padding: 0 14px; font-size: 13.5px; color: var(--muted); cursor: pointer; height: 100%;
+  }
+  nav.tabs button:hover { color: var(--ink); }
+  nav.tabs button.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+  nav.tabs button:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  .kpis { margin-left: auto; display: flex; gap: 16px; }
+  .kpi { text-align: right; line-height: 1.15; }
+  .kpi .v { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--ink); }
+  .kpi .l { font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
+
+  /* ---------- shell layout ---------- */
+  .shell { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: calc(100vh - 54px); }
+  aside.treepane {
+    background: var(--surface); border-right: 1px solid var(--line);
+    padding: 12px 10px 40px; overflow-y: auto; max-height: calc(100vh - 54px); position: sticky; top: 54px;
+  }
+  main.content { padding: 18px 20px 60px; min-width: 0; }
+  @media (max-width: 980px) {
+    .shell { grid-template-columns: 1fr; }
+    aside.treepane { position: fixed; left: 0; top: 54px; bottom: 0; width: 300px; z-index: 45;
+      transform: translateX(-102%); transition: transform .18s ease; box-shadow: var(--shadow); max-height: none; }
+    aside.treepane.open { transform: translateX(0); }
+    .treetoggle { display: inline-flex !important; }
+  }
+  .treetoggle { display: none; background: none; border: 1px solid var(--line); border-radius: 7px;
+    padding: 5px 10px; cursor: pointer; color: var(--muted); align-items: center; }
+
+  /* ---------- tree ---------- */
+  .scopebar { display: flex; align-items: center; gap: 8px; padding: 4px 6px 10px; }
+  .scopebar .title { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  .scopebar button.clear { margin-left: auto; background: none; border: none; color: var(--brand); font-size: 12px; cursor: pointer; }
+  .tnode { user-select: none; }
+  .trow {
+    display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 7px; cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .trow:hover { background: var(--surface-2); }
+  .trow.selected { background: var(--brand-soft); border-color: rgba(15,107,98,.25); }
+  .trow .caret { width: 14px; text-align: center; color: var(--faint); font-size: 10px; flex: none; cursor: pointer; }
+  .trow .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .trow.lvl-building .nm { font-weight: 700; }
+  .trow.lvl-floor .nm { font-weight: 600; }
+  .trow.lvl-dept .nm { color: var(--muted); font-weight: 600; font-size: 12.5px; }
+  .trow.lvl-room .nm { font-weight: 400; }
+  .trow .stat { font-family: var(--mono); font-size: 10.5px; color: var(--faint); flex: none; }
+  .trow .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .dot.s-full { background: var(--ok); }
+  .dot.s-partial { background: var(--accent); }
+  .dot.s-none { background: #c9d4db; }
+  .tkids { margin-left: 14px; border-left: 1px solid var(--line-soft); padding-left: 4px; }
+  .tree-roll { padding: 10px 8px; margin-top: 10px; border-top: 1px solid var(--line-soft); }
+  .tree-roll .rrow { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); padding: 2px 0; }
+  .tree-roll .rrow b { font-family: var(--mono); font-weight: 600; color: var(--ink); }
+  .tree-empty { padding: 18px 10px; color: var(--faint); font-size: 13px; }
+
+  /* ---------- generic cards / panels ---------- */
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .card + .card { margin-top: 16px; }
+  .card > .chead {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft);
+  }
+  .card > .chead h2 { font-size: 13px; font-weight: 700; letter-spacing: .02em; }
+  .card > .chead .sub { font-size: 12px; color: var(--faint); }
+  .card > .cbody { padding: 14px 16px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .spacer { flex: 1 1 auto; }
+  h1.pagetitle { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+  p.pagesub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+
+  /* ---------- buttons ---------- */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 13px;
+    cursor: pointer; transition: background .12s, border-color .12s;
+  }
+  .btn:hover { background: var(--surface-2); border-color: #c3cfd7; }
+  .btn.primary { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); font-weight: 600; }
+  .btn.primary:hover { background: #0c5951; }
+  .btn.danger { color: var(--danger); border-color: #e3b6b6; }
+  .btn.danger:hover { background: var(--danger-soft); }
+  .btn.small { padding: 4px 9px; font-size: 12px; border-radius: 6px; }
+  .btn.ghost { border-color: transparent; background: none; color: var(--brand); }
+  .btn.ghost:hover { background: var(--brand-soft); }
+  .btn[disabled] { opacity: .45; cursor: default; pointer-events: none; }
+
+  /* ---------- inputs ---------- */
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field > label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  input[type=text], input[type=number], input[type=date], input[type=time], select, textarea {
+    border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; background: var(--surface);
+  }
+  input[type=text]:focus, input[type=number]:focus, select:focus, textarea:focus { border-color: var(--brand); outline: none; }
+  table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.grid th {
+    text-align: left; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint);
+    padding: 8px 10px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--surface-2);
+  }
+  table.grid td { padding: 7px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+  table.grid tr:hover td { background: #fbfcfd; }
+  table.grid td.num, table.grid th.num { text-align: right; font-family: var(--mono); }
+  table.grid td input, table.grid td select {
+    padding: 4px 7px; border-radius: 5px; font-size: 12.5px; width: 100%;
+  }
+  table.grid td input[type=number] { width: 74px; text-align: right; font-family: var(--mono); }
+  .tablewrap { overflow-x: auto; }
+
+  /* ---------- intake ---------- */
+  .dropzone {
+    border: 2px dashed var(--line); border-radius: var(--radius); padding: 42px 20px; text-align: center;
+    background: var(--surface); cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .dropzone:hover, .dropzone.hover { border-color: var(--brand); background: var(--brand-soft); }
+  .dropzone .big { font-size: 15px; font-weight: 600; }
+  .dropzone .hint { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+  .dropzone .hint code { font-family: var(--mono); background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  .pairlist { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .pairitem {
+    display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 12px;
+  }
+  .pairitem .fname { font-family: var(--mono); font-size: 12px; }
+  .pairitem .st { margin-left: auto; font-size: 12px; }
+  .pairitem .st.ok { color: var(--ok); }
+  .pairitem .st.wait { color: var(--faint); }
+  .badge {
+    display: inline-block; font-family: var(--mono); font-size: 10.5px; padding: 2px 8px; border-radius: 99px;
+    background: var(--surface-2); border: 1px solid var(--line); color: var(--muted);
+  }
+  .badge.ok { background: var(--ok-soft); border-color: rgba(46,143,99,.35); color: var(--ok); }
+  .badge.warn { background: var(--warn-soft); border-color: rgba(192,127,22,.35); color: var(--warn); }
+  .badge.brand { background: var(--brand-soft); border-color: rgba(15,107,98,.3); color: var(--brand); }
+
+  /* ---------- board ---------- */
+  .boardgrid { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1180px) { .boardgrid { grid-template-columns: 1fr; } }
+  .tray { position: sticky; top: 70px; }
+  .tray .cbody { max-height: calc(100vh - 210px); overflow-y: auto; }
+  .chip {
+    display: flex; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid var(--line);
+    border-radius: 7px; background: var(--surface); margin-bottom: 6px; cursor: grab; font-size: 12.5px;
+  }
+  .chip:active { cursor: grabbing; }
+  .chip.dragging { opacity: .4; }
+  .chip .mins { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .chip .rt { font-size: 10.5px; color: var(--faint); }
+  .chip.job { border-left: 3px solid var(--accent); }
+  .chip.room { border-left: 3px solid var(--brand); }
+  .shiftblock { margin-bottom: 20px; }
+  .shifthead {
+    display: flex; align-items: baseline; gap: 10px; padding: 8px 12px; background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: 8px 8px 0 0; border-bottom: none;
+  }
+  .shifthead h3 { font-size: 13px; font-weight: 700; }
+  .shifthead .time { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .shifthead .tot { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .empgrid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px;
+    padding: 12px; border: 1px solid var(--line); border-radius: 0 0 8px 8px; background: var(--surface);
+  }
+  .empcard { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); display: flex; flex-direction: column; min-height: 120px; }
+  .empcard.dropover { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand-soft); }
+  .empcard .ehead { padding: 9px 11px 6px; }
+  .empcard .ehead .nm { font-weight: 600; font-size: 13px; display: flex; gap: 6px; align-items: baseline; }
+  .empcard .ehead .role { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
+  .capbar { height: 6px; border-radius: 4px; background: var(--line-soft); margin: 5px 11px 4px; overflow: hidden; position: relative; }
+  .capbar > i { display: block; height: 100%; border-radius: 4px; background: var(--ok); transition: width .15s; }
+  .capbar.warn > i { background: var(--warn); }
+  .capbar.over > i { background: var(--danger); }
+  .capnote { font-family: var(--mono); font-size: 10.5px; color: var(--muted); padding: 0 11px 6px; }
+  .empcard .list { padding: 4px 8px 10px; flex: 1; }
+  .shiftdrop { border: 1px dashed var(--line); border-radius: 7px; padding: 8px 10px; font-size: 12px; color: var(--faint); margin-top: 8px; }
+  .shiftdrop.dropover { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
+  .areagroup { padding: 8px 0; }
+  .areagroup h4 { font-size: 12.5px; margin-bottom: 6px; }
+  .cover { font-size: 12px; color: var(--muted); }
+
+  /* ---------- map ---------- */
+  .filterbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 12px; }
+  .filterbar .field { min-width: 130px; }
+  .maplegend { display: flex; gap: 12px; flex-wrap: wrap; padding: 10px 4px 0; font-size: 12px; color: var(--muted); }
+  .maplegend .li { display: inline-flex; align-items: center; gap: 6px; }
+  .maplegend .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+  canvas.floorcv { display: block; width: 100%; border-radius: 0 0 var(--radius) var(--radius);
+    background:
+      repeating-linear-gradient(0deg, transparent 0 23px, rgba(15,107,98,.04) 23px 24px),
+      repeating-linear-gradient(90deg, transparent 0 23px, rgba(15,107,98,.04) 23px 24px),
+      #fbfcfd;
+    cursor: crosshair;
+  }
+  .nolabel { padding: 8px 16px 14px; font-size: 12px; color: var(--muted); }
+  .nolabel .chiplink { display: inline-block; margin: 2px 4px 2px 0; padding: 3px 9px; border: 1px solid var(--line);
+    border-radius: 99px; cursor: pointer; background: var(--surface); font-size: 12px; }
+  .nolabel .chiplink:hover { border-color: var(--brand); color: var(--brand); }
+
+  /* ---------- detail drawer ---------- */
+  .drawer {
+    position: fixed; top: 54px; right: 0; bottom: 0; width: 380px; max-width: 94vw; z-index: 50;
+    background: var(--surface); border-left: 1px solid var(--line); box-shadow: -6px 0 24px rgba(28,43,51,.12);
+    transform: translateX(103%); transition: transform .18s ease; display: flex; flex-direction: column;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer .dhead { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line-soft); }
+  .drawer .dhead h3 { font-size: 15px; font-weight: 700; flex: 1; }
+  .drawer .dbody { padding: 14px 16px 30px; overflow-y: auto; flex: 1; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 10px; font-size: 13px; margin-bottom: 14px; }
+  .kv .k { color: var(--faint); font-size: 12px; padding-top: 2px; }
+  .kv .v { font-weight: 500; }
+  .kv .v.mono { font-family: var(--mono); }
+  .closex { background: none; border: none; font-size: 17px; color: var(--faint); cursor: pointer; padding: 4px 8px; border-radius: 6px; }
+  .closex:hover { background: var(--surface-2); color: var(--ink); }
+
+  /* ---------- modal ---------- */
+  .modalback {
+    position: fixed; inset: 0; background: rgba(20,32,40,.45); z-index: 90; display: flex;
+    align-items: center; justify-content: center; padding: 20px;
+  }
+  .modal { background: var(--surface); border-radius: 12px; box-shadow: 0 18px 60px rgba(0,0,0,.25);
+    width: 560px; max-width: 100%; max-height: 90vh; display: flex; flex-direction: column; }
+  .modal .mhead { padding: 16px 20px 10px; }
+  .modal .mhead h3 { font-size: 15px; }
+  .modal .mbody { padding: 6px 20px 12px; overflow-y: auto; }
+  .modal .mfoot { padding: 12px 20px 16px; display: flex; gap: 10px; justify-content: flex-end; border-top: 1px solid var(--line-soft); }
+
+  /* ---------- toast ---------- */
+  #toasthost { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 120; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .toast {
+    background: #223640; color: #eef4f7; font-size: 13px; padding: 9px 16px; border-radius: 8px;
+    box-shadow: var(--shadow); animation: toastin .18s ease;
+  }
+  .toast.err { background: var(--danger); }
+  @keyframes toastin { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  .emptystate { padding: 34px 18px; text-align: center; color: var(--muted); }
+  .emptystate .big { font-size: 15px; font-weight: 600; color: var(--ink); margin-bottom: 6px; }
+  .emptystate p { font-size: 13px; max-width: 420px; margin: 0 auto 12px; }
+
+  .note { font-size: 12px; color: var(--muted); }
+  .note.estimate { background: var(--accent-soft); border: 1px solid rgba(217,142,31,.3); border-radius: 7px; padding: 8px 12px; }
+
+  /* ---------- print ---------- */
+  #printsheet { display: none; }
+  @media print {
+    body > *:not(#printsheet) { display: none !important; }
+    body { background: #fff; }
+    #printsheet { display: block; padding: 0; font-size: 12px; }
+    .psheet { page-break-after: always; padding: 24px 10px; }
+    .psheet h2 { font-size: 16px; margin-bottom: 2px; }
+    .psheet .meta { color: #444; margin-bottom: 12px; font-size: 11.5px; }
+    .psheet table { width: 100%; border-collapse: collapse; }
+    .psheet th, .psheet td { border: 1px solid #bbb; padding: 5px 8px; text-align: left; font-size: 11.5px; }
+    .psheet th { background: #f0f0f0; }
+    .psheet td.num { text-align: right; font-family: var(--mono); }
+    .psheet .sig { margin-top: 26px; display: flex; gap: 40px; }
+    .psheet .sig span { border-top: 1px solid #888; padding-top: 4px; width: 220px; font-size: 11px; color: #555; }
+  }
+</style>
+</head>
+<body>
+<header class="app">
+  <button class="treetoggle" id="btnTreeToggle" title="Toggle facility tree" aria-label="Toggle facility tree">&#9776;</button>
+  <div class="brand"><span class="logo">OPS<b>MATRIX</b></span><span class="tag">Scheduler</span></div>
+  <nav class="tabs" id="mainTabs">
+    <button data-view="schedule">Schedule</button>
+    <button data-view="map">Map</button>
+    <button data-view="import">Import</button>
+    <button data-view="settings">Settings</button>
+  </nav>
+  <div class="kpis" id="kpis"></div>
+</header>
+
+<div class="shell">
+  <aside class="treepane" id="treePane">
+    <div class="scopebar">
+      <span class="title">Facility</span>
+      <button class="clear" id="btnClearScope" style="display:none">clear scope</button>
+    </div>
+    <div id="treeHost"></div>
+    <div class="tree-roll" id="treeRollup"></div>
+  </aside>
+  <main class="content" id="content"></main>
+</div>
+
+<div class="drawer" id="drawer">
+  <div class="dhead">
+    <h3 id="drawerTitle">Room</h3>
+    <button class="closex" id="btnDrawerClose" aria-label="Close detail">&#10005;</button>
+  </div>
+  <div class="dbody" id="drawerBody"></div>
+</div>
+
+<div id="modalHost"></div>
+<div id="toasthost"></div>
+<div id="printsheet"></div>
+
+<script>
+(function () {
+"use strict";
+
+/* ================================================================
+   utils
+================================================================ */
+function $(sel, root) { return (root || document).querySelector(sel); }
+function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+function el(tag, attrs, children) {
+  var n = document.createElement(tag);
+  if (attrs) {
+    for (var k in attrs) {
+      if (!Object.prototype.hasOwnProperty.call(attrs, k)) continue;
+      var v = attrs[k];
+      if (k === "class") n.className = v;
+      else if (k === "text") n.textContent = v;
+      else if (k === "html") n.innerHTML = v;
+      else if (k === "dataset") { for (var dk in v) { if (Object.prototype.hasOwnProperty.call(v, dk)) n.setAttribute("data-" + dk, v[dk]); } }
+      else if (k.indexOf("on") === 0) n.addEventListener(k.slice(2), v);
+      else n.setAttribute(k, v);
+    }
+  }
+  if (children) {
+    for (var i = 0; i < children.length; i++) {
+      var c = children[i];
+      if (c === null || c === undefined) continue;
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    }
+  }
+  return n;
+}
+function uid(prefix) { return prefix + "_" + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4); }
+function fmt(n, dp) {
+  if (n === null || n === undefined || isNaN(n)) return "–";
+  var d = (dp === undefined) ? 0 : dp;
+  return Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function fmtHrs(mins) {
+  if (!mins) return "0 h";
+  return (mins / 60).toFixed(1) + " h";
+}
+function esc(s) {
+  return String(s === undefined || s === null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function toast(msg, isErr) {
+  var host = $("#toasthost");
+  var t = el("div", { class: "toast" + (isErr ? " err" : ""), text: msg });
+  host.appendChild(t);
+  setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 3200);
+}
+function download(name, text, mime) {
+  var blob = new Blob([text], { type: mime || "application/json" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+}
+function byId(list, id) {
+  for (var i = 0; i < list.length; i++) { if (list[i].id === id) return list[i]; }
+  return null;
+}
+function todayStr() {
+  var d = new Date();
+  return d.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+}
+
+/* ================================================================
+   parsers — lifted VERBATIM from opsmatrix-scan-importer.html
+   (verified against magicplan exports; do not modify)
+================================================================ */
+function decodeDxfText(s) {
+  return s.replace(/\\U\+([0-9a-fA-F]{4})/g, function (m, hex) {
+    return String.fromCharCode(parseInt(hex, 16));
+  });
+}
+function parseDXF(text) {
+  var lines = text.split(/\r?\n/);
+  var walls = [], labels = [], openings = [];
+  var section = "", cur = null, i = 0;
+  function flush() {
+    if (!cur) return;
+    if (section !== "ENTITIES") { cur = null; return; }
+    if (cur.type === "LWPOLYLINE" && cur.layer === "walls" && cur.pts.length > 2) {
+      walls.push({ points: cur.pts, closed: cur.closed });
+    } else if (cur.type === "TEXT" && cur.text) {
+      labels.push({ text: decodeDxfText(cur.text), x: cur.x, y: cur.y });
+    } else if (cur.type === "INSERT" && cur.name && cur.name.indexOf("W-") === 0) {
+      openings.push({ name: cur.name, x: cur.x, y: cur.y });
+    }
+    cur = null;
+  }
+  while (i < lines.length - 1) {
+    var code = parseInt(lines[i].trim(), 10);
+    var v = lines[i + 1].trim();
+    i += 2;
+    if (isNaN(code)) continue;
+    if (code === 0) {
+      flush();
+      if (v === "ENDSEC") section = "";
+      if (v === "LWPOLYLINE" || v === "TEXT" || v === "INSERT") {
+        cur = { type: v, layer: "", pts: [], closed: false, text: "", name: "", x: 0, y: 0, lastX: null };
+      }
+      continue;
+    }
+    if (code === 2 && section === "" && (v === "ENTITIES" || v === "BLOCKS" || v === "HEADER" || v === "TABLES" || v === "OBJECTS")) {
+      section = v; continue;
+    }
+    if (!cur) continue;
+    if (code === 8) cur.layer = v;
+    else if (code === 70 && cur.type === "LWPOLYLINE") cur.closed = (parseInt(v, 10) & 1) === 1;
+    else if (code === 10) {
+      if (cur.type === "LWPOLYLINE") cur.lastX = parseFloat(v);
+      else cur.x = parseFloat(v);
+    }
+    else if (code === 20) {
+      if (cur.type === "LWPOLYLINE" && cur.lastX !== null) { cur.pts.push([cur.lastX, parseFloat(v)]); cur.lastX = null; }
+      else cur.y = parseFloat(v);
+    }
+    else if (code === 1 && cur.type === "TEXT") cur.text = v;
+    else if (code === 2 && cur.type === "INSERT") cur.name = v;
+  }
+  flush();
+  return { walls: walls, labels: labels, openings: openings, units: "ft" };
+}
+function parseStatsCSV(text) {
+  var lines = text.split(/\r?\n/);
+  var plan = {}, floors = [], mode = "", currentFloor = null;
+  for (var i = 0; i < lines.length; i++) {
+    var raw = lines[i];
+    if (!raw || !raw.trim()) continue;
+    var cells = raw.split(",");
+    var first = cells[0].trim();
+    if (first === "PLAN ATTRIBUTES") { mode = "plan"; continue; }
+    if (first === "FLOOR ATTRIBUTES") { mode = "floorattr"; continue; }
+    if (first === "ROOM ATTRIBUTES") { mode = "rooms"; continue; }
+    if (first === "WALL ATTRIBUTES" || first === "OBJECT COUNT" || first === "Object Attributes") { mode = first; continue; }
+    if (mode === "plan") {
+      if (cells.length >= 2 && cells[1].trim()) plan[first] = cells[1].trim();
+      continue;
+    }
+    if (mode === "rooms") {
+      var hasData = cells.length > 2 && cells[1] && cells[1].trim() !== "";
+      if (!hasData) { currentFloor = { name: first, rooms: [] }; floors.push(currentFloor); }
+      else if (currentFloor) {
+        currentFloor.rooms.push({
+          name: first,
+          areaSqFt: parseFloat(cells[1]),
+          volumeCuFt: parseFloat(cells[2]),
+          groundPerimeter: cells[3] ? cells[3].trim() : "",
+          doorAreaSqFt: cells[7] ? parseFloat(cells[7]) : 0,
+          windowAreaSqFt: cells[8] ? parseFloat(cells[8]) : 0,
+          ceilingHeight: cells[9] ? cells[9].trim() : ""
+        });
+      }
+      continue;
+    }
+  }
+  var gross = plan["Ground surface with all walls: sq ft"];
+  var cleanable = plan["Ground surface without walls: sq ft"];
+  return {
+    grossSqFt: gross ? parseFloat(gross) : null,
+    cleanableSqFt: cleanable ? parseFloat(cleanable) : null,
+    totalAreaSqFt: cleanable ? parseFloat(cleanable) : null, // cleanable is the working number
+    roomCount: plan["Rooms"] ? parseInt(plan["Rooms"], 10) : null,
+    created: plan["Project creation date"] || "",
+    floors: floors
+  };
+}
+
+/* ================================================================
+   store — localStorage under opsmatrix_sched_v1
+================================================================ */
+var LS_KEY = "opsmatrix_sched_v1";
+
+function seedRoomTypes() {
+  // Templates: choosing a type in intake auto-fills floor type, fixtures, tasks, frequency.
+  return [
+    { id: "rt_patient",  name: "Patient Room",     floorType: "VCT",         fixtures: 1, frequency: "7x", tasks: ["Daily clean", "High-touch disinfection"] },
+    { id: "rt_restroom", name: "Restroom",         floorType: "Ceramic Tile",fixtures: 3, frequency: "7x", tasks: ["Daily clean", "Disinfect fixtures", "Restock"] },
+    { id: "rt_office",   name: "Office",           floorType: "Carpet",      fixtures: 0, frequency: "5x", tasks: ["Daily clean"] },
+    { id: "rt_corridor", name: "Corridor",         floorType: "VCT",         fixtures: 0, frequency: "7x", tasks: ["Dust mop + damp mop", "Spot clean"] },
+    { id: "rt_or",       name: "Operating Room",   floorType: "Sheet Vinyl", fixtures: 1, frequency: "7x", tasks: ["Terminal clean"] },
+    { id: "rt_exam",     name: "Exam Room",        floorType: "VCT",         fixtures: 1, frequency: "5x", tasks: ["Daily clean", "High-touch disinfection"] },
+    { id: "rt_lobby",    name: "Lobby / Waiting",  floorType: "VCT",         fixtures: 0, frequency: "7x", tasks: ["Daily clean", "Spot clean glass"] },
+    { id: "rt_utility",  name: "Utility / Storage",floorType: "Concrete",    fixtures: 0, frequency: "1x", tasks: ["Weekly clean"] },
+    { id: "rt_nursesta", name: "Nurse Station",    floorType: "VCT",         fixtures: 0, frequency: "7x", tasks: ["Daily clean", "High-touch disinfection"] },
+    { id: "rt_breakrm",  name: "Break Room",       floorType: "VCT",         fixtures: 1, frequency: "7x", tasks: ["Daily clean"] }
+  ];
+}
+function seedFloorTypes() {
+  return ["VCT", "Carpet", "Ceramic Tile", "Sheet Vinyl", "Rubber", "Terrazzo", "Concrete", "Epoxy"];
+}
+function seedBaseRates() {
+  // Editable estimates — ISSA-style production rates expressed as minutes per 1,000 cleanable sq ft.
+  return [
+    { id: uid("br"), roomType: "Patient Room",      floorType: "VCT",          minutesPer1000: 34 },
+    { id: uid("br"), roomType: "Restroom",          floorType: "Ceramic Tile", minutesPer1000: 60 },
+    { id: uid("br"), roomType: "Office",            floorType: "Carpet",       minutesPer1000: 22 },
+    { id: uid("br"), roomType: "Corridor",          floorType: "VCT",          minutesPer1000: 12 },
+    { id: uid("br"), roomType: "Operating Room",    floorType: "Sheet Vinyl",  minutesPer1000: 55 },
+    { id: uid("br"), roomType: "Exam Room",         floorType: "VCT",          minutesPer1000: 30 },
+    { id: uid("br"), roomType: "Lobby / Waiting",   floorType: "VCT",          minutesPer1000: 18 },
+    { id: uid("br"), roomType: "Utility / Storage", floorType: "Concrete",     minutesPer1000: 10 },
+    { id: uid("br"), roomType: "Nurse Station",     floorType: "VCT",          minutesPer1000: 26 },
+    { id: uid("br"), roomType: "Break Room",        floorType: "VCT",          minutesPer1000: 24 },
+    { id: uid("br"), roomType: "(any)",             floorType: "(any)",        minutesPer1000: 25 }
+  ];
+}
+function seedModifiers() {
+  return [
+    { id: "mod_discharge", name: "Discharge / terminal clean multiplier", kind: "multiplier", value: 1.5 },
+    { id: "mod_isolation", name: "Isolation room multiplier",             kind: "multiplier", value: 1.25 },
+    { id: "mod_stripwax",  name: "Project: strip & wax (min / 1,000 sq ft)",      kind: "per1000", value: 240 },
+    { id: "mod_extract",   name: "Project: carpet extraction (min / 1,000 sq ft)", kind: "per1000", value: 90 }
+  ];
+}
+function seedFrequencies() {
+  return [
+    { id: "7x", label: "7x / week (daily)", perWeek: 7 },
+    { id: "6x", label: "6x / week", perWeek: 6 },
+    { id: "5x", label: "5x / week (weekdays)", perWeek: 5 },
+    { id: "3x", label: "3x / week", perWeek: 3 },
+    { id: "2x", label: "2x / week", perWeek: 2 },
+    { id: "1x", label: "Weekly", perWeek: 1 },
+    { id: "bi", label: "Every other week", perWeek: 0.5 },
+    { id: "mo", label: "Monthly", perWeek: 0.25 }
+  ];
+}
+function defaultState() {
+  return {
+    version: 1,
+    buildings: [],   // {id, name}
+    floors: [],      // {id, buildingId, name, geometry, grossSqFt, cleanableSqFt, importedAt}
+    rooms: [],       // {id, floorId, department, name, roomType, floorType, fixtures, cleanableSqFt,
+                     //  ceilingHeight, perimeter, doorAreaSqFt, windowAreaSqFt, tasks[], frequency,
+                     //  shiftId, employeeId, mapX, mapY, source}
+    jobs: [],        // {id, name, type, mode:'block'|'unit', minutes, unitsPerDay, minutesPerUnit, shiftId, employeeId}
+    shifts: [
+      { id: "sh_days", name: "Days", start: "07:00", end: "15:30" },
+      { id: "sh_eves", name: "Evenings", start: "15:00", end: "23:30" }
+    ],
+    employees: [],   // {id, name, role, shiftId, pattern:[7 bools]}
+    rates: {
+      baseRates: seedBaseRates(),
+      fixtureMinutes: 3,
+      modifiers: seedModifiers(),
+      productiveMinutes: 420
+    },
+    roomTypes: seedRoomTypes(),
+    floorTypes: seedFloorTypes(),
+    frequencies: seedFrequencies(),
+    ui: { view: "schedule", scope: null, expanded: {}, boardMode: "employee", mapFloorId: null, filters: {}, colorBy: "department" }
+  };
+}
+var state = load();
+function load() {
+  try {
+    var raw = localStorage.getItem(LS_KEY);
+    if (!raw) return defaultState();
+    var parsed = JSON.parse(raw);
+    // forward-merge: any missing top-level keys get defaults (safe upgrades)
+    var def = defaultState();
+    var merged = Object.assign({}, def, parsed);
+    merged.rates = Object.assign({}, def.rates, parsed.rates || {});
+    merged.ui = Object.assign({}, def.ui, parsed.ui || {});
+    return merged;
+  } catch (e) {
+    console.error("OpsMatrix: failed to load saved state", e);
+    toast("Saved data could not be read — starting fresh (old data left untouched in localStorage)", true);
+    return defaultState();
+  }
+}
+function save() {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(state));
+  } catch (e) {
+    console.error(e);
+    toast("Could not save — storage full?", true);
+  }
+}
+
+/* ================================================================
+   compute — the workload math engine
+   cleanableSqFt is the ONLY area used in workload math (gross = reference)
+================================================================ */
+function findBaseRate(roomType, floorType) {
+  var rows = state.rates.baseRates, i, r;
+  for (i = 0; i < rows.length; i++) {
+    r = rows[i];
+    if (r.roomType === roomType && r.floorType === floorType) return r.minutesPer1000;
+  }
+  for (i = 0; i < rows.length; i++) {
+    r = rows[i];
+    if (r.roomType === roomType && r.floorType === "(any)") return r.minutesPer1000;
+  }
+  for (i = 0; i < rows.length; i++) {
+    r = rows[i];
+    if (r.roomType === "(any)") return r.minutesPer1000;
+  }
+  return 25;
+}
+function freqPerWeek(freqId) {
+  var f = byId(state.frequencies, freqId);
+  return f ? f.perWeek : 7;
+}
+function roomMinutesPerVisit(room) {
+  var base = (room.cleanableSqFt / 1000) * findBaseRate(room.roomType, room.floorType);
+  var fix = (room.fixtures || 0) * state.rates.fixtureMinutes;
+  return base + fix;
+}
+function roomDailyMinutes(room) {
+  // daily-equivalent minutes: per-visit minutes spread over the week by frequency
+  return roomMinutesPerVisit(room) * freqPerWeek(room.frequency) / 7;
+}
+function jobDailyMinutes(job) {
+  if (job.mode === "unit") return (job.unitsPerDay || 0) * (job.minutesPerUnit || 0);
+  return job.minutes || 0;
+}
+function roomStatus(room) {
+  if (room.employeeId) return "scheduled";
+  if (room.shiftId) return "partial";
+  return "unscheduled";
+}
+function employeeAssignedMinutes(empId) {
+  var total = 0, i;
+  for (i = 0; i < state.rooms.length; i++) {
+    if (state.rooms[i].employeeId === empId) total += roomDailyMinutes(state.rooms[i]);
+  }
+  for (i = 0; i < state.jobs.length; i++) {
+    if (state.jobs[i].employeeId === empId) total += jobDailyMinutes(state.jobs[i]);
+  }
+  return total;
+}
+function scopedRooms() {
+  // rooms visible under the current tree scope
+  var sc = state.ui.scope;
+  if (!sc) return state.rooms.slice();
+  return state.rooms.filter(function (r) {
+    var fl = byId(state.floors, r.floorId);
+    if (!fl) return false;
+    if (sc.type === "building") return fl.buildingId === sc.buildingId;
+    if (sc.type === "floor") return r.floorId === sc.floorId;
+    if (sc.type === "dept") return r.floorId === sc.floorId && (r.department || "Unassigned") === sc.dept;
+    if (sc.type === "room") return r.id === sc.roomId;
+    return true;
+  });
+}
+function rollup(rooms) {
+  var out = { rooms: rooms.length, sqft: 0, dailyMin: 0, unscheduled: 0, scheduled: 0, partial: 0 };
+  for (var i = 0; i < rooms.length; i++) {
+    var r = rooms[i];
+    out.sqft += r.cleanableSqFt || 0;
+    out.dailyMin += roomDailyMinutes(r);
+    var st = roomStatus(r);
+    if (st === "scheduled") out.scheduled++;
+    else if (st === "partial") out.partial++;
+    else out.unscheduled++;
+  }
+  return out;
+}
+function facilityFTE() {
+  var total = 0, i;
+  for (i = 0; i < state.rooms.length; i++) total += roomDailyMinutes(state.rooms[i]);
+  for (i = 0; i < state.jobs.length; i++) total += jobDailyMinutes(state.jobs[i]);
+  return total / Math.max(1, state.rates.productiveMinutes);
+}
+
+/* ================================================================
+   header KPIs
+================================================================ */
+function renderKPIs() {
+  var host = $("#kpis");
+  host.innerHTML = "";
+  var all = rollup(state.rooms);
+  var jobsMin = 0;
+  for (var i = 0; i < state.jobs.length; i++) jobsMin += jobDailyMinutes(state.jobs[i]);
+  var items = [
+    { v: fmt(all.rooms), l: "Rooms" },
+    { v: fmt(all.sqft, 0), l: "Cleanable ft²" },
+    { v: fmtHrs(all.dailyMin + jobsMin), l: "Daily workload" },
+    { v: facilityFTE().toFixed(2), l: "FTE est." }
+  ];
+  for (var j = 0; j < items.length; j++) {
+    host.appendChild(el("div", { class: "kpi" }, [
+      el("div", { class: "v", text: items[j].v }),
+      el("div", { class: "l", text: items[j].l })
+    ]));
+  }
+}
+
+/* ================================================================
+   facility tree
+================================================================ */
+function deptKey(room) { return room.department || "Unassigned"; }
+function scopeEq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+function setScope(sc) {
+  state.ui.scope = sc;
+  save(); renderAll();
+}
+function statusDotClass(rooms) {
+  var ru = rollup(rooms);
+  if (ru.rooms === 0) return "s-none";
+  if (ru.unscheduled === 0 && ru.partial === 0) return "s-full";
+  if (ru.scheduled > 0 || ru.partial > 0) return "s-partial";
+  return "s-none";
+}
+function treeRow(level, label, stat, dotCls, scopeObj, expandKey, hasKids) {
+  var expanded = !expandKey || state.ui.expanded[expandKey] !== false;
+  var row = el("div", { class: "trow lvl-" + level + (scopeEq(state.ui.scope, scopeObj) ? " selected" : ""), tabindex: "0", role: "button" });
+  var caret = el("span", { class: "caret", text: hasKids ? (expanded ? "▾" : "▸") : "" });
+  if (hasKids && expandKey) {
+    caret.addEventListener("click", function (e) {
+      e.stopPropagation();
+      state.ui.expanded[expandKey] = !expanded;
+      save(); renderTree();
+    });
+  }
+  row.appendChild(caret);
+  if (dotCls) row.appendChild(el("span", { class: "dot " + dotCls }));
+  row.appendChild(el("span", { class: "nm", text: label }));
+  if (stat) row.appendChild(el("span", { class: "stat", text: stat }));
+  function activate() { setScope(scopeEq(state.ui.scope, scopeObj) ? null : scopeObj); }
+  row.addEventListener("click", activate);
+  row.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); } });
+  return { row: row, expanded: expanded };
+}
+function makeBranchDraggable(row, roomIds, label) {
+  row.setAttribute("draggable", "true");
+  row.addEventListener("dragstart", function (e) {
+    e.dataTransfer.setData("text/plain", JSON.stringify({ kind: "branch", roomIds: roomIds, label: label }));
+    e.dataTransfer.effectAllowed = "move";
+  });
+}
+function renderTree() {
+  var host = $("#treeHost");
+  host.innerHTML = "";
+  if (!state.buildings.length) {
+    host.appendChild(el("div", { class: "tree-empty", html: "No facility data yet.<br>Use <b>Import</b> to load magicplan scans." }));
+    $("#treeRollup").innerHTML = "";
+    $("#btnClearScope").style.display = "none";
+    return;
+  }
+  $("#btnClearScope").style.display = state.ui.scope ? "" : "none";
+
+  state.buildings.forEach(function (b) {
+    var bFloors = state.floors.filter(function (f) { return f.buildingId === b.id; });
+    var bRooms = state.rooms.filter(function (r) {
+      var fl = byId(state.floors, r.floorId);
+      return fl && fl.buildingId === b.id;
+    });
+    var bru = rollup(bRooms);
+    var t = treeRow("building", b.name, fmt(bru.rooms) + " rm", statusDotClass(bRooms),
+      { type: "building", buildingId: b.id }, "b:" + b.id, bFloors.length > 0);
+    makeBranchDraggable(t.row, bRooms.map(function (r) { return r.id; }), b.name);
+    host.appendChild(t.row);
+    if (!t.expanded) return;
+
+    var bKids = el("div", { class: "tkids" });
+    host.appendChild(bKids);
+    bFloors.forEach(function (f) {
+      var fRooms = state.rooms.filter(function (r) { return r.floorId === f.id; });
+      var fru = rollup(fRooms);
+      var ft = treeRow("floor", f.name, fmt(fru.sqft, 0) + " ft²", statusDotClass(fRooms),
+        { type: "floor", floorId: f.id }, "f:" + f.id, fRooms.length > 0);
+      makeBranchDraggable(ft.row, fRooms.map(function (r) { return r.id; }), b.name + " / " + f.name);
+      bKids.appendChild(ft.row);
+      if (!ft.expanded) return;
+
+      var fKids = el("div", { class: "tkids" });
+      bKids.appendChild(fKids);
+      var depts = {};
+      fRooms.forEach(function (r) {
+        var d = deptKey(r);
+        if (!depts[d]) depts[d] = [];
+        depts[d].push(r);
+      });
+      Object.keys(depts).sort().forEach(function (d) {
+        var dRooms = depts[d];
+        var dt = treeRow("dept", d, fmt(dRooms.length) + " rm", statusDotClass(dRooms),
+          { type: "dept", floorId: f.id, dept: d }, "d:" + f.id + ":" + d, true);
+        makeBranchDraggable(dt.row, dRooms.map(function (r) { return r.id; }), d + " (" + f.name + ")");
+        fKids.appendChild(dt.row);
+        if (!dt.expanded) return;
+        var dKids = el("div", { class: "tkids" });
+        fKids.appendChild(dKids);
+        dRooms.sort(function (a, bb) { return a.name.localeCompare(bb.name); }).forEach(function (r) {
+          var st = roomStatus(r);
+          var rt = treeRow("room", r.name, fmt(roomDailyMinutes(r), 0) + " m/d",
+            st === "scheduled" ? "s-full" : (st === "partial" ? "s-partial" : "s-none"),
+            { type: "room", roomId: r.id }, null, false);
+          rt.row.addEventListener("dblclick", function () { openRoomDrawer(r.id); });
+          makeBranchDraggable(rt.row, [r.id], r.name);
+          dKids.appendChild(rt.row);
+        });
+      });
+    });
+  });
+  renderTreeRollup();
+}
+function renderTreeRollup() {
+  var host = $("#treeRollup");
+  var rooms = scopedRooms();
+  var ru = rollup(rooms);
+  var scopeName = "Whole facility";
+  var sc = state.ui.scope;
+  if (sc) {
+    if (sc.type === "building") { var b = byId(state.buildings, sc.buildingId); scopeName = b ? b.name : "?"; }
+    else if (sc.type === "floor") { var f = byId(state.floors, sc.floorId); scopeName = f ? f.name : "?"; }
+    else if (sc.type === "dept") scopeName = sc.dept;
+    else if (sc.type === "room") { var r = byId(state.rooms, sc.roomId); scopeName = r ? r.name : "?"; }
+  }
+  host.innerHTML = "";
+  host.appendChild(el("div", { class: "rrow", html: "<span style='font-weight:600;color:var(--ink)'>" + esc(scopeName) + "</span>" }));
+  var rows = [
+    ["Rooms", fmt(ru.rooms)],
+    ["Cleanable", fmt(ru.sqft, 0) + " ft²"],
+    ["Daily workload", fmtHrs(ru.dailyMin)],
+    ["Scheduled", fmt(ru.scheduled)],
+    ["Partial", fmt(ru.partial)],
+    ["Unscheduled", fmt(ru.unscheduled)]
+  ];
+  rows.forEach(function (rr) {
+    host.appendChild(el("div", { class: "rrow", html: esc(rr[0]) + " <b>" + esc(rr[1]) + "</b>" }));
+  });
+}
+
+/* ================================================================
+   intake — import magicplan DXF + CSV pairs
+================================================================ */
+var intake = { pairs: [], review: null };
+// pairs: [{key, dxfName, csvName, dxf, stats}]  review: {rows:[...], totals}
+
+function intakePairKey(fileName) {
+  // group by base name minus extension-ish suffixes so "X.dxf" and "X_statistics.csv" pair loosely;
+  // fall back to a single open pair (most magicplan exports come as one floor at a time)
+  return fileName.toLowerCase().replace(/\.(dxf|csv)$/i, "").replace(/[_\s-]*statistics.*$/i, "").replace(/[_\s-]+$/, "");
+}
+function intakeHandleFiles(files) {
+  var i;
+  for (i = 0; i < files.length; i++) {
+    (function (file) {
+      var name = file.name;
+      var lower = name.toLowerCase();
+      if (lower.indexOf(".dxf") === -1 && lower.indexOf(".csv") === -1) {
+        toast("Skipped " + name + " — need .dxf or .csv", true);
+        return;
+      }
+      var reader = new FileReader();
+      reader.onload = function () {
+        var text = reader.result;
+        var key = intakePairKey(name);
+        var pair = null, j;
+        for (j = 0; j < intake.pairs.length; j++) {
+          if (intake.pairs[j].key === key) { pair = intake.pairs[j]; break; }
+        }
+        if (!pair) {
+          // reuse an open pair missing this file kind
+          for (j = 0; j < intake.pairs.length; j++) {
+            var p = intake.pairs[j];
+            if (lower.indexOf(".dxf") !== -1 && !p.dxf) { pair = p; break; }
+            if (lower.indexOf(".csv") !== -1 && !p.stats) { pair = p; break; }
+          }
+        }
+        if (!pair) {
+          pair = { key: key, dxfName: "", csvName: "", dxf: null, stats: null };
+          intake.pairs.push(pair);
+        }
+        if (lower.indexOf(".dxf") !== -1) {
+          pair.dxf = parseDXF(text);
+          pair.dxfName = name;
+          if (!pair.floorName) pair.floorName = name.replace(/\.dxf$/i, "").replace(/_/g, " ");
+        } else {
+          pair.stats = parseStatsCSV(text);
+          pair.csvName = name;
+        }
+        renderImportView();
+      };
+      reader.readAsText(file);
+    })(files[i]);
+  }
+}
+function intakeReady() {
+  if (!intake.pairs.length) return false;
+  for (var i = 0; i < intake.pairs.length; i++) {
+    if (!intake.pairs[i].stats) return false; // CSV is authoritative — required
+  }
+  return true;
+}
+function buildReviewRows() {
+  var rows = [];
+  var stickyBuilding = state.buildings.length ? state.buildings[state.buildings.length - 1].name : "Main Building";
+  intake.pairs.forEach(function (pair, pi) {
+    var floors = pair.stats ? pair.stats.floors : [];
+    floors.forEach(function (fl) {
+      var floorName = fl.name || pair.floorName || ("Floor " + (pi + 1));
+      fl.rooms.forEach(function (rm) {
+        // guess a room type from the name
+        var guess = guessRoomType(rm.name);
+        var tpl = guess ? byId(state.roomTypes, guess) : null;
+        rows.push({
+          pairIndex: pi,
+          building: stickyBuilding,
+          floor: floorName,
+          department: "Unassigned",
+          name: rm.name,
+          origName: rm.name,
+          roomTypeId: tpl ? tpl.id : "",
+          floorType: tpl ? tpl.floorType : "VCT",
+          fixtures: tpl ? tpl.fixtures : 0,
+          frequency: tpl ? tpl.frequency : "7x",
+          tasks: tpl ? tpl.tasks.slice() : ["Daily clean"],
+          cleanableSqFt: rm.areaSqFt,
+          ceilingHeight: rm.ceilingHeight,
+          perimeter: rm.groundPerimeter,
+          doorAreaSqFt: rm.doorAreaSqFt,
+          windowAreaSqFt: rm.windowAreaSqFt
+        });
+      });
+    });
+  });
+  return rows;
+}
+function guessRoomType(name) {
+  var n = name.toLowerCase();
+  var map = [
+    ["bath", "rt_restroom"], ["restroom", "rt_restroom"], ["toilet", "rt_restroom"], ["wc", "rt_restroom"],
+    ["patient", "rt_patient"], ["bed", "rt_patient"],
+    ["office", "rt_office"], ["admin", "rt_office"],
+    ["corridor", "rt_corridor"], ["hall", "rt_corridor"],
+    ["or ", "rt_or"], ["operating", "rt_or"], ["surgery", "rt_or"],
+    ["exam", "rt_exam"],
+    ["lobby", "rt_lobby"], ["waiting", "rt_lobby"], ["reception", "rt_lobby"],
+    ["util", "rt_utility"], ["storage", "rt_utility"], ["closet", "rt_utility"], ["mech", "rt_utility"],
+    ["nurse", "rt_nursesta"], ["station", "rt_nursesta"],
+    ["break", "rt_breakrm"], ["lounge", "rt_breakrm"], ["kitchen", "rt_breakrm"]
+  ];
+  for (var i = 0; i < map.length; i++) {
+    if (n.indexOf(map[i][0]) !== -1) return map[i][1];
+  }
+  return "";
+}
+function applyTemplateToRow(row, roomTypeId) {
+  var tpl = byId(state.roomTypes, roomTypeId);
+  row.roomTypeId = roomTypeId;
+  if (tpl) {
+    row.floorType = tpl.floorType;
+    row.fixtures = tpl.fixtures;
+    row.frequency = tpl.frequency;
+    row.tasks = tpl.tasks.slice();
+  }
+}
+function confirmIntake() {
+  var rows = intake.review;
+  if (!rows || !rows.length) return;
+  // figure out which floors already exist (building name + floor name match)
+  var conflicts = [];
+  var seen = {};
+  rows.forEach(function (row) {
+    var k = row.building + " " + row.floor;
+    if (seen[k]) return;
+    seen[k] = true;
+    var b = findBuildingByName(row.building);
+    if (b) {
+      var fl = findFloorByName(b.id, row.floor);
+      if (fl) conflicts.push({ building: row.building, floor: row.floor, floorId: fl.id });
+    }
+  });
+  if (conflicts.length) {
+    var names = conflicts.map(function (c) { return c.building + " / " + c.floor; }).join(", ");
+    openModal("Floor already exists", [
+      el("p", { text: "Already imported: " + names + ". Replace the existing rooms, or merge (add these rooms alongside them)?" })
+    ], [
+      { label: "Replace", primary: true, onClick: function () { doMerge(rows, conflicts, "replace"); closeModal(); } },
+      { label: "Merge (add)", onClick: function () { doMerge(rows, conflicts, "merge"); closeModal(); } },
+      { label: "Cancel", onClick: closeModal }
+    ]);
+  } else {
+    doMerge(rows, [], "merge");
+  }
+}
+function findBuildingByName(name) {
+  for (var i = 0; i < state.buildings.length; i++) {
+    if (state.buildings[i].name.toLowerCase() === name.toLowerCase()) return state.buildings[i];
+  }
+  return null;
+}
+function findFloorByName(buildingId, name) {
+  for (var i = 0; i < state.floors.length; i++) {
+    var f = state.floors[i];
+    if (f.buildingId === buildingId && f.name.toLowerCase() === name.toLowerCase()) return f;
+  }
+  return null;
+}
+function doMerge(rows, conflicts, mode) {
+  if (mode === "replace") {
+    conflicts.forEach(function (c) {
+      state.rooms = state.rooms.filter(function (r) { return r.floorId !== c.floorId; });
+    });
+  }
+  rows.forEach(function (row) {
+    var b = findBuildingByName(row.building);
+    if (!b) { b = { id: uid("bld"), name: row.building }; state.buildings.push(b); }
+    var fl = findFloorByName(b.id, row.floor);
+    var pair = intake.pairs[row.pairIndex];
+    if (!fl) {
+      fl = {
+        id: uid("flr"), buildingId: b.id, name: row.floor,
+        geometry: pair && pair.dxf ? pair.dxf : null,
+        grossSqFt: pair && pair.stats ? pair.stats.grossSqFt : null,       // reference only
+        cleanableSqFt: pair && pair.stats ? pair.stats.cleanableSqFt : null,
+        importedAt: new Date().toISOString()
+      };
+      state.floors.push(fl);
+    } else if (pair && pair.dxf && (mode === "replace" || !fl.geometry)) {
+      fl.geometry = pair.dxf;
+      fl.grossSqFt = pair.stats ? pair.stats.grossSqFt : fl.grossSqFt;
+      fl.cleanableSqFt = pair.stats ? pair.stats.cleanableSqFt : fl.cleanableSqFt;
+      fl.importedAt = new Date().toISOString();
+    }
+    // label position: match original CSV room name to a DXF text label
+    var mapX = null, mapY = null;
+    if (pair && pair.dxf) {
+      for (var li = 0; li < pair.dxf.labels.length; li++) {
+        var lb = pair.dxf.labels[li];
+        if (lb.text.toLowerCase().trim() === row.origName.toLowerCase().trim()) { mapX = lb.x; mapY = lb.y; break; }
+      }
+    }
+    var tpl = row.roomTypeId ? byId(state.roomTypes, row.roomTypeId) : null;
+    state.rooms.push({
+      id: uid("rm"),
+      floorId: fl.id,
+      department: row.department || "Unassigned",
+      name: row.name,
+      roomType: tpl ? tpl.name : "(untyped)",
+      floorType: row.floorType,
+      fixtures: Number(row.fixtures) || 0,
+      cleanableSqFt: row.cleanableSqFt,     // interior area — THE workload number
+      ceilingHeight: row.ceilingHeight,
+      perimeter: row.perimeter,
+      doorAreaSqFt: row.doorAreaSqFt,
+      windowAreaSqFt: row.windowAreaSqFt,
+      tasks: row.tasks.slice(),
+      frequency: row.frequency,
+      shiftId: null,
+      employeeId: null,
+      mapX: mapX, mapY: mapY,
+      source: "magicplan"
+    });
+  });
+  intake.pairs = [];
+  intake.review = null;
+  state.ui.view = "schedule";
+  save();
+  toast("Imported " + rows.length + " rooms");
+  renderAll();
+}
+
+/* ================================================================
+   views — import
+================================================================ */
+function renderImportView() {
+  var host = $("#content");
+  host.innerHTML = "";
+  host.appendChild(el("h1", { class: "pagetitle", text: state.rooms.length ? "Import more floors" : "Welcome — import your first scan" }));
+  host.appendChild(el("p", { class: "pagesub", text: "Upload magicplan exports: one floor plan .dxf plus its Statistics .csv per floor. Multiple floors = multiple pairs. The CSV numbers are authoritative; only interior (cleanable) square footage is used for workload math." }));
+
+  var dz = el("div", { class: "dropzone", tabindex: "0", role: "button", "aria-label": "Upload magicplan exports" }, [
+    el("div", { class: "big", text: "Drop magicplan exports here, or click to browse" }),
+    el("div", { class: "hint", html: "needs: floor plan <code>.dxf</code> + statistics <code>.csv</code> (the .csv is required; .dxf adds the map)" })
+  ]);
+  var fileInput = el("input", { type: "file", multiple: "multiple", accept: ".dxf,.csv", style: "display:none" });
+  fileInput.addEventListener("change", function () { intakeHandleFiles(fileInput.files); fileInput.value = ""; });
+  dz.addEventListener("click", function () { fileInput.click(); });
+  dz.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
+  ["dragenter", "dragover"].forEach(function (ev) {
+    dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add("hover"); });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.remove("hover"); });
+  });
+  dz.addEventListener("drop", function (e) { intakeHandleFiles(e.dataTransfer.files); });
+  host.appendChild(dz);
+  host.appendChild(fileInput);
+
+  if (intake.pairs.length) {
+    var plist = el("div", { class: "pairlist" });
+    intake.pairs.forEach(function (p, i) {
+      var roomsN = 0;
+      if (p.stats) p.stats.floors.forEach(function (f) { roomsN += f.rooms.length; });
+      plist.appendChild(el("div", { class: "pairitem" }, [
+        el("span", { class: "badge brand", text: "Floor pair " + (i + 1) }),
+        el("span", { class: "fname", text: (p.dxfName || "(no .dxf)") + "  +  " + (p.csvName || "(no .csv)") }),
+        el("span", { class: "st " + (p.stats ? "ok" : "wait"), text: p.stats ? (roomsN + " rooms, " + fmt(p.stats.cleanableSqFt, 2) + " ft² cleanable (gross " + fmt(p.stats.grossSqFt, 2) + " — reference only)") : "waiting for statistics .csv" })
+      ]));
+    });
+    host.appendChild(plist);
+
+    var actions = el("div", { class: "row", style: "margin-top:14px" });
+    var btnReview = el("button", { class: "btn primary", text: "Review rooms →" });
+    btnReview.disabled = !intakeReady();
+    btnReview.addEventListener("click", function () {
+      intake.review = buildReviewRows();
+      renderImportView();
+    });
+    actions.appendChild(btnReview);
+    actions.appendChild(el("button", {
+      class: "btn", text: "Clear uploads", onclick: function () { intake.pairs = []; intake.review = null; renderImportView(); }
+    }));
+    host.appendChild(actions);
+  }
+
+  if (intake.review) renderReviewTable(host);
+}
+
+function renderReviewTable(host) {
+  var rows = intake.review;
+  var card = el("div", { class: "card", style: "margin-top:18px" });
+  card.appendChild(el("div", { class: "chead" }, [
+    el("h2", { text: "Review imported rooms" }),
+    el("span", { class: "sub", text: "Room type templates auto-fill floor type, fixtures, tasks and frequency — everything stays editable. Building / floor / department are sticky: set once, they carry down until you change them." })
+  ]));
+  var wrap = el("div", { class: "tablewrap" });
+  var tbl = el("table", { class: "grid" });
+  tbl.appendChild(el("thead", {}, [el("tr", {}, [
+    el("th", { text: "Building" }), el("th", { text: "Floor" }), el("th", { text: "Department" }),
+    el("th", { text: "Room name" }), el("th", { text: "Room type" }), el("th", { text: "Floor type" }),
+    el("th", { text: "Fixtures" }), el("th", { text: "Frequency" }), el("th", { class: "num", text: "Cleanable ft²" })
+  ])]));
+  var tb = el("tbody");
+
+  function stickyApply(field, fromIdx, value) {
+    // sticky defaults: apply to all following rows that still share the previous value
+    var prev = rows[fromIdx][field];
+    for (var i = fromIdx; i < rows.length; i++) {
+      if (i === fromIdx || rows[i][field] === prev) rows[i][field] = value;
+      else break;
+    }
+  }
+  rows.forEach(function (row, ri) {
+    var tr = el("tr");
+    function txtCell(field, sticky) {
+      var inp = el("input", { type: "text", value: row[field] });
+      inp.addEventListener("change", function () {
+        if (sticky) stickyApply(field, ri, inp.value);
+        else row[field] = inp.value;
+        renderImportView();
+      });
+      return el("td", {}, [inp]);
+    }
+    tr.appendChild(txtCell("building", true));
+    tr.appendChild(txtCell("floor", true));
+    tr.appendChild(txtCell("department", true));
+    tr.appendChild(txtCell("name", false));
+
+    var selType = el("select");
+    selType.appendChild(el("option", { value: "", text: "(untyped)" }));
+    state.roomTypes.forEach(function (rt) {
+      var o = el("option", { value: rt.id, text: rt.name });
+      if (row.roomTypeId === rt.id) o.selected = true;
+      selType.appendChild(o);
+    });
+    selType.addEventListener("change", function () {
+      applyTemplateToRow(row, selType.value);
+      renderImportView();
+    });
+    tr.appendChild(el("td", {}, [selType]));
+
+    var selFloor = el("select");
+    state.floorTypes.forEach(function (ftName) {
+      var o = el("option", { value: ftName, text: ftName });
+      if (row.floorType === ftName) o.selected = true;
+      selFloor.appendChild(o);
+    });
+    selFloor.addEventListener("change", function () { row.floorType = selFloor.value; });
+    tr.appendChild(el("td", {}, [selFloor]));
+
+    var fixInp = el("input", { type: "number", min: "0", step: "1", value: String(row.fixtures) });
+    fixInp.addEventListener("change", function () { row.fixtures = Number(fixInp.value) || 0; });
+    tr.appendChild(el("td", {}, [fixInp]));
+
+    var selFreq = el("select");
+    state.frequencies.forEach(function (fq) {
+      var o = el("option", { value: fq.id, text: fq.label });
+      if (row.frequency === fq.id) o.selected = true;
+      selFreq.appendChild(o);
+    });
+    selFreq.addEventListener("change", function () { row.frequency = selFreq.value; });
+    tr.appendChild(el("td", {}, [selFreq]));
+
+    tr.appendChild(el("td", { class: "num", text: fmt(row.cleanableSqFt, 2) }));
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  var totSqFt = 0;
+  rows.forEach(function (r) { totSqFt += r.cleanableSqFt || 0; });
+  tbl.appendChild(el("tfoot", {}, [el("tr", {}, [
+    el("td", { text: rows.length + " rooms", colspan: "8", style: "font-weight:600" }),
+    el("td", { class: "num", text: fmt(totSqFt, 2), style: "font-weight:600" })
+  ])]));
+  wrap.appendChild(tbl);
+  card.appendChild(wrap);
+  var foot = el("div", { class: "cbody row" });
+  foot.appendChild(el("button", { class: "btn primary", text: "Confirm import", onclick: confirmIntake }));
+  foot.appendChild(el("span", { class: "note", text: "Rooms merge into the facility tree. Re-importing an existing floor offers replace / merge." }));
+  card.appendChild(foot);
+  host.appendChild(card);
+}
+
+/* ================================================================
+   views — scheduling board
+================================================================ */
+function renderScheduleView() {
+  var host = $("#content");
+  host.innerHTML = "";
+
+  if (!state.rooms.length && !state.jobs.length) {
+    host.appendChild(emptyState("No spaces to schedule yet",
+      "Import your magicplan scans to load rooms, or add non-space jobs (discharge cleans, porters, trash runs) once employees exist.",
+      [{ label: "Go to Import", onClick: function () { switchView("import"); } }]));
+    return;
+  }
+
+  var head = el("div", { class: "row", style: "margin-bottom:14px" });
+  head.appendChild(el("h1", { class: "pagetitle", text: "Scheduling board", style: "margin:0" }));
+  var modeBtns = el("div", { class: "row", style: "gap:4px" });
+  [["employee", "By employee"], ["area", "By area"]].forEach(function (m) {
+    var b = el("button", { class: "btn small" + (state.ui.boardMode === m[0] ? " primary" : ""), text: m[1] });
+    b.addEventListener("click", function () { state.ui.boardMode = m[0]; save(); renderScheduleView(); });
+    modeBtns.appendChild(b);
+  });
+  head.appendChild(modeBtns);
+  head.appendChild(el("span", { class: "spacer" }));
+  head.appendChild(el("button", { class: "btn small", text: "+ Employee", onclick: function () { openEmployeeModal(null); } }));
+  head.appendChild(el("button", { class: "btn small", text: "+ Non-space job", onclick: function () { openJobModal(null); } }));
+  head.appendChild(el("button", { class: "btn small", text: "🖨 Print daily schedules", onclick: printSchedules }));
+  host.appendChild(head);
+
+  if (!state.employees.length) {
+    host.appendChild(emptyState("No employees yet",
+      "Add your EVS staff to start assigning rooms and jobs. Each employee belongs to a shift and gets a capacity bar (assigned minutes vs productive minutes).",
+      [{ label: "+ Add first employee", primary: true, onClick: function () { openEmployeeModal(null); } }]));
+    return;
+  }
+
+  var grid = el("div", { class: "boardgrid" });
+  grid.appendChild(renderTray());
+  var right = el("div");
+  if (state.ui.boardMode === "area") right.appendChild(renderAreaBoard());
+  else renderEmployeeBoard(right);
+  grid.appendChild(right);
+  host.appendChild(grid);
+}
+
+function renderTray() {
+  var card = el("div", { class: "card tray" });
+  var rooms = scopedRooms().filter(function (r) { return roomStatus(r) !== "scheduled"; });
+  var jobs = state.jobs.filter(function (j) { return !j.employeeId; });
+  card.appendChild(el("div", { class: "chead" }, [
+    el("h2", { text: "Unscheduled" }),
+    el("span", { class: "sub", text: rooms.length + " rooms · " + jobs.length + " jobs" })
+  ]));
+  var body = el("div", { class: "cbody" });
+  if (!rooms.length && !jobs.length) {
+    body.appendChild(el("div", { class: "note", text: "Everything in scope is assigned. 🎉" }));
+  }
+  rooms.sort(function (a, b) { return roomDailyMinutes(b) - roomDailyMinutes(a); }).forEach(function (r) {
+    body.appendChild(roomChip(r));
+  });
+  jobs.forEach(function (j) { body.appendChild(jobChip(j)); });
+  card.appendChild(body);
+  return card;
+}
+function roomChip(r) {
+  var fl = byId(state.floors, r.floorId);
+  var chip = el("div", { class: "chip room", draggable: "true", tabindex: "0" }, [
+    el("span", {}, [
+      el("div", { text: r.name }),
+      el("div", { class: "rt", text: r.roomType + (fl ? " · " + fl.name : "") + (roomStatus(r) === "partial" ? " · shift set, no employee" : "") })
+    ]),
+    el("span", { class: "mins", text: fmt(roomDailyMinutes(r), 0) + " m/d" })
+  ]);
+  chip.addEventListener("dragstart", function (e) {
+    e.dataTransfer.setData("text/plain", JSON.stringify({ kind: "room", roomId: r.id }));
+    chip.classList.add("dragging");
+  });
+  chip.addEventListener("dragend", function () { chip.classList.remove("dragging"); });
+  chip.addEventListener("click", function () { openRoomDrawer(r.id); });
+  chip.addEventListener("keydown", function (e) { if (e.key === "Enter") openRoomDrawer(r.id); });
+  return chip;
+}
+function jobChip(j) {
+  var chip = el("div", { class: "chip job", draggable: "true", tabindex: "0" }, [
+    el("span", {}, [
+      el("div", { text: j.name }),
+      el("div", { class: "rt", text: jobTypeLabel(j.type) + (j.mode === "unit" ? " · " + j.unitsPerDay + " × " + j.minutesPerUnit + " min" : " · time block") })
+    ]),
+    el("span", { class: "mins", text: fmt(jobDailyMinutes(j), 0) + " m/d" })
+  ]);
+  chip.addEventListener("dragstart", function (e) {
+    e.dataTransfer.setData("text/plain", JSON.stringify({ kind: "job", jobId: j.id }));
+    chip.classList.add("dragging");
+  });
+  chip.addEventListener("dragend", function () { chip.classList.remove("dragging"); });
+  chip.addEventListener("click", function () { openJobModal(j.id); });
+  return chip;
+}
+function jobTypeLabel(t) {
+  var m = { discharge: "Discharge / bed cleans", porter: "Porter / transport", trashlinen: "Trash & linen run", laundry: "Laundry", floortech: "Floor tech", custom: "Custom" };
+  return m[t] || t;
+}
+function acceptDrop(node, onDropData) {
+  node.addEventListener("dragover", function (e) { e.preventDefault(); node.classList.add("dropover"); });
+  node.addEventListener("dragleave", function () { node.classList.remove("dropover"); });
+  node.addEventListener("drop", function (e) {
+    e.preventDefault();
+    node.classList.remove("dropover");
+    var data = null;
+    try { data = JSON.parse(e.dataTransfer.getData("text/plain")); } catch (err) { data = null; }
+    if (data) onDropData(data);
+  });
+}
+function assignData(data, shiftId, employeeId) {
+  var n = 0;
+  function assignRoom(id) {
+    var r = byId(state.rooms, id);
+    if (!r) return;
+    r.shiftId = shiftId;
+    r.employeeId = employeeId;
+    n++;
+  }
+  if (data.kind === "room") assignRoom(data.roomId);
+  else if (data.kind === "branch") data.roomIds.forEach(assignRoom);
+  else if (data.kind === "job") {
+    var j = byId(state.jobs, data.jobId);
+    if (j) { j.shiftId = shiftId; j.employeeId = employeeId; n++; }
+  }
+  save(); renderAll();
+  if (n) toast(n + " item" + (n > 1 ? "s" : "") + (employeeId ? " assigned" : " staged on shift"));
+}
+function renderEmployeeBoard(hostNode) {
+  state.shifts.forEach(function (sh) {
+    var emps = state.employees.filter(function (e2) { return e2.shiftId === sh.id; });
+    var block = el("div", { class: "shiftblock" });
+    var shMin = 0;
+    emps.forEach(function (e2) { shMin += employeeAssignedMinutes(e2.id); });
+    var headEl = el("div", { class: "shifthead" }, [
+      el("h3", { text: sh.name }),
+      el("span", { class: "time", text: sh.start + " – " + sh.end }),
+      el("span", { class: "tot", text: emps.length + " staff · " + fmtHrs(shMin) + " assigned" })
+    ]);
+    block.appendChild(headEl);
+    var grid2 = el("div", { class: "empgrid" });
+    if (!emps.length) {
+      var dropEmpty = el("div", { class: "shiftdrop", text: "No employees on this shift. Drop a room here to stage it on " + sh.name + " (partial), or add an employee." });
+      acceptDrop(dropEmpty, function (data) { assignData(data, sh.id, null); });
+      grid2.appendChild(dropEmpty);
+    }
+    emps.forEach(function (emp) {
+      grid2.appendChild(renderEmployeeCard(emp));
+    });
+    // staging lane for the shift itself
+    var lane = el("div", { class: "shiftdrop", text: "Drop here to stage on " + sh.name + " without an employee (partial)" });
+    acceptDrop(lane, function (data) { assignData(data, sh.id, null); });
+    var laneWrap = el("div", { style: "grid-column: 1 / -1" });
+    laneWrap.appendChild(lane);
+    // partial rooms on this shift
+    var partials = state.rooms.filter(function (r) { return r.shiftId === sh.id && !r.employeeId; });
+    var pjobs = state.jobs.filter(function (j) { return j.shiftId === sh.id && !j.employeeId; });
+    if (partials.length || pjobs.length) {
+      var pbox = el("div", { style: "margin-top:8px" });
+      partials.forEach(function (r) { pbox.appendChild(roomChip(r)); });
+      pjobs.forEach(function (j) { pbox.appendChild(jobChip(j)); });
+      laneWrap.appendChild(pbox);
+    }
+    grid2.appendChild(laneWrap);
+    block.appendChild(grid2);
+    hostNode.appendChild(block);
+  });
+}
+function renderEmployeeCard(emp) {
+  var assigned = employeeAssignedMinutes(emp.id);
+  var cap = state.rates.productiveMinutes;
+  var pct = Math.min(100, (assigned / cap) * 100);
+  var capCls = assigned > cap ? " over" : (assigned > cap * 0.85 ? " warn" : "");
+  var card = el("div", { class: "empcard" });
+  acceptDrop(card, function (data) { assignData(data, emp.shiftId, emp.id); });
+  var headRow = el("div", { class: "ehead" }, [
+    el("div", { class: "nm" }, [
+      el("span", { text: emp.name }),
+      el("span", { class: "role", text: emp.role || "EVS Tech" })
+    ])
+  ]);
+  headRow.addEventListener("dblclick", function () { openEmployeeModal(emp.id); });
+  card.appendChild(headRow);
+  var bar = el("div", { class: "capbar" + capCls }, [el("i", { style: "width:" + pct + "%" })]);
+  card.appendChild(bar);
+  card.appendChild(el("div", { class: "capnote", text: fmt(assigned, 0) + " / " + cap + " min · " + Math.round((assigned / cap) * 100) + "%" }));
+  var list = el("div", { class: "list" });
+  state.rooms.filter(function (r) { return r.employeeId === emp.id; })
+    .sort(function (a, b) { return a.name.localeCompare(b.name); })
+    .forEach(function (r) { list.appendChild(roomChip(r)); });
+  state.jobs.filter(function (j) { return j.employeeId === emp.id; })
+    .forEach(function (j) { list.appendChild(jobChip(j)); });
+  card.appendChild(list);
+  return card;
+}
+function renderAreaBoard() {
+  var card = el("div", { class: "card" });
+  card.appendChild(el("div", { class: "chead" }, [
+    el("h2", { text: "Coverage by area" }),
+    el("span", { class: "sub", text: "Who covers each branch of the facility" })
+  ]));
+  var body = el("div", { class: "cbody" });
+  state.buildings.forEach(function (b) {
+    state.floors.filter(function (f) { return f.buildingId === b.id; }).forEach(function (f) {
+      var fRooms = state.rooms.filter(function (r) { return r.floorId === f.id; });
+      if (!fRooms.length) return;
+      var depts = {};
+      fRooms.forEach(function (r) {
+        var d = deptKey(r);
+        if (!depts[d]) depts[d] = [];
+        depts[d].push(r);
+      });
+      var grp = el("div", { class: "areagroup" });
+      grp.appendChild(el("h4", { text: b.name + " / " + f.name }));
+      Object.keys(depts).sort().forEach(function (d) {
+        var rms = depts[d];
+        var ru = rollup(rms);
+        var names = {};
+        rms.forEach(function (r) {
+          if (r.employeeId) {
+            var emp = byId(state.employees, r.employeeId);
+            if (emp) names[emp.name] = (names[emp.name] || 0) + 1;
+          }
+        });
+        var who = Object.keys(names).map(function (nm) { return nm + " (" + names[nm] + ")"; }).join(", ");
+        grp.appendChild(el("div", { class: "cover", html: "<b>" + esc(d) + "</b> — " + ru.rooms + " rooms, " + fmtHrs(ru.dailyMin) + "/day · " + (who ? "covered by " + esc(who) : "<span style='color:var(--danger)'>no one assigned</span>") + (ru.unscheduled ? " · " + ru.unscheduled + " unscheduled" : "") }));
+      });
+      body.appendChild(grp);
+    });
+  });
+  card.appendChild(body);
+  return card;
+}
+function emptyState(title, text, actions) {
+  var box = el("div", { class: "card" }, [el("div", { class: "emptystate" }, [
+    el("div", { class: "big", text: title }),
+    el("p", { text: text })
+  ])]);
+  var es = box.firstChild;
+  (actions || []).forEach(function (a) {
+    es.appendChild(el("button", { class: "btn" + (a.primary ? " primary" : ""), text: a.label, onclick: a.onClick }));
+  });
+  return box;
+}
+
+/* ================================================================
+   views — map
+================================================================ */
+var MAP_COLORS = ["#0f6b62", "#d98e1f", "#3f6fb5", "#b5533f", "#7a4fb0", "#2e8f63", "#b03f7e", "#5b7083", "#8a7a1f", "#3fa3b5"];
+var mapMarkers = []; // hit-test cache: {x, y, r, roomId}
+
+function mapFloors() {
+  return state.floors.filter(function (f) { return f.geometry && f.geometry.walls && f.geometry.walls.length; });
+}
+function renderMapView() {
+  var host = $("#content");
+  host.innerHTML = "";
+  var floors = mapFloors();
+  if (!floors.length) {
+    host.appendChild(emptyState("No floor plans yet",
+      "Import a magicplan .dxf (with its statistics .csv) and the floor plan will render here with clickable rooms and filters.",
+      [{ label: "Go to Import", primary: true, onClick: function () { switchView("import"); } }]));
+    return;
+  }
+  var cur = byId(floors, state.ui.mapFloorId) || floors[0];
+  state.ui.mapFloorId = cur.id;
+
+  host.appendChild(el("h1", { class: "pagetitle", text: "Facility map" }));
+  host.appendChild(el("p", { class: "pagesub", text: "Rooms are clickable at their label markers. Filters combine; marker colors follow the “color by” dimension." }));
+
+  // filter bar
+  var fb = el("div", { class: "filterbar" });
+  function addSelect(label, key, options) {
+    var f = el("div", { class: "field" });
+    f.appendChild(el("label", { text: label }));
+    var s = el("select");
+    s.appendChild(el("option", { value: "", text: "All" }));
+    options.forEach(function (o) {
+      var opt = el("option", { value: o.v, text: o.t });
+      if ((state.ui.filters[key] || "") === o.v) opt.selected = true;
+      s.appendChild(opt);
+    });
+    s.addEventListener("change", function () {
+      state.ui.filters[key] = s.value;
+      save(); renderMapView();
+    });
+    f.appendChild(s);
+    fb.appendChild(f);
+  }
+  var floorSel = el("div", { class: "field" });
+  floorSel.appendChild(el("label", { text: "Floor" }));
+  var fs = el("select");
+  floors.forEach(function (f) {
+    var b = byId(state.buildings, f.buildingId);
+    var o = el("option", { value: f.id, text: (b ? b.name + " / " : "") + f.name });
+    if (f.id === cur.id) o.selected = true;
+    fs.appendChild(o);
+  });
+  fs.addEventListener("change", function () { state.ui.mapFloorId = fs.value; save(); renderMapView(); });
+  floorSel.appendChild(fs);
+  fb.appendChild(floorSel);
+
+  var deptOpts = {}, typeOpts = {}, freqOpts = {};
+  state.rooms.filter(function (r) { return r.floorId === cur.id; }).forEach(function (r) {
+    deptOpts[deptKey(r)] = true; typeOpts[r.roomType] = true; freqOpts[r.frequency] = true;
+  });
+  addSelect("Shift", "shift", state.shifts.map(function (s) { return { v: s.id, t: s.name }; }));
+  addSelect("Department", "dept", Object.keys(deptOpts).sort().map(function (d) { return { v: d, t: d }; }));
+  addSelect("Room type", "rtype", Object.keys(typeOpts).sort().map(function (t) { return { v: t, t: t }; }));
+  addSelect("Status", "status", [
+    { v: "scheduled", t: "Scheduled" }, { v: "partial", t: "Partial" }, { v: "unscheduled", t: "Unscheduled" }
+  ]);
+  addSelect("Employee", "emp", state.employees.map(function (e2) { return { v: e2.id, t: e2.name }; }));
+  addSelect("Frequency", "freq", state.frequencies.filter(function (fq) { return freqOpts[fq.id]; }).map(function (fq) { return { v: fq.id, t: fq.label }; }));
+
+  var cb = el("div", { class: "field" });
+  cb.appendChild(el("label", { text: "Color by" }));
+  var cbs = el("select");
+  [["department", "Department"], ["rtype", "Room type"], ["status", "Schedule status"], ["shift", "Shift"], ["emp", "Employee"], ["freq", "Frequency"]].forEach(function (o) {
+    var opt = el("option", { value: o[0], text: o[1] });
+    if (state.ui.colorBy === o[0]) opt.selected = true;
+    cbs.appendChild(opt);
+  });
+  cbs.addEventListener("change", function () { state.ui.colorBy = cbs.value; save(); renderMapView(); });
+  cb.appendChild(cbs);
+  fb.appendChild(cb);
+
+  var clr = el("button", { class: "btn small", text: "Clear filters", style: "margin-bottom:2px" });
+  clr.addEventListener("click", function () { state.ui.filters = {}; save(); renderMapView(); });
+  fb.appendChild(clr);
+  host.appendChild(fb);
+
+  var card = el("div", { class: "card" });
+  var b2 = byId(state.buildings, cur.buildingId);
+  card.appendChild(el("div", { class: "chead" }, [
+    el("h2", { text: (b2 ? b2.name + " — " : "") + cur.name }),
+    el("span", { class: "sub", text: fmt(cur.cleanableSqFt, 2) + " ft² cleanable · gross " + fmt(cur.grossSqFt, 2) + " ft² (reference only)" })
+  ]));
+  var cv = el("canvas", { class: "floorcv", height: "560" });
+  card.appendChild(cv);
+
+  // rooms with no label marker → chip links
+  var floorRooms = filteredRooms(cur.id);
+  var noLabel = floorRooms.filter(function (r) { return r.mapX === null || r.mapX === undefined; });
+  if (noLabel.length) {
+    var nl = el("div", { class: "nolabel" });
+    nl.appendChild(el("span", { text: "No map label — open from list: " }));
+    noLabel.forEach(function (r) {
+      nl.appendChild(el("span", { class: "chiplink", text: r.name, tabindex: "0", onclick: function () { openRoomDrawer(r.id); } }));
+    });
+    card.appendChild(nl);
+  }
+  host.appendChild(card);
+
+  var legend = el("div", { class: "maplegend", id: "mapLegend" });
+  host.appendChild(legend);
+
+  cv.addEventListener("click", function (e) {
+    var rect = cv.getBoundingClientRect();
+    var x = e.clientX - rect.left, y = e.clientY - rect.top;
+    for (var i = 0; i < mapMarkers.length; i++) {
+      var mth = mapMarkers[i];
+      var dx = x - mth.x, dy = y - mth.y;
+      if (dx * dx + dy * dy <= mth.r * mth.r) { openRoomDrawer(mth.roomId); return; }
+    }
+  });
+  requestAnimationFrame(function () { drawFloor(cv, cur, legend); });
+}
+function filteredRooms(floorId) {
+  var f = state.ui.filters;
+  return state.rooms.filter(function (r) {
+    if (r.floorId !== floorId) return false;
+    if (f.shift && r.shiftId !== f.shift) return false;
+    if (f.dept && deptKey(r) !== f.dept) return false;
+    if (f.rtype && r.roomType !== f.rtype) return false;
+    if (f.status && roomStatus(r) !== f.status) return false;
+    if (f.emp && r.employeeId !== f.emp) return false;
+    if (f.freq && r.frequency !== f.freq) return false;
+    return true;
+  });
+}
+function colorKeyForRoom(r) {
+  var cb = state.ui.colorBy;
+  if (cb === "dept" || cb === "department") return deptKey(r);
+  if (cb === "rtype") return r.roomType;
+  if (cb === "status") return roomStatus(r);
+  if (cb === "shift") { var s = byId(state.shifts, r.shiftId); return s ? s.name : "no shift"; }
+  if (cb === "emp") { var e2 = byId(state.employees, r.employeeId); return e2 ? e2.name : "unassigned"; }
+  if (cb === "freq") { var fq = byId(state.frequencies, r.frequency); return fq ? fq.label : "?"; }
+  return deptKey(r);
+}
+function drawFloor(cv, floor, legendHost) {
+  // rendering approach carried over from the importer: fit-to-extent, Y-flip, scale bar
+  var dpr = window.devicePixelRatio || 1;
+  var w = cv.clientWidth, h = 560;
+  cv.width = w * dpr; cv.height = h * dpr;
+  var ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  var g = floor.geometry;
+  if (!g || !g.walls.length) return;
+
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  g.walls.forEach(function (wall) {
+    wall.points.forEach(function (p) {
+      if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
+      if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
+    });
+  });
+  var pad = 46;
+  var scale = Math.min((w - pad * 2) / (maxX - minX), (h - pad * 2) / (maxY - minY));
+  function tx(x) { return pad + (x - minX) * scale; }
+  function ty(y) { return h - pad - (y - minY) * scale; } // flip Y
+
+  // walls
+  ctx.fillStyle = "rgba(28,43,51,0.82)";
+  ctx.strokeStyle = "#3a4d58"; ctx.lineWidth = 1;
+  g.walls.forEach(function (wall) {
+    ctx.beginPath();
+    wall.points.forEach(function (p, idx) {
+      if (idx === 0) ctx.moveTo(tx(p[0]), ty(p[1])); else ctx.lineTo(tx(p[0]), ty(p[1]));
+    });
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  });
+  // openings
+  ctx.fillStyle = "#d98e1f";
+  (g.openings || []).forEach(function (o) {
+    ctx.beginPath(); ctx.arc(tx(o.x), ty(o.y), 3, 0, Math.PI * 2); ctx.fill();
+  });
+
+  // room markers at label positions, colored by colorBy, dimmed if filtered out
+  var visRooms = filteredRooms(floor.id);
+  var visIds = {};
+  visRooms.forEach(function (r) { visIds[r.id] = true; });
+  var colorMap = {}, colorIdx = 0;
+  mapMarkers = [];
+  state.rooms.filter(function (r) { return r.floorId === floor.id; }).forEach(function (r) {
+    if (r.mapX === null || r.mapX === undefined) return;
+    var visible = visIds[r.id] === true;
+    var key = colorKeyForRoom(r);
+    if (visible && !Object.prototype.hasOwnProperty.call(colorMap, key)) {
+      colorMap[key] = MAP_COLORS[colorIdx % MAP_COLORS.length];
+      colorIdx++;
+    }
+    var mx = tx(r.mapX), my = ty(r.mapY);
+    var rad = 11;
+    ctx.beginPath();
+    ctx.arc(mx, my, rad, 0, Math.PI * 2);
+    ctx.fillStyle = visible ? colorMap[key] : "rgba(150,163,176,0.35)";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#ffffff";
+    ctx.stroke();
+    ctx.fillStyle = visible ? "#ffffff" : "rgba(255,255,255,0.7)";
+    ctx.font = "700 9px " + "Segoe UI, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    var initials = r.name.split(/\s+/).map(function (wd) { return wd.charAt(0); }).join("").slice(0, 2).toUpperCase();
+    ctx.fillText(initials, mx, my);
+    if (visible) mapMarkers.push({ x: mx, y: my, r: rad + 2, roomId: r.id });
+    // name under marker
+    ctx.fillStyle = visible ? "#1c2b33" : "rgba(91,112,131,0.5)";
+    ctx.font = "600 10.5px Segoe UI, sans-serif";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(r.name, mx, my + rad + 12);
+  });
+
+  // scale bar (10 ft)
+  var bar = 10 * scale;
+  ctx.strokeStyle = "#5b7083"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(pad, h - 16); ctx.lineTo(pad + bar, h - 16); ctx.stroke();
+  ctx.fillStyle = "#5b7083"; ctx.font = "10px " + "Consolas, monospace"; ctx.textAlign = "left";
+  ctx.fillText("10 ft", pad + bar + 6, h - 13);
+
+  // legend
+  if (legendHost) {
+    legendHost.innerHTML = "";
+    Object.keys(colorMap).forEach(function (k) {
+      legendHost.appendChild(el("span", { class: "li" }, [
+        el("span", { class: "sw", style: "background:" + colorMap[k] }),
+        el("span", { text: k })
+      ]));
+    });
+    if (!Object.keys(colorMap).length) legendHost.appendChild(el("span", { text: "No rooms match the current filters." }));
+  }
+}
+
+/* ================================================================
+   room detail drawer
+================================================================ */
+function openRoomDrawer(roomId) {
+  var r = byId(state.rooms, roomId);
+  if (!r) return;
+  var drawer = $("#drawer");
+  $("#drawerTitle").textContent = r.name;
+  var body = $("#drawerBody");
+  body.innerHTML = "";
+
+  var fl = byId(state.floors, r.floorId);
+  var b = fl ? byId(state.buildings, fl.buildingId) : null;
+  var perVisit = roomMinutesPerVisit(r);
+  var daily = roomDailyMinutes(r);
+  var fq = byId(state.frequencies, r.frequency);
+  var emp = byId(state.employees, r.employeeId);
+  var sh = byId(state.shifts, r.shiftId);
+
+  var kv = el("div", { class: "kv" });
+  function kvrow(k, vNode) {
+    kv.appendChild(el("div", { class: "k", text: k }));
+    kv.appendChild(typeof vNode === "string" ? el("div", { class: "v", text: vNode }) : vNode);
+  }
+  kvrow("Location", (b ? b.name + " / " : "") + (fl ? fl.name : "?") + " / " + deptKey(r));
+  kvrow("Cleanable area", el("div", { class: "v mono", text: fmt(r.cleanableSqFt, 2) + " ft²" }));
+  kvrow("Ceiling", r.ceilingHeight || "–");
+  kvrow("Computed / visit", el("div", { class: "v mono", text: fmt(perVisit, 1) + " min" }));
+  kvrow("Daily equivalent", el("div", { class: "v mono", text: fmt(daily, 1) + " min/day" }));
+  kvrow("Status", roomStatus(r) + (emp ? " → " + emp.name : "") + (sh ? " (" + sh.name + ")" : ""));
+  body.appendChild(kv);
+
+  // editable fields
+  function field(labelTxt, node) {
+    var f = el("div", { class: "field", style: "margin-bottom:10px" });
+    f.appendChild(el("label", { text: labelTxt }));
+    f.appendChild(node);
+    return f;
+  }
+  var nameInp = el("input", { type: "text", value: r.name });
+  nameInp.addEventListener("change", function () { r.name = nameInp.value; save(); renderAll(); openRoomDrawer(roomId); });
+  body.appendChild(field("Room name", nameInp));
+
+  var deptInp = el("input", { type: "text", value: r.department || "Unassigned" });
+  deptInp.addEventListener("change", function () { r.department = deptInp.value || "Unassigned"; save(); renderAll(); openRoomDrawer(roomId); });
+  body.appendChild(field("Department", deptInp));
+
+  var selType = el("select");
+  selType.appendChild(el("option", { value: "", text: "(untyped)" }));
+  state.roomTypes.forEach(function (rt) {
+    var o = el("option", { value: rt.name, text: rt.name });
+    if (r.roomType === rt.name) o.selected = true;
+    selType.appendChild(o);
+  });
+  selType.addEventListener("change", function () { r.roomType = selType.value || "(untyped)"; save(); renderAll(); openRoomDrawer(roomId); });
+  body.appendChild(field("Room type", selType));
+
+  var selFt = el("select");
+  state.floorTypes.forEach(function (ftName) {
+    var o = el("option", { value: ftName, text: ftName });
+    if (r.floorType === ftName) o.selected = true;
+    selFt.appendChild(o);
+  });
+  selFt.addEventListener("change", function () { r.floorType = selFt.value; save(); renderAll(); openRoomDrawer(roomId); });
+  body.appendChild(field("Floor type", selFt));
+
+  var fixInp = el("input", { type: "number", min: "0", step: "1", value: String(r.fixtures || 0) });
+  fixInp.addEventListener("change", function () { r.fixtures = Number(fixInp.value) || 0; save(); renderAll(); openRoomDrawer(roomId); });
+  body.appendChild(field("Fixtures (restroom)", fixInp));
+
+  var selFq = el("select");
+  state.frequencies.forEach(function (f2) {
+    var o = el("option", { value: f2.id, text: f2.label });
+    if (r.frequency === f2.id) o.selected = true;
+    selFq.appendChild(o);
+  });
+  selFq.addEventListener("change", function () { r.frequency = selFq.value; save(); renderAll(); openRoomDrawer(roomId); });
+  body.appendChild(field("Frequency", selFq));
+
+  var selSh = el("select");
+  selSh.appendChild(el("option", { value: "", text: "(no shift)" }));
+  state.shifts.forEach(function (s2) {
+    var o = el("option", { value: s2.id, text: s2.name });
+    if (r.shiftId === s2.id) o.selected = true;
+    selSh.appendChild(o);
+  });
+  selSh.addEventListener("change", function () {
+    r.shiftId = selSh.value || null;
+    if (!r.shiftId) r.employeeId = null;
+    save(); renderAll(); openRoomDrawer(roomId);
+  });
+  body.appendChild(field("Shift", selSh));
+
+  var selEmp = el("select");
+  selEmp.appendChild(el("option", { value: "", text: "(unassigned)" }));
+  state.employees.forEach(function (e2) {
+    var o = el("option", { value: e2.id, text: e2.name + " — " + (byId(state.shifts, e2.shiftId) ? byId(state.shifts, e2.shiftId).name : "?") });
+    if (r.employeeId === e2.id) o.selected = true;
+    selEmp.appendChild(o);
+  });
+  selEmp.addEventListener("change", function () {
+    r.employeeId = selEmp.value || null;
+    if (r.employeeId) {
+      var e3 = byId(state.employees, r.employeeId);
+      if (e3) r.shiftId = e3.shiftId;
+    }
+    save(); renderAll(); openRoomDrawer(roomId);
+  });
+  body.appendChild(field("Assigned employee", selEmp));
+
+  var tasksTa = el("textarea", { rows: "3", text: (r.tasks || []).join("\n") });
+  tasksTa.addEventListener("change", function () {
+    r.tasks = tasksTa.value.split("\n").map(function (s3) { return s3.trim(); }).filter(function (s3) { return s3.length > 0; });
+    save();
+  });
+  body.appendChild(field("Tasks (one per line)", tasksTa));
+
+  var delBtn = el("button", { class: "btn danger small", text: "Delete room" });
+  delBtn.addEventListener("click", function () {
+    openModal("Delete room?", [el("p", { text: "Remove “" + r.name + "” and its assignment? This only affects OpsMatrix data." })], [
+      { label: "Delete", primary: true, onClick: function () {
+        state.rooms = state.rooms.filter(function (x) { return x.id !== r.id; });
+        save(); closeModal(); closeDrawer(); renderAll(); toast("Room deleted");
+      } },
+      { label: "Cancel", onClick: closeModal }
+    ]);
+  });
+  body.appendChild(delBtn);
+
+  drawer.classList.add("open");
+}
+function closeDrawer() { $("#drawer").classList.remove("open"); }
+
+/* ================================================================
+   modals
+================================================================ */
+function openModal(title, bodyNodes, buttons) {
+  closeModal();
+  var back = el("div", { class: "modalback", id: "modalBack" });
+  var m = el("div", { class: "modal", role: "dialog", "aria-label": title });
+  m.appendChild(el("div", { class: "mhead" }, [el("h3", { text: title })]));
+  m.appendChild(el("div", { class: "mbody" }, bodyNodes));
+  var foot = el("div", { class: "mfoot" });
+  (buttons || []).forEach(function (btn) {
+    foot.appendChild(el("button", { class: "btn" + (btn.primary ? " primary" : "") + (btn.danger ? " danger" : ""), text: btn.label, onclick: btn.onClick }));
+  });
+  m.appendChild(foot);
+  back.appendChild(m);
+  back.addEventListener("click", function (e) { if (e.target === back) closeModal(); });
+  $("#modalHost").appendChild(back);
+}
+function closeModal() {
+  var b = $("#modalBack");
+  if (b && b.parentNode) b.parentNode.removeChild(b);
+}
+function openEmployeeModal(empId) {
+  var emp = empId ? byId(state.employees, empId) : null;
+  var nameInp = el("input", { type: "text", value: emp ? emp.name : "", placeholder: "e.g. D. Alvarez" });
+  var roleInp = el("input", { type: "text", value: emp ? emp.role : "EVS Tech", placeholder: "EVS Tech" });
+  var selSh = el("select");
+  state.shifts.forEach(function (s2) {
+    var o = el("option", { value: s2.id, text: s2.name + " (" + s2.start + "–" + s2.end + ")" });
+    if (emp && emp.shiftId === s2.id) o.selected = true;
+    selSh.appendChild(o);
+  });
+  var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  var pattern = emp ? emp.pattern.slice() : [false, true, true, true, true, true, false];
+  var patRow = el("div", { class: "row" });
+  days.forEach(function (d, i) {
+    var cb = el("input", { type: "checkbox", id: "pat" + i });
+    cb.checked = pattern[i];
+    cb.addEventListener("change", function () { pattern[i] = cb.checked; });
+    patRow.appendChild(el("label", { style: "display:inline-flex;align-items:center;gap:4px;font-size:12px" }, [cb, d]));
+  });
+  var body = [
+    el("div", { class: "field", style: "margin-bottom:10px" }, [el("label", { text: "Name" }), nameInp]),
+    el("div", { class: "field", style: "margin-bottom:10px" }, [el("label", { text: "Role" }), roleInp]),
+    el("div", { class: "field", style: "margin-bottom:10px" }, [el("label", { text: "Shift" }), selSh]),
+    el("div", { class: "field" }, [el("label", { text: "Weekly pattern" }), patRow])
+  ];
+  var buttons = [
+    { label: emp ? "Save" : "Add employee", primary: true, onClick: function () {
+      if (!nameInp.value.trim()) { toast("Name is required", true); return; }
+      if (emp) {
+        emp.name = nameInp.value.trim(); emp.role = roleInp.value.trim(); emp.shiftId = selSh.value; emp.pattern = pattern;
+      } else {
+        state.employees.push({ id: uid("emp"), name: nameInp.value.trim(), role: roleInp.value.trim() || "EVS Tech", shiftId: selSh.value, pattern: pattern });
+      }
+      save(); closeModal(); renderAll();
+    } },
+    { label: "Cancel", onClick: closeModal }
+  ];
+  if (emp) {
+    buttons.splice(1, 0, { label: "Remove", danger: true, onClick: function () {
+      state.rooms.forEach(function (r) { if (r.employeeId === emp.id) r.employeeId = null; });
+      state.jobs.forEach(function (j) { if (j.employeeId === emp.id) j.employeeId = null; });
+      state.employees = state.employees.filter(function (x) { return x.id !== emp.id; });
+      save(); closeModal(); renderAll(); toast("Employee removed — their rooms moved to unscheduled");
+    } });
+  }
+  openModal(emp ? "Edit employee" : "New employee", body, buttons);
+}
+function openJobModal(jobId) {
+  var job = jobId ? byId(state.jobs, jobId) : null;
+  var nameInp = el("input", { type: "text", value: job ? job.name : "", placeholder: "e.g. Discharge cleans — 4 West" });
+  var selType = el("select");
+  [["discharge", "Discharge / bed cleans"], ["porter", "Porter / patient transport"], ["trashlinen", "Trash & linen run"], ["laundry", "Laundry"], ["floortech", "Floor tech / project work"], ["custom", "Custom"]].forEach(function (t) {
+    var o = el("option", { value: t[0], text: t[1] });
+    if (job && job.type === t[0]) o.selected = true;
+    selType.appendChild(o);
+  });
+  var selMode = el("select");
+  [["unit", "Unit-based (count / day × minutes each)"], ["block", "Time block (fixed minutes / day)"]].forEach(function (m2) {
+    var o = el("option", { value: m2[0], text: m2[1] });
+    if (job && job.mode === m2[0]) o.selected = true;
+    selMode.appendChild(o);
+  });
+  var unitsInp = el("input", { type: "number", min: "0", step: "1", value: String(job && job.unitsPerDay !== undefined ? job.unitsPerDay : 6) });
+  var minsPerInp = el("input", { type: "number", min: "0", step: "1", value: String(job && job.minutesPerUnit !== undefined ? job.minutesPerUnit : 45) });
+  var blockInp = el("input", { type: "number", min: "0", step: "5", value: String(job && job.minutes !== undefined ? job.minutes : 240) });
+  var unitRow = el("div", { class: "row", style: "margin-bottom:10px" }, [
+    el("div", { class: "field" }, [el("label", { text: "Units / day" }), unitsInp]),
+    el("div", { class: "field" }, [el("label", { text: "Minutes / unit" }), minsPerInp])
+  ]);
+  var blockRow = el("div", { class: "field", style: "margin-bottom:10px" }, [el("label", { text: "Minutes / day" }), blockInp]);
+  function syncMode() {
+    unitRow.style.display = selMode.value === "unit" ? "" : "none";
+    blockRow.style.display = selMode.value === "block" ? "" : "none";
+  }
+  selMode.addEventListener("change", syncMode);
+  var selSh = el("select");
+  selSh.appendChild(el("option", { value: "", text: "(no shift yet)" }));
+  state.shifts.forEach(function (s2) {
+    var o = el("option", { value: s2.id, text: s2.name });
+    if (job && job.shiftId === s2.id) o.selected = true;
+    selSh.appendChild(o);
+  });
+  selType.addEventListener("change", function () {
+    // helpful defaults per type
+    if (!job && !nameInp.value.trim()) nameInp.value = jobTypeLabel(selType.value);
+    if (selType.value === "discharge") { selMode.value = "unit"; unitsInp.value = "6"; minsPerInp.value = "45"; }
+    if (selType.value === "trashlinen" || selType.value === "porter") { selMode.value = "block"; blockInp.value = "240"; }
+    syncMode();
+  });
+  var body = [
+    el("div", { class: "field", style: "margin-bottom:10px" }, [el("label", { text: "Job name" }), nameInp]),
+    el("div", { class: "field", style: "margin-bottom:10px" }, [el("label", { text: "Type" }), selType]),
+    el("div", { class: "field", style: "margin-bottom:10px" }, [el("label", { text: "Workload model" }), selMode]),
+    unitRow, blockRow,
+    el("div", { class: "field" }, [el("label", { text: "Shift" }), selSh]),
+    el("p", { class: "note", style: "margin-top:10px", text: "Non-space jobs count against employee capacity exactly like room work. Drag the job chip onto an employee on the board." })
+  ];
+  var buttons = [
+    { label: job ? "Save" : "Add job", primary: true, onClick: function () {
+      if (!nameInp.value.trim()) { toast("Job name is required", true); return; }
+      var data = {
+        name: nameInp.value.trim(), type: selType.value, mode: selMode.value,
+        minutes: Number(blockInp.value) || 0,
+        unitsPerDay: Number(unitsInp.value) || 0,
+        minutesPerUnit: Number(minsPerInp.value) || 0,
+        shiftId: selSh.value || null
+      };
+      if (job) Object.assign(job, data);
+      else state.jobs.push(Object.assign({ id: uid("job"), employeeId: null }, data));
+      save(); closeModal(); renderAll();
+    } },
+    { label: "Cancel", onClick: closeModal }
+  ];
+  if (job) {
+    buttons.splice(1, 0, { label: "Delete", danger: true, onClick: function () {
+      state.jobs = state.jobs.filter(function (x) { return x.id !== job.id; });
+      save(); closeModal(); renderAll();
+    } });
+  }
+  openModal(job ? "Edit non-space job" : "New non-space job", body, buttons);
+  syncMode();
+}
+
+/* ================================================================
+   views — settings
+================================================================ */
+function renderSettingsView() {
+  var host = $("#content");
+  host.innerHTML = "";
+  host.appendChild(el("h1", { class: "pagetitle", text: "Settings" }));
+  host.appendChild(el("p", { class: "pagesub", text: "Rates, shifts and data management. All rates are editable estimates — tune them to your building." }));
+
+  /* ---- workload rates ---- */
+  var rc = el("div", { class: "card" });
+  rc.appendChild(el("div", { class: "chead" }, [
+    el("h2", { text: "Workload rates" }),
+    el("span", { class: "sub", text: "minutes per 1,000 cleanable ft², by room type × floor type" })
+  ]));
+  var rbody = el("div", { class: "cbody" });
+  rbody.appendChild(el("div", { class: "note estimate", style: "margin-bottom:12px", text: "These are editable estimates seeded from industry-typical (ISSA-style) production rates — not measured values. Workload math uses cleanable (interior) square footage only; gross is reference." }));
+
+  var wrap = el("div", { class: "tablewrap" });
+  var tbl = el("table", { class: "grid" });
+  tbl.appendChild(el("thead", {}, [el("tr", {}, [
+    el("th", { text: "Room type" }), el("th", { text: "Floor type" }),
+    el("th", { class: "num", text: "Min / 1,000 ft²" }), el("th", { text: "" })
+  ])]));
+  var tb = el("tbody");
+  state.rates.baseRates.forEach(function (br) {
+    var tr = el("tr");
+    var rtInp = el("input", { type: "text", value: br.roomType });
+    rtInp.addEventListener("change", function () { br.roomType = rtInp.value; save(); renderKPIs(); });
+    tr.appendChild(el("td", {}, [rtInp]));
+    var ftInp = el("input", { type: "text", value: br.floorType });
+    ftInp.addEventListener("change", function () { br.floorType = ftInp.value; save(); renderKPIs(); });
+    tr.appendChild(el("td", {}, [ftInp]));
+    var mInp = el("input", { type: "number", min: "0", step: "1", value: String(br.minutesPer1000) });
+    mInp.addEventListener("change", function () { br.minutesPer1000 = Number(mInp.value) || 0; save(); renderKPIs(); renderTree(); });
+    tr.appendChild(el("td", { class: "num" }, [mInp]));
+    var rm = el("button", { class: "btn small danger", text: "✕" });
+    rm.addEventListener("click", function () {
+      state.rates.baseRates = state.rates.baseRates.filter(function (x) { return x.id !== br.id; });
+      save(); renderSettingsView(); renderKPIs();
+    });
+    tr.appendChild(el("td", {}, [rm]));
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  wrap.appendChild(tbl);
+  rbody.appendChild(wrap);
+  var addRate = el("button", { class: "btn small", text: "+ Add rate row", style: "margin-top:10px" });
+  addRate.addEventListener("click", function () {
+    state.rates.baseRates.push({ id: uid("br"), roomType: "(any)", floorType: "(any)", minutesPer1000: 25 });
+    save(); renderSettingsView();
+  });
+  rbody.appendChild(addRate);
+
+  var fixRow = el("div", { class: "row", style: "margin-top:14px" });
+  var fixInp = el("input", { type: "number", min: "0", step: "0.5", value: String(state.rates.fixtureMinutes) });
+  fixInp.addEventListener("change", function () { state.rates.fixtureMinutes = Number(fixInp.value) || 0; save(); renderKPIs(); });
+  fixRow.appendChild(el("div", { class: "field" }, [el("label", { text: "Minutes per restroom fixture" }), fixInp]));
+  var prodInp = el("input", { type: "number", min: "60", step: "5", value: String(state.rates.productiveMinutes) });
+  prodInp.addEventListener("change", function () { state.rates.productiveMinutes = Number(prodInp.value) || 420; save(); renderKPIs(); });
+  fixRow.appendChild(el("div", { class: "field" }, [el("label", { text: "Productive minutes per shift (FTE base)" }), prodInp]));
+  rbody.appendChild(fixRow);
+  rc.appendChild(rbody);
+  host.appendChild(rc);
+
+  /* ---- modifiers ---- */
+  var mc = el("div", { class: "card" });
+  mc.appendChild(el("div", { class: "chead" }, [
+    el("h2", { text: "Task modifiers & project rates" }),
+    el("span", { class: "sub", text: "multipliers apply to a room's per-visit minutes; project rates are min / 1,000 ft²" })
+  ]));
+  var mbody = el("div", { class: "cbody" });
+  var mtbl = el("table", { class: "grid" });
+  mtbl.appendChild(el("thead", {}, [el("tr", {}, [
+    el("th", { text: "Modifier" }), el("th", { text: "Kind" }), el("th", { class: "num", text: "Value" })
+  ])]));
+  var mtb = el("tbody");
+  state.rates.modifiers.forEach(function (mod) {
+    var tr = el("tr");
+    tr.appendChild(el("td", { text: mod.name }));
+    tr.appendChild(el("td", { text: mod.kind === "multiplier" ? "× multiplier" : "min / 1,000 ft²" }));
+    var vInp = el("input", { type: "number", min: "0", step: mod.kind === "multiplier" ? "0.05" : "5", value: String(mod.value) });
+    vInp.addEventListener("change", function () { mod.value = Number(vInp.value) || 0; save(); });
+    tr.appendChild(el("td", { class: "num" }, [vInp]));
+    mtb.appendChild(tr);
+  });
+  mtbl.appendChild(mtb);
+  mbody.appendChild(el("div", { class: "tablewrap" }, [mtbl]));
+  mc.appendChild(mbody);
+  host.appendChild(mc);
+
+  /* ---- shifts ---- */
+  var sc = el("div", { class: "card" });
+  sc.appendChild(el("div", { class: "chead" }, [el("h2", { text: "Shifts" })]));
+  var sbody = el("div", { class: "cbody" });
+  var stbl = el("table", { class: "grid" });
+  stbl.appendChild(el("thead", {}, [el("tr", {}, [
+    el("th", { text: "Name" }), el("th", { text: "Start" }), el("th", { text: "End" }), el("th", { text: "" })
+  ])]));
+  var stb = el("tbody");
+  state.shifts.forEach(function (sh) {
+    var tr = el("tr");
+    var nInp = el("input", { type: "text", value: sh.name });
+    nInp.addEventListener("change", function () { sh.name = nInp.value; save(); renderAll(); });
+    tr.appendChild(el("td", {}, [nInp]));
+    var sInp = el("input", { type: "time", value: sh.start });
+    sInp.addEventListener("change", function () { sh.start = sInp.value; save(); });
+    tr.appendChild(el("td", {}, [sInp]));
+    var eInp = el("input", { type: "time", value: sh.end });
+    eInp.addEventListener("change", function () { sh.end = eInp.value; save(); });
+    tr.appendChild(el("td", {}, [eInp]));
+    var rm = el("button", { class: "btn small danger", text: "✕" });
+    rm.addEventListener("click", function () {
+      var used = state.employees.some(function (e2) { return e2.shiftId === sh.id; }) ||
+                 state.rooms.some(function (r) { return r.shiftId === sh.id; });
+      if (used) { toast("Shift is in use — move employees/rooms off it first", true); return; }
+      state.shifts = state.shifts.filter(function (x) { return x.id !== sh.id; });
+      save(); renderSettingsView();
+    });
+    tr.appendChild(el("td", {}, [rm]));
+    stb.appendChild(tr);
+  });
+  stbl.appendChild(stb);
+  sbody.appendChild(el("div", { class: "tablewrap" }, [stbl]));
+  var addSh = el("button", { class: "btn small", text: "+ Add shift", style: "margin-top:10px" });
+  addSh.addEventListener("click", function () {
+    state.shifts.push({ id: uid("sh"), name: "Nights", start: "23:00", end: "07:30" });
+    save(); renderSettingsView();
+  });
+  sbody.appendChild(addSh);
+  sc.appendChild(sbody);
+  host.appendChild(sc);
+
+  /* ---- room type templates ---- */
+  var tc = el("div", { class: "card" });
+  tc.appendChild(el("div", { class: "chead" }, [
+    el("h2", { text: "Room type templates" }),
+    el("span", { class: "sub", text: "used by intake to auto-fill floor type, fixtures, tasks, frequency" })
+  ]));
+  var tcb = el("div", { class: "cbody" });
+  var ttbl = el("table", { class: "grid" });
+  ttbl.appendChild(el("thead", {}, [el("tr", {}, [
+    el("th", { text: "Type" }), el("th", { text: "Floor type" }), el("th", { class: "num", text: "Fixtures" }),
+    el("th", { text: "Frequency" }), el("th", { text: "Default tasks" })
+  ])]));
+  var ttb = el("tbody");
+  state.roomTypes.forEach(function (rt) {
+    var tr = el("tr");
+    tr.appendChild(el("td", { text: rt.name }));
+    var ftSel = el("select");
+    state.floorTypes.forEach(function (ftName) {
+      var o = el("option", { value: ftName, text: ftName });
+      if (rt.floorType === ftName) o.selected = true;
+      ftSel.appendChild(o);
+    });
+    ftSel.addEventListener("change", function () { rt.floorType = ftSel.value; save(); });
+    tr.appendChild(el("td", {}, [ftSel]));
+    var fxInp = el("input", { type: "number", min: "0", step: "1", value: String(rt.fixtures) });
+    fxInp.addEventListener("change", function () { rt.fixtures = Number(fxInp.value) || 0; save(); });
+    tr.appendChild(el("td", { class: "num" }, [fxInp]));
+    var fqSel = el("select");
+    state.frequencies.forEach(function (f2) {
+      var o = el("option", { value: f2.id, text: f2.label });
+      if (rt.frequency === f2.id) o.selected = true;
+      fqSel.appendChild(o);
+    });
+    fqSel.addEventListener("change", function () { rt.frequency = fqSel.value; save(); });
+    tr.appendChild(el("td", {}, [fqSel]));
+    var tkInp = el("input", { type: "text", value: rt.tasks.join(", ") });
+    tkInp.addEventListener("change", function () {
+      rt.tasks = tkInp.value.split(",").map(function (s3) { return s3.trim(); }).filter(function (s3) { return s3.length > 0; });
+      save();
+    });
+    tr.appendChild(el("td", {}, [tkInp]));
+    ttb.appendChild(tr);
+  });
+  ttbl.appendChild(ttb);
+  tcb.appendChild(el("div", { class: "tablewrap" }, [ttbl]));
+  tc.appendChild(tcb);
+  host.appendChild(tc);
+
+  /* ---- backup / restore ---- */
+  var bc = el("div", { class: "card" });
+  bc.appendChild(el("div", { class: "chead" }, [
+    el("h2", { text: "Backup & restore" }),
+    el("span", { class: "sub", text: "full app state as JSON — schedule, rooms, rates, everything" })
+  ]));
+  var bcb = el("div", { class: "cbody row" });
+  bcb.appendChild(el("button", { class: "btn primary", text: "Download backup JSON", onclick: function () {
+    download("opsmatrix-scheduler-backup-" + new Date().toISOString().slice(0, 10) + ".json", JSON.stringify(state, null, 2));
+    toast("Backup downloaded");
+  } }));
+  var restoreInput = el("input", { type: "file", accept: ".json", style: "display:none" });
+  restoreInput.addEventListener("change", function () {
+    var file = restoreInput.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var incoming = JSON.parse(reader.result);
+        if (!incoming || typeof incoming !== "object" || !incoming.version) throw new Error("not an OpsMatrix backup");
+        openModal("Restore backup?", [el("p", { text: "This replaces ALL current scheduler data with the backup (" + (incoming.rooms ? incoming.rooms.length : 0) + " rooms). Your current data will be overwritten." })], [
+          { label: "Restore", primary: true, onClick: function () {
+            var def = defaultState();
+            state = Object.assign({}, def, incoming);
+            state.rates = Object.assign({}, def.rates, incoming.rates || {});
+            state.ui = Object.assign({}, def.ui, incoming.ui || {});
+            save(); closeModal(); renderAll(); toast("Backup restored");
+          } },
+          { label: "Cancel", onClick: closeModal }
+        ]);
+      } catch (err) {
+        toast("Could not read backup: " + err.message, true);
+      }
+      restoreInput.value = "";
+    };
+    reader.readAsText(file);
+  });
+  bcb.appendChild(el("button", { class: "btn", text: "Restore from backup…", onclick: function () { restoreInput.click(); } }));
+  bcb.appendChild(restoreInput);
+  bcb.appendChild(el("button", { class: "btn danger", text: "Erase all data", onclick: function () {
+    openModal("Erase all scheduler data?", [el("p", { text: "Removes everything stored under opsmatrix_sched_v1. The original OpsMatrix app data (other keys) is untouched. Download a backup first if unsure." })], [
+      { label: "Erase", danger: true, onClick: function () {
+        localStorage.removeItem(LS_KEY);
+        state = defaultState();
+        save(); closeModal(); renderAll(); toast("All data erased");
+      } },
+      { label: "Cancel", onClick: closeModal }
+    ]);
+  } }));
+  bc.appendChild(bcb);
+  host.appendChild(bc);
+}
+
+/* ================================================================
+   print — daily schedule per employee
+================================================================ */
+function printSchedules() {
+  var host = $("#printsheet");
+  host.innerHTML = "";
+  if (!state.employees.length) { toast("No employees to print", true); return; }
+  state.employees.forEach(function (emp) {
+    var sh = byId(state.shifts, emp.shiftId);
+    var rooms = state.rooms.filter(function (r) { return r.employeeId === emp.id; })
+      .sort(function (a, b) {
+        var fa = byId(state.floors, a.floorId), fb = byId(state.floors, b.floorId);
+        var ka = (fa ? fa.name : "") + deptKey(a) + a.name;
+        var kb = (fb ? fb.name : "") + deptKey(b) + b.name;
+        return ka.localeCompare(kb);
+      });
+    var jobs = state.jobs.filter(function (j) { return j.employeeId === emp.id; });
+    var sheet = el("div", { class: "psheet" });
+    sheet.appendChild(el("h2", { text: emp.name + " — Daily Schedule" }));
+    sheet.appendChild(el("div", { class: "meta", text: todayStr() + " · " + (sh ? sh.name + " " + sh.start + "–" + sh.end : "no shift") + " · " + (emp.role || "EVS Tech") }));
+    var tbl = el("table");
+    tbl.appendChild(el("thead", {}, [el("tr", {}, [
+      el("th", { text: "✓" }), el("th", { text: "Location" }), el("th", { text: "Room / job" }),
+      el("th", { text: "Tasks" }), el("th", { text: "Min" })
+    ])]));
+    var tb = el("tbody");
+    var total = 0;
+    rooms.forEach(function (r) {
+      var fl = byId(state.floors, r.floorId);
+      var mins = roomDailyMinutes(r);
+      total += mins;
+      tb.appendChild(el("tr", {}, [
+        el("td", { text: "☐", style: "width:26px;text-align:center" }),
+        el("td", { text: (fl ? fl.name : "") + " / " + deptKey(r) }),
+        el("td", { text: r.name + "  (" + r.roomType + ")" }),
+        el("td", { text: (r.tasks || []).join(", ") }),
+        el("td", { class: "num", text: fmt(mins, 0) })
+      ]));
+    });
+    jobs.forEach(function (j) {
+      var mins = jobDailyMinutes(j);
+      total += mins;
+      tb.appendChild(el("tr", {}, [
+        el("td", { text: "☐", style: "width:26px;text-align:center" }),
+        el("td", { text: "—" }),
+        el("td", { text: j.name }),
+        el("td", { text: jobTypeLabel(j.type) + (j.mode === "unit" ? " — " + j.unitsPerDay + " × " + j.minutesPerUnit + " min" : "") }),
+        el("td", { class: "num", text: fmt(mins, 0) })
+      ]));
+    });
+    if (!rooms.length && !jobs.length) {
+      tb.appendChild(el("tr", {}, [el("td", { colspan: "5", text: "Nothing assigned." })]));
+    }
+    tbl.appendChild(tb);
+    tbl.appendChild(el("tfoot", {}, [el("tr", {}, [
+      el("td", { colspan: "4", text: "Total assigned", style: "font-weight:700" }),
+      el("td", { class: "num", text: fmt(total, 0) + " / " + state.rates.productiveMinutes, style: "font-weight:700" })
+    ])]));
+    sheet.appendChild(tbl);
+    sheet.appendChild(el("div", { class: "sig" }, [
+      el("span", { text: "Employee signature" }),
+      el("span", { text: "Supervisor" })
+    ]));
+    host.appendChild(sheet);
+  });
+  window.print();
+}
+
+/* ================================================================
+   navigation + init
+================================================================ */
+function switchView(v) {
+  state.ui.view = v;
+  save();
+  renderAll();
+}
+function renderContent() {
+  closeDrawer();
+  var v = state.ui.view;
+  if (v === "import") renderImportView();
+  else if (v === "map") renderMapView();
+  else if (v === "settings") renderSettingsView();
+  else renderScheduleView();
+  $$("#mainTabs button").forEach(function (b) {
+    b.className = b.getAttribute("data-view") === v ? "active" : "";
+  });
+}
+function renderAll() {
+  renderKPIs();
+  renderTree();
+  renderContent();
+}
+
+$$("#mainTabs button").forEach(function (b) {
+  b.addEventListener("click", function () { switchView(b.getAttribute("data-view")); });
+});
+$("#btnDrawerClose").addEventListener("click", closeDrawer);
+$("#btnClearScope").addEventListener("click", function () { setScope(null); });
+$("#btnTreeToggle").addEventListener("click", function () { $("#treePane").classList.toggle("open"); });
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") { closeModal(); closeDrawer(); }
+});
+window.addEventListener("resize", function () {
+  if (state.ui.view === "map") renderContent();
+});
+
+// first run: no data → land on import
+if (!state.rooms.length && !state.buildings.length) state.ui.view = "import";
+renderAll();
+
+})();
+</script>
+</body>
+</html>
