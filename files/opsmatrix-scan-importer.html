@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpsMatrix Scan Importer</title>
+<style>
+  :root {
+    --paper: #0e1b2e;      /* blueprint field */
+    --ink: #e8f1fb;
+    --line: #4da3ff;       /* blueprint line */
+    --line-dim: #2a4a72;
+    --panel: #13233c;
+    --panel-edge: #1f3557;
+    --accent: #ffc94d;     /* surveyor amber for data */
+    --ok: #57d99a;
+    --mono: "SF Mono", "Cascadia Code", Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--paper); color: var(--ink); font-family: var(--sans); min-height: 100vh; }
+  header { padding: 20px 24px 12px; border-bottom: 1px solid var(--panel-edge); display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  header h1 { font-size: 17px; letter-spacing: .06em; font-weight: 600; }
+  header h1 span { color: var(--line); }
+  header .sub { font-family: var(--mono); font-size: 11.5px; color: #7d9cc4; }
+  main { padding: 20px 24px 40px; max-width: 1180px; margin: 0 auto; }
+
+  .dropzone {
+    border: 1.5px dashed var(--line-dim); border-radius: 10px; padding: 26px 18px;
+    text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+    background: rgba(77,163,255,0.03);
+  }
+  .dropzone.hover { border-color: var(--line); background: rgba(77,163,255,0.08); }
+  .dropzone p { font-size: 14px; color: #a8c3e2; }
+  .dropzone .hint { font-family: var(--mono); font-size: 11.5px; color: #63809f; margin-top: 6px; }
+  .filestate { display:flex; gap:10px; justify-content:center; margin-top:14px; flex-wrap:wrap; }
+  .chip { font-family: var(--mono); font-size: 11.5px; padding: 5px 11px; border-radius: 99px;
+    border: 1px solid var(--panel-edge); color:#63809f; }
+  .chip.loaded { border-color: var(--ok); color: var(--ok); }
+
+  .grid { display:grid; grid-template-columns: minmax(0,1fr) 340px; gap: 18px; margin-top: 20px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 10px; overflow:hidden; }
+  .card h2 { font-family: var(--mono); font-size: 11px; letter-spacing:.14em; text-transform: uppercase;
+    color:#7d9cc4; padding: 12px 14px; border-bottom: 1px solid var(--panel-edge); }
+  canvas { display:block; width:100%; background:
+    repeating-linear-gradient(0deg, transparent 0 23px, rgba(77,163,255,.05) 23px 24px),
+    repeating-linear-gradient(90deg, transparent 0 23px, rgba(77,163,255,.05) 23px 24px),
+    var(--paper); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { font-family: var(--mono); font-size: 10.5px; letter-spacing:.08em; text-transform:uppercase;
+    color:#63809f; text-align:left; padding: 9px 12px 7px; border-bottom:1px solid var(--panel-edge); }
+  td { padding: 8px 12px; border-bottom: 1px solid rgba(31,53,87,.6); }
+  td.num { font-family: var(--mono); color: var(--accent); text-align: right; }
+  td input { background: transparent; border: none; border-bottom: 1px dashed var(--line-dim);
+    color: var(--ink); font-size: 13px; width: 100%; padding: 2px 0; font-family: var(--sans); }
+  td input:focus { outline: none; border-bottom-color: var(--line); }
+  tfoot td { color:#a8c3e2; font-family: var(--mono); font-size: 12px; border-bottom:none; }
+
+  .actions { padding: 12px 14px; display:flex; gap:10px; }
+  button { font-family: var(--mono); font-size: 12px; letter-spacing:.03em; padding: 9px 14px;
+    border-radius: 7px; border: 1px solid var(--line-dim); background: transparent; color: var(--line);
+    cursor: pointer; transition: background .12s; }
+  button:hover { background: rgba(77,163,255,.1); }
+  button.primary { background: var(--line); color: #08131f; border-color: var(--line); font-weight: 700; }
+  button.primary:hover { background: #6cb4ff; }
+  button:disabled { opacity:.35; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .toast { font-family: var(--mono); font-size: 11.5px; color: var(--ok); padding: 0 14px 12px; min-height: 16px; }
+  .empty { padding: 22px 14px; font-size: 13px; color: #63809f; }
+</style>
+</head>
+<body>
+<header>
+  <h1>OPSMATRIX <span>/ SCAN IMPORTER</span></h1>
+  <div class="sub">magicplan DXF + Statistics CSV &rarr; space hierarchy JSON</div>
+</header>
+<main>
+  <div class="dropzone" id="drop">
+    <p>Drop your two magicplan exports here, or tap to browse</p>
+    <div class="hint">needs: floor plan .dxf &nbsp;+&nbsp; statistics .csv</div>
+    <div class="filestate">
+      <span class="chip" id="chipDxf">.dxf &mdash; waiting</span>
+      <span class="chip" id="chipCsv">.csv &mdash; waiting</span>
+    </div>
+    <input type="file" id="fileInput" multiple accept=".dxf,.csv" style="display:none">
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Floor plan &mdash; drawn from scan geometry</h2>
+      <canvas id="cv" height="520"></canvas>
+    </div>
+    <div class="card">
+      <h2>Rooms &mdash; from statistics</h2>
+      <div id="roomPanel"><div class="empty">Room data appears here once the CSV is loaded. Names are editable before export.</div></div>
+      <div class="actions">
+        <button class="primary" id="btnExport" disabled>Download JSON</button>
+        <button id="btnCopy" disabled>Copy JSON</button>
+      </div>
+      <div class="toast" id="toast"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ---------- parsers (verified against real magicplan exports) ----------
+function decodeDxfText(s) {
+  return s.replace(/\\U\+([0-9a-fA-F]{4})/g, function (m, hex) {
+    return String.fromCharCode(parseInt(hex, 16));
+  });
+}
+function parseDXF(text) {
+  var lines = text.split(/\r?\n/);
+  var walls = [], labels = [], openings = [];
+  var section = "", cur = null, i = 0;
+  function flush() {
+    if (!cur) return;
+    if (section !== "ENTITIES") { cur = null; return; }
+    if (cur.type === "LWPOLYLINE" && cur.layer === "walls" && cur.pts.length > 2) {
+      walls.push({ points: cur.pts, closed: cur.closed });
+    } else if (cur.type === "TEXT" && cur.text) {
+      labels.push({ text: decodeDxfText(cur.text), x: cur.x, y: cur.y });
+    } else if (cur.type === "INSERT" && cur.name && cur.name.indexOf("W-") === 0) {
+      openings.push({ name: cur.name, x: cur.x, y: cur.y });
+    }
+    cur = null;
+  }
+  while (i < lines.length - 1) {
+    var code = parseInt(lines[i].trim(), 10);
+    var v = lines[i + 1].trim();
+    i += 2;
+    if (isNaN(code)) continue;
+    if (code === 0) {
+      flush();
+      if (v === "ENDSEC") section = "";
+      if (v === "LWPOLYLINE" || v === "TEXT" || v === "INSERT") {
+        cur = { type: v, layer: "", pts: [], closed: false, text: "", name: "", x: 0, y: 0, lastX: null };
+      }
+      continue;
+    }
+    if (code === 2 && section === "" && (v === "ENTITIES" || v === "BLOCKS" || v === "HEADER" || v === "TABLES" || v === "OBJECTS")) {
+      section = v; continue;
+    }
+    if (!cur) continue;
+    if (code === 8) cur.layer = v;
+    else if (code === 70 && cur.type === "LWPOLYLINE") cur.closed = (parseInt(v, 10) & 1) === 1;
+    else if (code === 10) {
+      if (cur.type === "LWPOLYLINE") cur.lastX = parseFloat(v);
+      else cur.x = parseFloat(v);
+    }
+    else if (code === 20) {
+      if (cur.type === "LWPOLYLINE" && cur.lastX !== null) { cur.pts.push([cur.lastX, parseFloat(v)]); cur.lastX = null; }
+      else cur.y = parseFloat(v);
+    }
+    else if (code === 1 && cur.type === "TEXT") cur.text = v;
+    else if (code === 2 && cur.type === "INSERT") cur.name = v;
+  }
+  flush();
+  return { walls: walls, labels: labels, openings: openings, units: "ft" };
+}
+function parseStatsCSV(text) {
+  var lines = text.split(/\r?\n/);
+  var plan = {}, floors = [], mode = "", currentFloor = null;
+  for (var i = 0; i < lines.length; i++) {
+    var raw = lines[i];
+    if (!raw || !raw.trim()) continue;
+    var cells = raw.split(",");
+    var first = cells[0].trim();
+    if (first === "PLAN ATTRIBUTES") { mode = "plan"; continue; }
+    if (first === "FLOOR ATTRIBUTES") { mode = "floorattr"; continue; }
+    if (first === "ROOM ATTRIBUTES") { mode = "rooms"; continue; }
+    if (first === "WALL ATTRIBUTES" || first === "OBJECT COUNT" || first === "Object Attributes") { mode = first; continue; }
+    if (mode === "plan") {
+      if (cells.length >= 2 && cells[1].trim()) plan[first] = cells[1].trim();
+      continue;
+    }
+    if (mode === "rooms") {
+      var hasData = cells.length > 2 && cells[1] && cells[1].trim() !== "";
+      if (!hasData) { currentFloor = { name: first, rooms: [] }; floors.push(currentFloor); }
+      else if (currentFloor) {
+        currentFloor.rooms.push({
+          name: first,
+          areaSqFt: parseFloat(cells[1]),
+          volumeCuFt: parseFloat(cells[2]),
+          groundPerimeter: cells[3] ? cells[3].trim() : "",
+          doorAreaSqFt: cells[7] ? parseFloat(cells[7]) : 0,
+          windowAreaSqFt: cells[8] ? parseFloat(cells[8]) : 0,
+          ceilingHeight: cells[9] ? cells[9].trim() : ""
+        });
+      }
+      continue;
+    }
+  }
+  var gross = plan["Ground surface with all walls: sq ft"];
+  var cleanable = plan["Ground surface without walls: sq ft"];
+  return {
+    grossSqFt: gross ? parseFloat(gross) : null,
+    cleanableSqFt: cleanable ? parseFloat(cleanable) : null,
+    totalAreaSqFt: cleanable ? parseFloat(cleanable) : null, // cleanable is the working number
+    roomCount: plan["Rooms"] ? parseInt(plan["Rooms"], 10) : null,
+    created: plan["Project creation date"] || "",
+    floors: floors
+  };
+}
+
+// ---------- state ----------
+var state = { dxf: null, stats: null, projectName: "Imported scan" };
+
+// ---------- rendering ----------
+function drawPlan() {
+  var cv = document.getElementById("cv");
+  var dpr = window.devicePixelRatio || 1;
+  var w = cv.clientWidth, h = 520;
+  cv.width = w * dpr; cv.height = h * dpr;
+  var ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (!state.dxf || !state.dxf.walls.length) {
+    ctx.fillStyle = "#63809f"; ctx.font = "13px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("Floor plan renders here once the DXF is loaded", w / 2, h / 2);
+    return;
+  }
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  state.dxf.walls.forEach(function (wall) {
+    wall.points.forEach(function (p) {
+      if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
+      if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
+    });
+  });
+  var pad = 40;
+  var scale = Math.min((w - pad * 2) / (maxX - minX), (h - pad * 2) / (maxY - minY));
+  function tx(x) { return pad + (x - minX) * scale; }
+  function ty(y) { return h - pad - (y - minY) * scale; } // flip Y
+
+  // walls: filled blueprint strips
+  ctx.fillStyle = "rgba(77,163,255,0.9)";
+  ctx.strokeStyle = "#8ec5ff"; ctx.lineWidth = 1;
+  state.dxf.walls.forEach(function (wall) {
+    ctx.beginPath();
+    wall.points.forEach(function (p, idx) {
+      if (idx === 0) ctx.moveTo(tx(p[0]), ty(p[1])); else ctx.lineTo(tx(p[0]), ty(p[1]));
+    });
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  });
+  // openings (doors/windows)
+  ctx.fillStyle = "#ffc94d";
+  state.dxf.openings.forEach(function (o) {
+    ctx.beginPath(); ctx.arc(tx(o.x), ty(o.y), 3, 0, Math.PI * 2); ctx.fill();
+  });
+  // labels
+  ctx.fillStyle = "#e8f1fb"; ctx.font = "600 12px sans-serif"; ctx.textAlign = "center";
+  state.dxf.labels.forEach(function (l) {
+    ctx.fillText(l.text, tx(l.x), ty(l.y));
+  });
+  // scale bar (10 ft)
+  var bar = 10 * scale;
+  ctx.strokeStyle = "#7d9cc4"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(pad, h - 16); ctx.lineTo(pad + bar, h - 16); ctx.stroke();
+  ctx.fillStyle = "#7d9cc4"; ctx.font = "10px monospace"; ctx.textAlign = "left";
+  ctx.fillText("10 ft", pad + bar + 6, h - 13);
+}
+
+function renderRooms() {
+  var panel = document.getElementById("roomPanel");
+  if (!state.stats) return;
+  var html = "<table><thead><tr><th>Room</th><th style='text-align:right'>Sq Ft</th><th>Ceiling</th></tr></thead><tbody>";
+  var total = 0, n = 0;
+  state.stats.floors.forEach(function (fl, fi) {
+    fl.rooms.forEach(function (rm, ri) {
+      total += rm.areaSqFt; n++;
+      html += "<tr><td><input data-f='" + fi + "' data-r='" + ri + "' value='" + rm.name.replace(/'/g, "&#39;") + "'></td>" +
+        "<td class='num'>" + rm.areaSqFt.toFixed(2) + "</td>" +
+        "<td style='font-family:var(--mono);font-size:11.5px;color:#a8c3e2'>" + rm.ceilingHeight + "</td></tr>";
+    });
+  });
+  html += "</tbody><tfoot><tr><td>" + n + " rooms</td><td class='num'>" + total.toFixed(2) + "</td><td></td></tr></tfoot></table>";
+  panel.innerHTML = html;
+  var inputs = panel.querySelectorAll("input");
+  for (var i = 0; i < inputs.length; i++) {
+    inputs[i].addEventListener("input", function (e) {
+      var f = parseInt(e.target.getAttribute("data-f"), 10);
+      var r = parseInt(e.target.getAttribute("data-r"), 10);
+      state.stats.floors[f].rooms[r].name = e.target.value;
+    });
+  }
+  document.getElementById("btnExport").disabled = false;
+  document.getElementById("btnCopy").disabled = false;
+}
+
+// ---------- export ----------
+function buildImport() {
+  var floorsOut = [];
+  var statsFloors = state.stats ? state.stats.floors : [];
+  for (var f = 0; f < statsFloors.length; f++) {
+    var fl = statsFloors[f];
+    var roomsOut = [];
+    for (var r = 0; r < fl.rooms.length; r++) {
+      var rm = fl.rooms[r];
+      roomsOut.push(Object.assign({}, rm, {
+        id: "scan_" + f + "_" + r,
+        source: "magicplan",
+        cleanableSqFt: rm.areaSqFt
+      }));
+    }
+    floorsOut.push({ name: fl.name, rooms: roomsOut });
+  }
+  return {
+    project: state.projectName,
+    importedAt: new Date().toISOString(),
+    units: "ft",
+    totals: state.stats ? {
+      cleanableSqFt: state.stats.cleanableSqFt, // interior floor only - use for workloading
+      grossSqFt: state.stats.grossSqFt,         // includes wall footprint - reference only
+      rooms: state.stats.roomCount
+    } : null,
+    floors: floorsOut,
+    geometry: state.dxf ? { walls: state.dxf.walls, labels: state.dxf.labels, openings: state.dxf.openings } : null
+  };
+}
+function toast(msg) {
+  var t = document.getElementById("toast");
+  t.textContent = msg;
+  setTimeout(function () { t.textContent = ""; }, 2600);
+}
+document.getElementById("btnExport").addEventListener("click", function () {
+  var blob = new Blob([JSON.stringify(buildImport(), null, 2)], { type: "application/json" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "opsmatrix-import.json";
+  a.click();
+  toast("Downloaded opsmatrix-import.json");
+});
+document.getElementById("btnCopy").addEventListener("click", function () {
+  var text = JSON.stringify(buildImport(), null, 2);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function () { toast("Copied to clipboard"); },
+      function () { toast("Copy failed - use Download instead"); });
+  } else {
+    toast("Clipboard unavailable - use Download");
+  }
+});
+
+// ---------- file handling ----------
+function handleFile(file) {
+  var name = file.name.toLowerCase();
+  var reader = new FileReader();
+  reader.onload = function () {
+    var text = reader.result;
+    if (name.indexOf(".dxf") !== -1) {
+      state.dxf = parseDXF(text);
+      state.projectName = file.name.replace(/\.dxf$/i, "").replace(/_/g, " ");
+      var chip = document.getElementById("chipDxf");
+      chip.textContent = ".dxf - " + state.dxf.walls.length + " walls, " + state.dxf.openings.length + " openings";
+      chip.className = "chip loaded";
+      drawPlan();
+    } else if (name.indexOf(".csv") !== -1) {
+      state.stats = parseStatsCSV(text);
+      var chip2 = document.getElementById("chipCsv");
+      var rc = 0;
+      state.stats.floors.forEach(function (f) { rc += f.rooms.length; });
+      chip2.textContent = ".csv - " + rc + " rooms, " + (state.stats.cleanableSqFt || "?") + " sq ft cleanable";
+      chip2.className = "chip loaded";
+      renderRooms();
+    }
+  };
+  reader.readAsText(file);
+}
+var drop = document.getElementById("drop");
+var input = document.getElementById("fileInput");
+drop.addEventListener("click", function () { input.click(); });
+input.addEventListener("change", function () {
+  for (var i = 0; i < input.files.length; i++) handleFile(input.files[i]);
+});
+["dragenter", "dragover"].forEach(function (ev) {
+  drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add("hover"); });
+});
+["dragleave", "drop"].forEach(function (ev) {
+  drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove("hover"); });
+});
+drop.addEventListener("drop", function (e) {
+  for (var i = 0; i < e.dataTransfer.files.length; i++) handleFile(e.dataTransfer.files[i]);
+});
+window.addEventListener("resize", drawPlan);
+drawPlan();
+</script>
+</body>
+</html>
