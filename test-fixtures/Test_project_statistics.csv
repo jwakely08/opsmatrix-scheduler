@@ -1,0 +1,16 @@
+PLAN ATTRIBUTES
+Project name,Test project
+Project creation date,2026-07-20
+Rooms,4
+Ground surface with all walls: sq ft,799.11
+Ground surface without walls: sq ft,653.88
+
+ROOM ATTRIBUTES
+1st Floor
+Patient Room 101,220.00,1760.00,59' 4",,,,21.00,15.00,8' 0"
+Bathroom 101B,45.88,367.04,27' 1",,,,21.00,0.00,8' 0"
+Office 102,143.00,1144.00,48' 6",,,,21.00,15.00,8' 0"
+Corridor A,245.00,1960.00,84' 0",,,,42.00,0.00,8' 0"
+
+WALL ATTRIBUTES
+1st Floor,
