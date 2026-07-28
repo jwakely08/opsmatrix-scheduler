@@ -85,14 +85,16 @@ login, organizations, invites and shared data.
 
 ## Deploying
 
-1. Push this repo to GitHub (or run `vercel` from the repo root).
-2. In Vercel: **Add New Project** → import the repo. Framework is auto-detected
-   (Vite); `vercel.json` already sets build command and SPA rewrites.
-3. Add the two env vars above in Vercel → Project → Settings → Environment
-   Variables, then deploy.
-4. Demo mode: any visitor can click **"Try the demo — no login"** on the login
-   screen — it loads a sample building (generated from the test-file data) on
-   the local adapter. One link to show anyone.
+**GitHub Pages (current setup — free, automatic):**
+`.github/workflows/deploy.yml` tests, builds and publishes to GitHub Pages on
+every push to `main`. The published site has no Supabase keys, so it runs in
+**local/demo mode**: data stays in each visitor's browser. Share
+`…/?demo=1` to open it pre-seeded with the sample building (generated from the
+test-file data). One-time setup lives in the checklist below.
+
+**Vercel (optional, later — needed for the multi-user backend):** import the
+repo in Vercel (framework auto-detected via `vercel.json`), add the two env
+vars, deploy. Use this when you want login/roles/shared data on the internet.
 
 ---
 
@@ -118,18 +120,27 @@ for it.
    organization (you become the director). Then Settings → Team & invites to
    generate codes for supervisors/staff.
 
-### 2. Vercel (free) — puts it on the internet
+### 2. GitHub push + Pages (free) — the permanent demo link
 
-1. Go to https://vercel.com → sign up (easiest with a GitHub account).
-2. Push this folder to a GitHub repo (private is fine), then in Vercel:
-   **Add New… → Project** → import that repo → **Deploy**.
-   - No GitHub? Install the CLI instead: `npm i -g vercel`, then run `vercel`
-     in this folder and follow the prompts.
-3. In the Vercel project: **Settings → Environment Variables** → add
-   `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (same values as `.env.local`)
-   → redeploy.
-4. Your app is live at the `*.vercel.app` URL. Custom domain is optional and
-   can wait.
+One-time, ~3 minutes. Run in a terminal:
+
+```
+winget install --id GitHub.cli
+gh auth login
+```
+
+(pick GitHub.com → HTTPS → Login with a web browser, and follow the code).
+Then tell Claude "gh is authenticated" — the repo creation, push, and Pages
+enablement are already scripted. After that, every commit to `main`
+redeploys the site automatically; no further manual steps ever.
+
+Note: GitHub Pages on a free account requires the repo to be **public**.
+
+### (Optional, later) Vercel — for the multi-user backend
+
+When you want login/roles/shared data hosted: import the repo at
+https://vercel.com, add `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` in
+project settings, deploy. `vercel.json` is already in place.
 
 ### 3. When you get the real magicplan exports
 
