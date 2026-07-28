@@ -1,21 +1,17 @@
-// Workload math engine — ported unchanged in behavior from opsmatrix-scheduler.html.
+// Workload math engine (v2): base rate + floor-finish modifier + room-type
+// qualifiers, per task frequency. Fully transparent — every number can be
+// broken down into plain-English lines via roomBreakdown().
 // cleanableSqFt is the ONLY area used in workload math; gross is reference only.
-import type { AppState, Room, NonSpaceJob, Scope } from "./types";
+import type { AppState, Room, NonSpaceJob, Scope, RoomTypeTemplate } from "./types";
+import { FLOOR_FINISH_SHORT } from "./types";
 
 export function byId<T extends { id: string }>(list: T[], id: string | null): T | null {
   if (!id) return null;
   return list.find((x) => x.id === id) ?? null;
 }
 
-export function findBaseRate(state: AppState, roomType: string, floorType: string): number {
-  const rows = state.rates.baseRates;
-  const exact = rows.find((r) => r.roomType === roomType && r.floorType === floorType);
-  if (exact) return exact.minutesPer1000;
-  const anyFloor = rows.find((r) => r.roomType === roomType && r.floorType === "(any)");
-  if (anyFloor) return anyFloor.minutesPer1000;
-  const fallback = rows.find((r) => r.roomType === "(any)");
-  if (fallback) return fallback.minutesPer1000;
-  return 25;
+export function templateForRoom(state: AppState, room: Room): RoomTypeTemplate | null {
+  return state.roomTypes.find((t) => t.name === room.roomType) ?? null;
 }
 
 export function freqPerWeek(state: AppState, freqId: string): number {
@@ -23,15 +19,83 @@ export function freqPerWeek(state: AppState, freqId: string): number {
   return f ? f.perWeek : 7;
 }
 
+export interface BreakdownLine {
+  label: string;
+  /** additive minutes (absent for multiplier lines) */
+  minutes?: number;
+  /** multiplier factor (absent for additive lines) */
+  factor?: number;
+}
+
+export interface RoomBreakdown {
+  lines: BreakdownLine[];
+  perVisit: number;
+  perWeek: number;
+  daily: number;
+  freqLabel: string;
+}
+
+/** The whole math for one room, as plain-English line items. */
+export function roomBreakdown(state: AppState, room: Room): RoomBreakdown {
+  const k = (room.cleanableSqFt || 0) / 1000;
+  const lines: BreakdownLine[] = [];
+  let subtotal = 0;
+
+  const base = k * state.rates.baseMinutesPer1000;
+  lines.push({ label: "Base clean", minutes: base });
+  subtotal += base;
+
+  const finishAdj = state.rates.floorFinishAdjust[room.floorFinish] ?? 0;
+  if (finishAdj !== 0) {
+    const m = k * finishAdj;
+    lines.push({ label: FLOOR_FINISH_SHORT[room.floorFinish], minutes: m });
+    subtotal += m;
+  }
+
+  const tpl = templateForRoom(state, room);
+  const multipliers: BreakdownLine[] = [];
+  for (const qual of tpl?.qualifiers ?? []) {
+    if (qual.kind === "per1000") {
+      const m = k * qual.value;
+      lines.push({ label: qual.label, minutes: m });
+      subtotal += m;
+    } else if (qual.kind === "perFixture") {
+      if ((room.fixtures || 0) > 0) {
+        const m = room.fixtures * qual.value;
+        lines.push({ label: `${qual.label} (${room.fixtures} × ${qual.value})`, minutes: m });
+        subtotal += m;
+      }
+    } else if (qual.kind === "flatPerVisit") {
+      lines.push({ label: qual.label, minutes: qual.value });
+      subtotal += qual.value;
+    } else if (qual.kind === "multiplier") {
+      multipliers.push({ label: qual.label, factor: qual.value });
+    }
+  }
+  let perVisit = subtotal;
+  for (const m of multipliers) {
+    lines.push(m);
+    perVisit *= m.factor!;
+  }
+
+  const perWeek = freqPerWeek(state, room.frequency);
+  const f = state.frequencies.find((x) => x.id === room.frequency);
+  return {
+    lines,
+    perVisit,
+    perWeek,
+    daily: (perVisit * perWeek) / 7,
+    freqLabel: f ? f.label : "Every day"
+  };
+}
+
 export function roomMinutesPerVisit(state: AppState, room: Room): number {
-  const base = (room.cleanableSqFt / 1000) * findBaseRate(state, room.roomType, room.floorType);
-  const fix = (room.fixtures || 0) * state.rates.fixtureMinutes;
-  return base + fix;
+  return roomBreakdown(state, room).perVisit;
 }
 
 /** daily-equivalent minutes: per-visit minutes spread over the week by frequency */
 export function roomDailyMinutes(state: AppState, room: Room): number {
-  return (roomMinutesPerVisit(state, room) * freqPerWeek(state, room.frequency)) / 7;
+  return roomBreakdown(state, room).daily;
 }
 
 export function jobDailyMinutes(job: NonSpaceJob): number {
@@ -51,6 +115,15 @@ export function employeeAssignedMinutes(state: AppState, empId: string): number 
   for (const r of state.rooms) if (r.employeeId === empId) total += roomDailyMinutes(state, r);
   for (const j of state.jobs) if (j.employeeId === empId) total += jobDailyMinutes(j);
   return total;
+}
+
+/** Plain-English load description for a capacity bar. */
+export function loadWord(assigned: number, capacity: number): string {
+  const pct = capacity > 0 ? assigned / capacity : 0;
+  if (pct > 1) return "overloaded";
+  if (pct > 0.85) return "full day";
+  if (pct > 0.6) return "steady day";
+  return "light day";
 }
 
 export function scopedRooms(state: AppState, scope: Scope | null): Room[] {
@@ -93,4 +166,9 @@ export function facilityFTE(state: AppState): number {
 
 export function deptKey(room: Room): string {
   return room.department || "Unassigned";
+}
+
+export function deptColor(state: AppState, name: string): string {
+  const d = state.departments.find((x) => x.name.toLowerCase() === name.toLowerCase());
+  return d ? d.color : "#c9d4db";
 }

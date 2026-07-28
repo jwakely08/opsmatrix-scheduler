@@ -10,7 +10,7 @@ export function Kpis() {
     [fmt(all.rooms), "Rooms"],
     [fmt(all.sqft, 0), "Cleanable ft²"],
     [fmtHrs(all.dailyMin + jobsMin), "Daily workload"],
-    [facilityFTE(state).toFixed(2), "FTE est."]
+    [facilityFTE(state).toFixed(2), "Staff needed"]
   ];
   return (
     <div className="kpis">

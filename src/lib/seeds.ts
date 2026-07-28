@@ -1,76 +1,107 @@
-// Seed content: starter rate table (editable estimates), common hospital room
-// types, example shifts. NO PHI BY DESIGN — spaces and rates only.
-import type { AppState, BaseRate, Frequency, Modifier, RoomTypeTemplate, Shift } from "./types";
+// Seed content: starting numbers you can adjust (industry-typical, ISSA-style
+// estimates), common hospital room types, and two example shifts.
+// NO PHI BY DESIGN — spaces and rates only.
+import type {
+  AppState, Frequency, Modifier, Qualifier, RoomTypeTemplate, Shift, Department, FloorFinish
+} from "./types";
 import { uid } from "./types";
 
-export function seedRoomTypes(): RoomTypeTemplate[] {
+/** Pleasant, distinct colors handed out to departments (and custom shifts) in order. */
+export const COLOR_PALETTE = [
+  "#0f6b62", // teal
+  "#d98e1f", // amber
+  "#3f6fb5", // blue
+  "#b5533f", // brick
+  "#7a4fb0", // violet
+  "#2e8f63", // green
+  "#b03f7e", // magenta
+  "#8a7a1f", // olive
+  "#3fa3b5", // cyan
+  "#c26b34", // orange
+  "#5b7083", // slate
+  "#946bc2"  // lavender
+];
+
+export function nextColor(used: string[]): string {
+  for (const c of COLOR_PALETTE) if (!used.includes(c)) return c;
+  return COLOR_PALETTE[used.length % COLOR_PALETTE.length];
+}
+
+/** Make sure a department exists (rooms reference departments by name). */
+export function ensureDepartment(state: AppState, name: string): Department {
+  const found = state.departments.find((d) => d.name.toLowerCase() === name.toLowerCase());
+  if (found) return found;
+  const dept: Department = { name, color: nextColor(state.departments.map((d) => d.color)) };
+  state.departments.push(dept);
+  return dept;
+}
+
+// Reusable qualifier presets — the checklist shown when building a custom room type.
+export function qualifierPresets(): Qualifier[] {
   return [
-    { id: "rt_patient",  name: "Patient Room",      floorType: "VCT",          fixtures: 1, frequency: "7x", tasks: ["Daily clean", "High-touch disinfection"] },
-    { id: "rt_restroom", name: "Restroom",          floorType: "Ceramic Tile", fixtures: 3, frequency: "7x", tasks: ["Daily clean", "Disinfect fixtures", "Restock"] },
-    { id: "rt_office",   name: "Office",            floorType: "Carpet",       fixtures: 0, frequency: "5x", tasks: ["Daily clean"] },
-    { id: "rt_corridor", name: "Corridor",          floorType: "VCT",          fixtures: 0, frequency: "7x", tasks: ["Dust mop + damp mop", "Spot clean"] },
-    { id: "rt_or",       name: "Operating Room",    floorType: "Sheet Vinyl",  fixtures: 1, frequency: "7x", tasks: ["Terminal clean"] },
-    { id: "rt_exam",     name: "Exam Room",         floorType: "VCT",          fixtures: 1, frequency: "5x", tasks: ["Daily clean", "High-touch disinfection"] },
-    { id: "rt_lobby",    name: "Lobby / Waiting",   floorType: "VCT",          fixtures: 0, frequency: "7x", tasks: ["Daily clean", "Spot clean glass"] },
-    { id: "rt_utility",  name: "Utility / Storage", floorType: "Concrete",     fixtures: 0, frequency: "1x", tasks: ["Weekly clean"] },
-    { id: "rt_nursesta", name: "Nurse Station",     floorType: "VCT",          fixtures: 0, frequency: "7x", tasks: ["Daily clean", "High-touch disinfection"] },
-    { id: "rt_breakrm",  name: "Break Room",        floorType: "VCT",          fixtures: 1, frequency: "7x", tasks: ["Daily clean"] }
+    { id: "q_hightouch", label: "Extra care for high-touch surfaces", kind: "per1000", value: 12 },
+    { id: "q_deepclean", label: "Deeper cleaning & disinfecting", kind: "per1000", value: 25 },
+    { id: "q_fixture", label: "Extra time per restroom fixture", kind: "perFixture", value: 3 },
+    { id: "q_terminal", label: "Terminal-clean intensity (ORs)", kind: "per1000", value: 40 },
+    { id: "q_kitchen", label: "Kitchen / food surfaces", kind: "per1000", value: 8 },
+    { id: "q_glass", label: "Glass spot-cleaning", kind: "flatPerVisit", value: 2 },
+    { id: "q_equipment", label: "Big open area — machine does most of it", kind: "multiplier", value: 0.6 },
+    { id: "q_lightduty", label: "Light duty — quick once-over", kind: "multiplier", value: 0.8 }
   ];
 }
 
-export function seedFloorTypes(): string[] {
-  return ["VCT", "Carpet", "Ceramic Tile", "Sheet Vinyl", "Rubber", "Terrazzo", "Concrete", "Epoxy"];
+function q(id: string, value?: number): Qualifier {
+  const preset = qualifierPresets().find((p) => p.id === id)!;
+  return { ...preset, id: uid("q"), value: value ?? preset.value };
 }
 
-/** Editable estimates — ISSA-style production rates, minutes per 1,000 cleanable sq ft. */
-export function seedBaseRates(): BaseRate[] {
+export function seedRoomTypes(): RoomTypeTemplate[] {
   return [
-    { id: uid("br"), roomType: "Patient Room",      floorType: "VCT",          minutesPer1000: 34 },
-    { id: uid("br"), roomType: "Restroom",          floorType: "Ceramic Tile", minutesPer1000: 60 },
-    { id: uid("br"), roomType: "Office",            floorType: "Carpet",       minutesPer1000: 22 },
-    { id: uid("br"), roomType: "Corridor",          floorType: "VCT",          minutesPer1000: 12 },
-    { id: uid("br"), roomType: "Operating Room",    floorType: "Sheet Vinyl",  minutesPer1000: 55 },
-    { id: uid("br"), roomType: "Exam Room",         floorType: "VCT",          minutesPer1000: 30 },
-    { id: uid("br"), roomType: "Lobby / Waiting",   floorType: "VCT",          minutesPer1000: 18 },
-    { id: uid("br"), roomType: "Utility / Storage", floorType: "Concrete",     minutesPer1000: 10 },
-    { id: uid("br"), roomType: "Nurse Station",     floorType: "VCT",          minutesPer1000: 26 },
-    { id: uid("br"), roomType: "Break Room",        floorType: "VCT",          minutesPer1000: 24 },
-    { id: uid("br"), roomType: "(any)",             floorType: "(any)",        minutesPer1000: 25 }
+    { id: "rt_patient",  name: "Patient Room",      floorFinish: "hard",   fixtures: 1, frequency: "7x", tasks: ["Daily clean", "High-touch wipe-down"], qualifiers: [q("q_hightouch"), q("q_fixture")] },
+    { id: "rt_restroom", name: "Restroom",          floorFinish: "hard",   fixtures: 3, frequency: "7x", tasks: ["Clean & disinfect", "Restock supplies"], qualifiers: [q("q_deepclean"), q("q_fixture")] },
+    { id: "rt_office",   name: "Office",            floorFinish: "carpet", fixtures: 0, frequency: "5x", tasks: ["Light clean"], qualifiers: [q("q_lightduty")] },
+    { id: "rt_corridor", name: "Corridor",          floorFinish: "hard",   fixtures: 0, frequency: "7x", tasks: ["Dust & damp mop"], qualifiers: [q("q_equipment")] },
+    { id: "rt_or",       name: "Operating Room",    floorFinish: "hard",   fixtures: 1, frequency: "7x", tasks: ["Terminal clean"], qualifiers: [q("q_terminal"), q("q_fixture")] },
+    { id: "rt_exam",     name: "Exam Room",         floorFinish: "hard",   fixtures: 1, frequency: "5x", tasks: ["Daily clean", "High-touch wipe-down"], qualifiers: [q("q_hightouch"), q("q_fixture")] },
+    { id: "rt_lobby",    name: "Lobby / Waiting",   floorFinish: "hard",   fixtures: 0, frequency: "7x", tasks: ["Daily clean", "Glass spot-clean"], qualifiers: [q("q_glass")] },
+    { id: "rt_utility",  name: "Utility / Storage", floorFinish: "other",  fixtures: 0, frequency: "1x", tasks: ["Weekly clean"], qualifiers: [q("q_lightduty", 0.7)] },
+    { id: "rt_nursesta", name: "Nurse Station",     floorFinish: "hard",   fixtures: 0, frequency: "7x", tasks: ["Daily clean", "High-touch wipe-down"], qualifiers: [q("q_hightouch", 10)] },
+    { id: "rt_breakrm",  name: "Break Room",        floorFinish: "hard",   fixtures: 1, frequency: "7x", tasks: ["Daily clean"], qualifiers: [q("q_kitchen"), q("q_fixture")] }
   ];
 }
 
 export function seedModifiers(): Modifier[] {
   return [
-    { id: "mod_discharge", name: "Discharge / terminal clean multiplier",           kind: "multiplier", value: 1.5 },
-    { id: "mod_isolation", name: "Isolation room multiplier",                       kind: "multiplier", value: 1.25 },
-    { id: "mod_stripwax",  name: "Project: strip & wax (min / 1,000 sq ft)",        kind: "per1000",    value: 240 },
-    { id: "mod_extract",   name: "Project: carpet extraction (min / 1,000 sq ft)",  kind: "per1000",    value: 90 }
+    { id: "mod_discharge", name: "Discharge / terminal clean multiplier",          kind: "multiplier", value: 1.5 },
+    { id: "mod_isolation", name: "Isolation room multiplier",                      kind: "multiplier", value: 1.25 },
+    { id: "mod_stripwax",  name: "Project: strip & wax (min / 1,000 sq ft)",       kind: "per1000",    value: 240 },
+    { id: "mod_extract",   name: "Project: carpet extraction (min / 1,000 sq ft)", kind: "per1000",    value: 90 }
   ];
 }
 
 export function seedFrequencies(): Frequency[] {
   return [
-    { id: "7x", label: "7x / week (daily)", perWeek: 7 },
-    { id: "6x", label: "6x / week", perWeek: 6 },
-    { id: "5x", label: "5x / week (weekdays)", perWeek: 5 },
-    { id: "3x", label: "3x / week", perWeek: 3 },
-    { id: "2x", label: "2x / week", perWeek: 2 },
-    { id: "1x", label: "Weekly", perWeek: 1 },
+    { id: "7x", label: "Every day", perWeek: 7 },
+    { id: "6x", label: "6 days a week", perWeek: 6 },
+    { id: "5x", label: "Weekdays only", perWeek: 5 },
+    { id: "3x", label: "3 days a week", perWeek: 3 },
+    { id: "2x", label: "2 days a week", perWeek: 2 },
+    { id: "1x", label: "Once a week", perWeek: 1 },
     { id: "bi", label: "Every other week", perWeek: 0.5 },
-    { id: "mo", label: "Monthly", perWeek: 0.25 }
+    { id: "mo", label: "Once a month", perWeek: 0.25 }
   ];
 }
 
 export function seedShifts(): Shift[] {
   return [
-    { id: "sh_days", name: "Days", start: "07:00", end: "15:30" },
-    { id: "sh_eves", name: "Evenings", start: "15:00", end: "23:30" }
+    { id: "sh_days", name: "Days", start: "07:00", end: "15:30", color: "#3f6fb5" },
+    { id: "sh_eves", name: "Evenings", start: "15:00", end: "23:30", color: "#7a4fb0" }
   ];
 }
 
 export function defaultState(): AppState {
   return {
-    version: 1,
+    version: 2,
     buildings: [],
     floors: [],
     rooms: [],
@@ -78,15 +109,18 @@ export function defaultState(): AppState {
     shifts: seedShifts(),
     employees: [],
     rates: {
-      baseRates: seedBaseRates(),
-      fixtureMinutes: 3,
+      baseMinutesPer1000: 15,
+      floorFinishAdjust: { hard: 0, other: 3, carpet: 6 },
       modifiers: seedModifiers(),
       productiveMinutes: 420
     },
     roomTypes: seedRoomTypes(),
-    floorTypes: seedFloorTypes(),
+    departments: [],
     frequencies: seedFrequencies(),
-    ui: { view: "schedule", scope: null, expanded: {}, boardMode: "employee", mapFloorId: null, filters: {}, colorBy: "department" }
+    ui: {
+      view: "schedule", scope: null, expanded: {}, boardMode: "employee",
+      mapFloorId: null, filters: {}, mapColorBy: "department"
+    }
   };
 }
 
@@ -106,4 +140,12 @@ export function guessRoomType(name: string): string {
   ];
   for (const [needle, rt] of map) if (n.indexOf(needle) !== -1) return rt;
   return "";
+}
+
+/** Map an old (v1) free-text floor type onto the three finishes. */
+export function finishFromLegacyFloorType(floorType: string): FloorFinish {
+  const t = (floorType || "").toLowerCase();
+  if (t.includes("carpet")) return "carpet";
+  if (["vct", "sheet vinyl", "ceramic tile", "tile", "terrazzo", "rubber", "epoxy", "vinyl"].some((k) => t.includes(k))) return "hard";
+  return "other";
 }

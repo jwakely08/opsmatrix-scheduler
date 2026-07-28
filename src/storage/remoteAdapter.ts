@@ -5,10 +5,15 @@
 //
 // Directors sync everything; supervisors sync only schedule tables
 // (assignments + non_space_jobs) — RLS enforces the same rule server-side.
+//
+// v2 rates model: templates/rates/departments live as jsonb documents in
+// rate_tables (kinds room_types_v2 / rates_v2 / departments / frequencies /
+// ui_prefs). Loaded state passes through migrateState so orgs saved by older
+// app versions upgrade transparently.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AppState } from "../lib/types";
 import { uid } from "../lib/types";
-import { defaultState } from "../lib/seeds";
+import { migrateState } from "../lib/migrate";
 import type { StorageAdapter, SaveResult } from "./adapter";
 import type { Role } from "../auth/AuthContext";
 import { log } from "../lib/logger";
@@ -25,7 +30,7 @@ export class RemoteAdapter implements StorageAdapter {
 
   async load(): Promise<AppState | null> {
     const sb = this.sb;
-    const [org, buildings, floors, rooms, assignments, shifts, employees, jobs, roomTypes, rateTables] =
+    const [org, buildings, floors, rooms, assignments, shifts, employees, jobs, rateTables] =
       await Promise.all([
         sb.from("organizations").select("state_rev").eq("id", this.orgId).single(),
         sb.from("buildings").select("*"),
@@ -35,24 +40,27 @@ export class RemoteAdapter implements StorageAdapter {
         sb.from("shifts").select("*"),
         sb.from("employees").select("*"),
         sb.from("non_space_jobs").select("*"),
-        sb.from("room_types").select("*"),
         sb.from("rate_tables").select("*")
       ]);
     if (org.error) { log.error("remote load failed", org.error); return null; }
     this.rev = org.data.state_rev as number;
 
-    const def = defaultState();
-    const state: AppState = { ...def };
-    state.buildings = (buildings.data ?? []).map((b) => ({ id: b.id, name: b.name }));
-    state.floors = (floors.data ?? []).map((f) => ({
+    const raw: any = { version: 2 };
+    raw.buildings = (buildings.data ?? []).map((b) => ({ id: b.id, name: b.name }));
+    raw.floors = (floors.data ?? []).map((f) => ({
       id: f.id, buildingId: f.building_id, name: f.name, geometry: f.geometry,
       grossSqFt: f.gross_sqft, cleanableSqFt: f.cleanable_sqft, importedAt: f.imported_at ?? ""
     }));
     const asgByRoom = new Map<string, { shift_id: string | null; employee_id: string | null }>();
     for (const a of assignments.data ?? []) asgByRoom.set(a.room_id, a);
-    state.rooms = (rooms.data ?? []).map((r) => ({
+    raw.rooms = (rooms.data ?? []).map((r) => ({
       id: r.id, floorId: r.floor_id, department: r.department, name: r.name,
-      roomType: r.room_type, floorType: r.floor_type, fixtures: r.fixtures,
+      roomType: r.room_type,
+      // floor_type column carries the finish id ("hard"/"other"/"carpet");
+      // legacy free-text values are mapped by migrateState via floorType
+      floorFinish: ["hard", "other", "carpet"].includes(r.floor_type) ? r.floor_type : undefined,
+      floorType: r.floor_type,
+      fixtures: r.fixtures,
       cleanableSqFt: r.cleanable_sqft, ceilingHeight: r.ceiling_height,
       perimeter: r.perimeter, doorAreaSqFt: r.door_area_sqft, windowAreaSqFt: r.window_area_sqft,
       tasks: r.tasks ?? [], frequency: r.frequency,
@@ -61,39 +69,31 @@ export class RemoteAdapter implements StorageAdapter {
       mapX: r.map_x, mapY: r.map_y, source: r.source
     }));
     if ((shifts.data ?? []).length) {
-      state.shifts = shifts.data!.map((s) => ({ id: s.id, name: s.name, start: s.start_time, end: s.end_time }));
+      raw.shifts = shifts.data!.map((s) => ({ id: s.id, name: s.name, start: s.start_time, end: s.end_time }));
     }
-    state.employees = (employees.data ?? []).map((e) => ({
+    raw.employees = (employees.data ?? []).map((e) => ({
       id: e.id, name: e.name, role: e.role_title, shiftId: e.shift_id, pattern: e.pattern ?? []
     }));
-    state.jobs = (jobs.data ?? []).map((j) => ({
+    raw.jobs = (jobs.data ?? []).map((j) => ({
       id: j.id, name: j.name, type: j.type, mode: j.mode, minutes: j.minutes,
       unitsPerDay: j.units_per_day, minutesPerUnit: j.minutes_per_unit,
       shiftId: j.shift_id, employeeId: j.employee_id
     }));
-    if ((roomTypes.data ?? []).length) {
-      state.roomTypes = roomTypes.data!.map((t) => ({
-        id: t.id, name: t.name, floorType: t.floor_type, fixtures: t.fixtures,
-        frequency: t.frequency, tasks: t.tasks ?? []
-      }));
-    }
     for (const row of rateTables.data ?? []) {
-      if (row.kind === "base_rates") state.rates.baseRates = row.data;
-      else if (row.kind === "modifiers") state.rates.modifiers = row.data;
-      else if (row.kind === "scalars") {
-        state.rates.fixtureMinutes = row.data.fixtureMinutes ?? state.rates.fixtureMinutes;
-        state.rates.productiveMinutes = row.data.productiveMinutes ?? state.rates.productiveMinutes;
+      if (row.kind === "rates_v2") raw.rates = row.data;
+      else if (row.kind === "room_types_v2") raw.roomTypes = row.data;
+      else if (row.kind === "departments") raw.departments = row.data;
+      else if (row.kind === "frequencies") raw.frequencies = row.data;
+      else if (row.kind === "ui_prefs") raw.ui = row.data;
+      else if (row.kind === "shift_colors" && raw.shifts) {
+        for (const s of raw.shifts) s.color = row.data[s.id] ?? s.color;
       }
-      else if (row.kind === "floor_types") state.floorTypes = row.data;
-      else if (row.kind === "frequencies") state.frequencies = row.data;
-      else if (row.kind === "ui_prefs") state.ui = { ...state.ui, ...row.data };
     }
-    return state;
+    return migrateState(raw);
   }
 
   async save(state: AppState): Promise<SaveResult> {
     const sb = this.sb;
-    // optimistic-concurrency gate first
     const bump = await sb.rpc("bump_state_rev", { expected_rev: this.rev });
     if (bump.error) { log.error("bump_state_rev failed", bump.error); return { ok: false, error: bump.error.message }; }
     if (bump.data === -1) return { ok: true, conflict: true }; // stale — tell UI to refresh
@@ -102,7 +102,6 @@ export class RemoteAdapter implements StorageAdapter {
     const org = this.orgId;
     try {
       if (this.role === "director") {
-        // full sync: replace org rows table-by-table (pilot-scale data volumes)
         await this.replace("buildings", state.buildings.map((b) => ({ id: b.id, organization_id: org, name: b.name })));
         await this.replace("floors", state.floors.map((f) => ({
           id: f.id, organization_id: org, building_id: f.buildingId, name: f.name,
@@ -111,7 +110,7 @@ export class RemoteAdapter implements StorageAdapter {
         })));
         await this.replace("rooms", state.rooms.map((r) => ({
           id: r.id, organization_id: org, floor_id: r.floorId, department: r.department,
-          name: r.name, room_type: r.roomType, floor_type: r.floorType, fixtures: r.fixtures,
+          name: r.name, room_type: r.roomType, floor_type: r.floorFinish, fixtures: r.fixtures,
           cleanable_sqft: r.cleanableSqFt, ceiling_height: r.ceilingHeight, perimeter: r.perimeter,
           door_area_sqft: r.doorAreaSqFt, window_area_sqft: r.windowAreaSqFt,
           tasks: r.tasks, frequency: r.frequency, map_x: r.mapX, map_y: r.mapY, source: r.source
@@ -124,21 +123,22 @@ export class RemoteAdapter implements StorageAdapter {
           shift_id: e.shiftId, pattern: e.pattern
         })));
         await this.replace("room_types", state.roomTypes.map((t) => ({
-          id: t.id, organization_id: org, name: t.name, floor_type: t.floorType,
+          id: t.id, organization_id: org, name: t.name, floor_type: t.floorFinish,
           fixtures: t.fixtures, frequency: t.frequency, tasks: t.tasks
         })));
+        const shiftColors: Record<string, string> = {};
+        for (const s of state.shifts) shiftColors[s.id] = s.color;
         const rateRows = [
-          { organization_id: org, kind: "base_rates", data: state.rates.baseRates },
-          { organization_id: org, kind: "modifiers", data: state.rates.modifiers },
-          { organization_id: org, kind: "scalars", data: { fixtureMinutes: state.rates.fixtureMinutes, productiveMinutes: state.rates.productiveMinutes } },
-          { organization_id: org, kind: "floor_types", data: state.floorTypes },
+          { organization_id: org, kind: "rates_v2", data: state.rates },
+          { organization_id: org, kind: "room_types_v2", data: state.roomTypes },
+          { organization_id: org, kind: "departments", data: state.departments },
           { organization_id: org, kind: "frequencies", data: state.frequencies },
+          { organization_id: org, kind: "shift_colors", data: shiftColors },
           { organization_id: org, kind: "ui_prefs", data: state.ui }
         ];
         const rt = await sb.from("rate_tables").upsert(rateRows);
         if (rt.error) throw rt.error;
       }
-      // schedule sync (directors and supervisors)
       await this.replace("assignments", state.rooms
         .filter((r) => r.shiftId || r.employeeId)
         .map((r) => ({
@@ -157,14 +157,6 @@ export class RemoteAdapter implements StorageAdapter {
     }
   }
 
-  async recordImport(filenames: string[], roomCount: number, cleanableSqFt: number | null): Promise<void> {
-    const res = await this.sb.from("imports").insert({
-      id: undefined as unknown as string, // let DB default gen_random_uuid()
-      organization_id: this.orgId, filenames, room_count: roomCount, cleanable_sqft: cleanableSqFt
-    } as any);
-    if (res.error) log.warn("recordImport failed", res.error);
-  }
-
   private async replace(table: string, rows: Record<string, unknown>[]): Promise<void> {
     const del = await this.sb.from(table).delete().eq("organization_id", this.orgId);
     if (del.error) throw del.error;
@@ -179,5 +171,4 @@ export function makeRemoteAdapter(sb: SupabaseClient, orgId: string, role: Role)
   return new RemoteAdapter(sb, orgId, role);
 }
 
-/** id helper re-export so callers don't dig through types */
 export { uid };

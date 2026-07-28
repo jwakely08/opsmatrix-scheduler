@@ -4,7 +4,7 @@
 import dxfRaw from "../../test-fixtures/Test_project_-_1st_Floor.dxf?raw";
 import csvRaw from "../../test-fixtures/Test_project_statistics.csv?raw";
 import { parseDXF, parseStatsCSV } from "./parsers";
-import { defaultState, guessRoomType } from "./seeds";
+import { defaultState, guessRoomType, ensureDepartment } from "./seeds";
 import type { AppState } from "./types";
 import { uid } from "./types";
 
@@ -27,10 +27,11 @@ export function buildDemoState(): AppState {
       const tplId = guessRoomType(rm.name);
       const tpl = state.roomTypes.find((t) => t.id === tplId) ?? null;
       const label = dxf.labels.find((l) => l.text.toLowerCase().trim() === rm.name.toLowerCase().trim());
+      ensureDepartment(state, "Med-Surg West");
       state.rooms.push({
         id: uid("rm"), floorId: floor.id, department: "Med-Surg West", name: rm.name,
         roomType: tpl ? tpl.name : "(untyped)",
-        floorType: tpl ? tpl.floorType : "VCT",
+        floorFinish: tpl ? tpl.floorFinish : "hard",
         fixtures: tpl ? tpl.fixtures : 0,
         cleanableSqFt: rm.areaSqFt, ceilingHeight: rm.ceilingHeight, perimeter: rm.groundPerimeter,
         doorAreaSqFt: rm.doorAreaSqFt, windowAreaSqFt: rm.windowAreaSqFt,
@@ -51,6 +52,6 @@ export function buildDemoState(): AppState {
     id: uid("job"), name: "Discharge cleans — demo", type: "discharge", mode: "unit",
     minutes: 0, unitsPerDay: 6, minutesPerUnit: 45, shiftId: "sh_eves", employeeId: null
   });
-  state.ui.view = "schedule";
+  state.ui.view = "map";
   return state;
 }

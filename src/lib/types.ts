@@ -1,4 +1,4 @@
-// Core domain types.
+// Core domain types (v2 — layered rates model).
 // NO PHI BY DESIGN: this schema stores spaces, rates and staff work assignments only —
 // never patient names, room-occupant data, or any medical information.
 
@@ -23,13 +23,36 @@ export interface Floor {
   importedAt: string;
 }
 
+/** Exactly three floor finishes, in plain language. */
+export type FloorFinish = "hard" | "other" | "carpet";
+
+export const FLOOR_FINISH_LABELS: Record<FloorFinish, string> = {
+  hard: "Finished hard floor (tile, VCT, vinyl, sealed concrete)",
+  other: "Unfinished / other",
+  carpet: "Carpet"
+};
+
+export const FLOOR_FINISH_SHORT: Record<FloorFinish, string> = {
+  hard: "Hard floor",
+  other: "Unfinished/other",
+  carpet: "Carpet"
+};
+
+/** An additive/multiplying adjustment a room type carries, in plain English. */
+export interface Qualifier {
+  id: string;
+  label: string; // e.g. "Extra time per restroom fixture"
+  kind: "per1000" | "perFixture" | "flatPerVisit" | "multiplier";
+  value: number;
+}
+
 export interface Room {
   id: string;
   floorId: string;
   department: string;
   name: string;
   roomType: string;
-  floorType: string;
+  floorFinish: FloorFinish;
   fixtures: number;
   /** interior area — THE ONLY number used in workload math */
   cleanableSqFt: number;
@@ -60,7 +83,7 @@ export interface NonSpaceJob {
   employeeId: string | null;
 }
 
-export interface Shift { id: string; name: string; start: string; end: string; }
+export interface Shift { id: string; name: string; start: string; end: string; color: string; }
 
 export interface Employee {
   id: string;
@@ -70,16 +93,28 @@ export interface Employee {
   pattern: boolean[]; // Sun..Sat
 }
 
-export interface BaseRate { id: string; roomType: string; floorType: string; minutesPer1000: number; }
 export interface Modifier { id: string; name: string; kind: "multiplier" | "per1000"; value: number; }
 export interface Frequency { id: string; label: string; perWeek: number; }
+
 export interface RoomTypeTemplate {
-  id: string; name: string; floorType: string; fixtures: number; frequency: string; tasks: string[];
+  id: string;
+  name: string;
+  floorFinish: FloorFinish;
+  fixtures: number;
+  frequency: string;
+  tasks: string[];
+  qualifiers: Qualifier[];
 }
 
+/** A department with its map color. Keyed by name (rooms store the name). */
+export interface Department { name: string; color: string; }
+
 export interface Rates {
-  baseRates: BaseRate[];
-  fixtureMinutes: number;
+  /** minutes per 1,000 cleanable sq ft for a plain empty room */
+  baseMinutesPer1000: number;
+  /** extra minutes per 1,000 sq ft by floor finish */
+  floorFinishAdjust: Record<FloorFinish, number>;
+  /** discharge/terminal multipliers and project rates (fine-tune) */
   modifiers: Modifier[];
   productiveMinutes: number;
 }
@@ -91,7 +126,7 @@ export interface UIState {
   boardMode: "employee" | "area";
   mapFloorId: string | null;
   filters: Record<string, string>;
-  colorBy: string;
+  mapColorBy: "schedule" | "department";
 }
 
 export type Scope =
@@ -101,7 +136,7 @@ export type Scope =
   | { type: "room"; roomId: string };
 
 export interface AppState {
-  version: number;
+  version: number; // 2
   buildings: Building[];
   floors: Floor[];
   rooms: Room[];
@@ -110,7 +145,7 @@ export interface AppState {
   employees: Employee[];
   rates: Rates;
   roomTypes: RoomTypeTemplate[];
-  floorTypes: string[];
+  departments: Department[];
   frequencies: Frequency[];
   ui: UIState;
 }

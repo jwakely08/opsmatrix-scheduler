@@ -3,17 +3,18 @@ import { useStore } from "../state/store";
 import { useUI } from "../state/ui";
 import {
   roomDailyMinutes, jobDailyMinutes, roomStatus, employeeAssignedMinutes,
-  scopedRooms, rollup, deptKey, byId
+  scopedRooms, rollup, deptKey, deptColor, byId, loadWord
 } from "../lib/compute";
 import type { AppState, Employee, NonSpaceJob, Room } from "../lib/types";
 import { uid } from "../lib/types";
 import { fmt, fmtHrs } from "../lib/format";
 import { toast } from "./Toast";
 import { Modal } from "./Modal";
+import { MinutesButton } from "./Breakdown";
 
 const JOB_TYPE_LABELS: Record<string, string> = {
   discharge: "Discharge / bed cleans", porter: "Porter / transport", trashlinen: "Trash & linen run",
-  laundry: "Laundry", floortech: "Floor tech", custom: "Custom"
+  laundry: "Laundry", floortech: "Floor projects", custom: "Something else"
 };
 
 interface DragData { kind: "room" | "job" | "branch"; roomId?: string; jobId?: string; roomIds?: string[]; label?: string; }
@@ -22,11 +23,17 @@ function readDragData(e: React.DragEvent): DragData | null {
   try { return JSON.parse(e.dataTransfer.getData("text/plain")); } catch { return null; }
 }
 
+function initials(name: string): string {
+  return name.split(/\s+/).map((w) => w.charAt(0)).join("").slice(0, 2).toUpperCase();
+}
+
 export function ScheduleView() {
   const { state, update } = useStore();
   const ui = useUI();
   const [empModal, setEmpModal] = useState<{ emp: Employee | null } | null>(null);
   const [jobModal, setJobModal] = useState<{ job: NonSpaceJob | null } | null>(null);
+
+  const hintDismissed = state.ui.expanded["hint_board"] === false;
 
   function assign(data: DragData, shiftId: string | null, employeeId: string | null) {
     if (!ui.canEditSchedule) return;
@@ -43,21 +50,28 @@ export function ScheduleView() {
         if (j) { j.shiftId = shiftId; j.employeeId = employeeId; n++; }
       }
     });
-    if (n) toast(`${n} item${n > 1 ? "s" : ""}${employeeId ? " assigned" : " staged on shift"}`);
+    if (n) toast(n === 1 ? "Assigned ✓" : `${n} rooms assigned ✓`);
   }
 
   function RoomChip({ r }: { r: Room }) {
     const fl = byId(state.floors, r.floorId);
     return (
       <div className="chip room" draggable={ui.canEditSchedule} tabIndex={0}
+        style={{ borderLeftColor: deptColor(state, deptKey(r)) }}
         onDragStart={(e) => e.dataTransfer.setData("text/plain", JSON.stringify({ kind: "room", roomId: r.id }))}
         onClick={() => ui.openRoom(r.id)}
         onKeyDown={(e) => { if (e.key === "Enter") ui.openRoom(r.id); }}>
-        <span>
+        <span style={{ minWidth: 0 }}>
           <div>{r.name}</div>
-          <div className="rt">{r.roomType}{fl ? " · " + fl.name : ""}{roomStatus(r) === "partial" ? " · shift set, no employee" : ""}</div>
+          <div className="rt">{r.roomType}{fl ? " · " + fl.name : ""}{roomStatus(r) === "partial" ? " · needs a person" : ""}</div>
+          {r.tasks.length > 0 && (
+            <div className="tasklabels">
+              {r.tasks.slice(0, 2).map((t) => <span className="tasklabel" key={t}>{t}</span>)}
+              {r.tasks.length > 2 && <span className="tasklabel">+{r.tasks.length - 2} more</span>}
+            </div>
+          )}
         </span>
-        <span className="mins">{fmt(roomDailyMinutes(state, r), 0)} m/d</span>
+        <span className="mins"><MinutesButton room={r} mode="daily" /></span>
       </div>
     );
   }
@@ -68,7 +82,7 @@ export function ScheduleView() {
         onClick={() => ui.canEditSchedule && setJobModal({ job: j })}>
         <span>
           <div>{j.name}</div>
-          <div className="rt">{JOB_TYPE_LABELS[j.type] ?? j.type}{j.mode === "unit" ? ` · ${j.unitsPerDay} × ${j.minutesPerUnit} min` : " · time block"}</div>
+          <div className="rt">{JOB_TYPE_LABELS[j.type] ?? j.type}{j.mode === "unit" ? ` · ${j.unitsPerDay} × ${j.minutesPerUnit} min` : " · set time"}</div>
         </span>
         <span className="mins">{fmt(jobDailyMinutes(j), 0)} m/d</span>
       </div>
@@ -96,9 +110,9 @@ export function ScheduleView() {
   if (!state.rooms.length && !state.jobs.length) {
     return (
       <div className="card"><div className="emptystate">
-        <div className="big">No spaces to schedule yet</div>
-        <p>Import your magicplan scans to load rooms, or add non-space jobs (discharge cleans, porters, trash runs) once employees exist.</p>
-        <button className="btn primary" onClick={() => update((d) => { d.ui.view = "import"; })}>Go to Import</button>
+        <div className="big">Nothing to schedule yet</div>
+        <p>Start by importing your floor scans — your rooms will show up here, ready to hand out.</p>
+        <button className="btn big primary" onClick={() => update((d) => { d.ui.view = "import"; })}>Import floor scans</button>
       </div></div>
     );
   }
@@ -111,38 +125,45 @@ export function ScheduleView() {
   return (
     <div>
       <div className="row" style={{ marginBottom: 14 }}>
-        <h1 className="pagetitle" style={{ margin: 0 }}>Scheduling board</h1>
-        <div className="row" style={{ gap: 4 }}>
+        <h1 className="pagetitle" style={{ margin: 0 }}>Schedule</h1>
+        <div className="segmented">
           {(["employee", "area"] as const).map((m) => (
-            <button key={m} className={"btn small" + (state.ui.boardMode === m ? " primary" : "")}
+            <button key={m} className={state.ui.boardMode === m ? "on" : ""}
               onClick={() => update((d) => { d.ui.boardMode = m; })}>
-              {m === "employee" ? "By employee" : "By area"}
+              {m === "employee" ? "By person" : "By area"}
             </button>
           ))}
         </div>
         <span className="spacer" />
         {ui.canEditSchedule && <>
-          <button className="btn small" onClick={() => setEmpModal({ emp: null })}>+ Employee</button>
-          <button className="btn small" onClick={() => setJobModal({ job: null })}>+ Non-space job</button>
+          <button className="btn" onClick={() => setEmpModal({ emp: null })}>+ Add a person</button>
+          <button className="btn" onClick={() => setJobModal({ job: null })}>+ Other work</button>
         </>}
-        <button className="btn small" onClick={ui.printSchedules}>🖨 Print daily schedules</button>
+        <button className="btn primary" onClick={ui.printSchedules}>🖨 Print daily schedules</button>
       </div>
+
+      {!hintDismissed && state.employees.length > 0 && trayRooms.length > 0 && (
+        <div className="hintbar">
+          <span>💡 Drag any room from "To be scheduled" onto a person's card. Drag a whole department from the left-hand list to assign it all at once.</span>
+          <button aria-label="Dismiss hint" onClick={() => update((d) => { d.ui.expanded["hint_board"] = false; })}>✕</button>
+        </div>
+      )}
 
       {!state.employees.length ? (
         <div className="card"><div className="emptystate">
-          <div className="big">No employees yet</div>
-          <p>Add your EVS staff to start assigning rooms and jobs. Each employee belongs to a shift and gets a capacity bar (assigned minutes vs productive minutes).</p>
-          {ui.canEditSchedule && <button className="btn primary" onClick={() => setEmpModal({ emp: null })}>+ Add first employee</button>}
+          <div className="big">No employees yet — add your first tech</div>
+          <p>Each person gets a card on this board. Drag rooms onto their card and their day fills up.</p>
+          {ui.canEditSchedule && <button className="btn big primary" onClick={() => setEmpModal({ emp: null })}>+ Add your first tech</button>}
         </div></div>
       ) : (
         <div className="boardgrid">
           <div className="card tray">
             <div className="chead">
-              <h2>Unscheduled</h2>
+              <h2>To be scheduled</h2>
               <span className="sub">{trayRooms.length} rooms · {trayJobs.length} jobs</span>
             </div>
             <div className="cbody">
-              {!trayRooms.length && !trayJobs.length && <div className="note">Everything in scope is assigned. 🎉</div>}
+              {!trayRooms.length && !trayJobs.length && <div className="note">All caught up — everything is assigned. 🎉</div>}
               {trayRooms.map((r) => <RoomChip key={r.id} r={r} />)}
               {trayJobs.map((j) => <JobChip key={j.id} j={j} />)}
             </div>
@@ -160,9 +181,10 @@ export function ScheduleView() {
                 return (
                   <div className="shiftblock" key={sh.id}>
                     <div className="shifthead">
+                      <span className="shiftdot" style={{ background: sh.color }} />
                       <h3>{sh.name}</h3>
                       <span className="time">{sh.start} – {sh.end}</span>
-                      <span className="tot">{emps.length} staff · {fmtHrs(shMin)} assigned</span>
+                      <span className="tot">{emps.length} people · {fmtHrs(shMin)} of work</span>
                     </div>
                     <div className="empgrid">
                       {emps.map((emp) => {
@@ -174,10 +196,16 @@ export function ScheduleView() {
                           <DropTarget key={emp.id} className="empcard" activeClass="dropover"
                             onDropData={(d) => assign(d, emp.shiftId, emp.id)}>
                             <div className="ehead" onDoubleClick={() => ui.canEditSchedule && setEmpModal({ emp })}>
-                              <div className="nm"><span>{emp.name}</span><span className="role">{emp.role || "EVS Tech"}</span></div>
+                              <span className="avatar" style={{ background: sh.color }}>{initials(emp.name)}</span>
+                              <div className="nm" style={{ display: "block" }}>
+                                <div>{emp.name}</div>
+                                <div className="role">{emp.role || "EVS Tech"}</div>
+                              </div>
                             </div>
                             <div className={"capbar" + capCls}><i style={{ width: pct + "%" }} /></div>
-                            <div className="capnote">{fmt(assigned, 0)} / {cap} min · {Math.round((assigned / cap) * 100)}%</div>
+                            <div className="capnote">
+                              {fmt(assigned, 0)} of {cap} min · <span className="capword">{loadWord(assigned, cap)}</span>
+                            </div>
                             <div className="list">
                               {state.rooms.filter((r) => r.employeeId === emp.id)
                                 .sort((a, b) => a.name.localeCompare(b.name))
@@ -190,7 +218,7 @@ export function ScheduleView() {
                       <div style={{ gridColumn: "1 / -1" }}>
                         <DropTarget className="shiftdrop" activeClass="dropover"
                           onDropData={(d) => assign(d, sh.id, null)}>
-                          Drop here to stage on {sh.name} without an employee (partial)
+                          Drop here to park work on {sh.name} without picking a person yet
                         </DropTarget>
                         {(partials.length > 0 || pjobs.length > 0) && (
                           <div style={{ marginTop: 8 }}>
@@ -218,7 +246,7 @@ function AreaBoard() {
   const { state } = useStore();
   return (
     <div className="card">
-      <div className="chead"><h2>Coverage by area</h2><span className="sub">Who covers each branch of the facility</span></div>
+      <div className="chead"><h2>Who covers each area</h2></div>
       <div className="cbody">
         {state.buildings.map((b) =>
           state.floors.filter((f) => f.buildingId === b.id).map((f) => {
@@ -245,9 +273,10 @@ function AreaBoard() {
                   const who = [...names.entries()].map(([nm, n]) => `${nm} (${n})`).join(", ");
                   return (
                     <div className="cover" key={d}>
-                      <b>{d}</b> — {ru.rooms} rooms, {fmtHrs(ru.dailyMin)}/day ·{" "}
-                      {who ? `covered by ${who}` : <span style={{ color: "var(--danger)" }}>no one assigned</span>}
-                      {ru.unscheduled ? ` · ${ru.unscheduled} unscheduled` : ""}
+                      <span className="cdot" style={{ background: deptColor(state, d), marginRight: 6 }} />
+                      <b>{d}</b> — {ru.rooms} rooms, {fmtHrs(ru.dailyMin)} a day ·{" "}
+                      {who ? `covered by ${who}` : <span style={{ color: "var(--danger)" }}>nobody assigned yet</span>}
+                      {ru.unscheduled ? ` · ${ru.unscheduled} still unscheduled` : ""}
                     </div>
                   );
                 })}
@@ -270,8 +299,8 @@ function EmployeeModal({ emp, onClose }: { emp: Employee | null; onClose: () => 
 
   const buttons = [
     {
-      label: emp ? "Save" : "Add employee", primary: true, onClick: () => {
-        if (!name.trim()) { toast("Name is required", true); return; }
+      label: emp ? "Save" : "Add person", primary: true, onClick: () => {
+        if (!name.trim()) { toast("Please enter a name", true); return; }
         update((d) => {
           if (emp) {
             const e = byId(d.employees, emp.id);
@@ -291,14 +320,14 @@ function EmployeeModal({ emp, onClose }: { emp: Employee | null; onClose: () => 
           d.employees = d.employees.filter((x) => x.id !== emp.id);
         });
         onClose();
-        toast("Employee removed — their rooms moved to unscheduled");
+        toast("Removed — their rooms went back to the schedule pile");
       }
     }] : []),
     { label: "Cancel", onClick: onClose }
   ];
 
   return (
-    <Modal title={emp ? "Edit employee" : "New employee"} onClose={onClose} buttons={buttons}>
+    <Modal title={emp ? "Edit person" : "Add a person"} onClose={onClose} buttons={buttons}>
       <div className="field" style={{ marginBottom: 10 }}><label>Name</label>
         <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. D. Alvarez" /></div>
       <div className="field" style={{ marginBottom: 10 }}><label>Role</label>
@@ -307,7 +336,7 @@ function EmployeeModal({ emp, onClose }: { emp: Employee | null; onClose: () => 
         <select value={shiftId} onChange={(e) => setShiftId(e.target.value)}>
           {state.shifts.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.start}–{s.end})</option>)}
         </select></div>
-      <div className="field"><label>Weekly pattern</label>
+      <div className="field"><label>Days they work</label>
         <div className="row">
           {days.map((d, i) => (
             <label key={d} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}>
@@ -341,8 +370,8 @@ function JobModal({ job, onClose }: { job: NonSpaceJob | null; onClose: () => vo
 
   const buttons = [
     {
-      label: job ? "Save" : "Add job", primary: true, onClick: () => {
-        if (!name.trim()) { toast("Job name is required", true); return; }
+      label: job ? "Save" : "Add work", primary: true, onClick: () => {
+        if (!name.trim()) { toast("Please give it a name", true); return; }
         update((d) => {
           const data = {
             name: name.trim(), type: type as NonSpaceJob["type"], mode,
@@ -369,37 +398,38 @@ function JobModal({ job, onClose }: { job: NonSpaceJob | null; onClose: () => vo
   ];
 
   return (
-    <Modal title={job ? "Edit non-space job" : "New non-space job"} onClose={onClose} buttons={buttons}>
-      <div className="field" style={{ marginBottom: 10 }}><label>Job name</label>
-        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Discharge cleans — 4 West" /></div>
-      <div className="field" style={{ marginBottom: 10 }}><label>Type</label>
+    <Modal title={job ? "Edit other work" : "Other work (not a room)"} onClose={onClose} buttons={buttons}>
+      <p className="note" style={{ marginBottom: 12 }}>
+        For work that isn't a room on the map — discharge cleans, trash runs, laundry, floor projects.
+        It counts toward a person's day just like rooms do.
+      </p>
+      <div className="field" style={{ marginBottom: 10 }}><label>What is it?</label>
         <select value={type} onChange={(e) => onTypeChange(e.target.value)}>
           {Object.entries(JOB_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select></div>
-      <div className="field" style={{ marginBottom: 10 }}><label>Workload model</label>
+      <div className="field" style={{ marginBottom: 10 }}><label>Name it</label>
+        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Discharge cleans — 4 West" /></div>
+      <div className="field" style={{ marginBottom: 10 }}><label>How do we count the time?</label>
         <select value={mode} onChange={(e) => setMode(e.target.value as "block" | "unit")}>
-          <option value="unit">Unit-based (count / day × minutes each)</option>
-          <option value="block">Time block (fixed minutes / day)</option>
+          <option value="unit">By the job (how many a day × minutes each)</option>
+          <option value="block">Set amount of time each day</option>
         </select></div>
       {mode === "unit" ? (
         <div className="row" style={{ marginBottom: 10 }}>
-          <div className="field"><label>Units / day</label>
+          <div className="field"><label>How many a day</label>
             <input type="number" min={0} step={1} value={units} onChange={(e) => setUnits(Number(e.target.value) || 0)} /></div>
-          <div className="field"><label>Minutes / unit</label>
+          <div className="field"><label>Minutes each</label>
             <input type="number" min={0} step={1} value={minsPer} onChange={(e) => setMinsPer(Number(e.target.value) || 0)} /></div>
         </div>
       ) : (
-        <div className="field" style={{ marginBottom: 10 }}><label>Minutes / day</label>
+        <div className="field" style={{ marginBottom: 10 }}><label>Minutes per day</label>
           <input type="number" min={0} step={5} value={block} onChange={(e) => setBlock(Number(e.target.value) || 0)} /></div>
       )}
       <div className="field"><label>Shift</label>
         <select value={shiftId} onChange={(e) => setShiftId(e.target.value)}>
-          <option value="">(no shift yet)</option>
+          <option value="">(pick later)</option>
           {state.shifts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select></div>
-      <p className="note" style={{ marginTop: 10 }}>
-        Non-space jobs count against employee capacity exactly like room work. Drag the job chip onto an employee on the board.
-      </p>
     </Modal>
   );
 }

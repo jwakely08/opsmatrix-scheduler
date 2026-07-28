@@ -62,7 +62,7 @@ function Shell() {
   return (
     <UIContext.Provider value={uiCtx}>
       <header className="app">
-        <button className="treetoggle" title="Toggle facility tree" aria-label="Toggle facility tree"
+        <button className="treetoggle" aria-label="Toggle facility tree"
           onClick={() => setTreeOpen(!treeOpen)}>☰</button>
         <div className="brand">
           <span className="logo">OPS<b>MATRIX</b></span>
