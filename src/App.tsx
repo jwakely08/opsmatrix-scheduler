@@ -27,20 +27,28 @@ function Shell() {
   const [drawerRoomId, setDrawerRoomId] = useState<string | null>(null);
   const [printing, setPrinting] = useState(false);
   const [treeOpen, setTreeOpen] = useState(false);
+  const [shapeEditReq, setShapeEditReq] = useState<string | null>(null);
 
   const printSchedules = useCallback(() => {
     setPrinting(true);
     setTimeout(() => { window.print(); setPrinting(false); }, 60);
   }, []);
 
+  const requestShapeEdit = useCallback((roomId: string) => {
+    setDrawerRoomId(null);
+    setShapeEditReq(roomId);
+    update((d) => { d.ui.view = "map"; });
+  }, [update]);
+
   const uiCtx = useMemo(() => ({
     openRoom: (id: string) => setDrawerRoomId(id),
     closeRoom: () => setDrawerRoomId(null),
     printSchedules,
+    requestShapeEdit,
     role: auth.role,
     canEditFacility: auth.role === "director",
     canEditSchedule: auth.role !== "staff"
-  }), [auth.role, printSchedules]);
+  }), [auth.role, printSchedules, requestShapeEdit]);
 
   // staff get a read-only "my day" experience
   if (auth.mode === "remote" && auth.role === "staff") {
@@ -97,7 +105,7 @@ function Shell() {
         </aside>
         <main className="content">
           {view === "import" ? <ImportView />
-            : view === "map" ? <MapView />
+            : view === "map" ? <MapView pendingShapeEdit={shapeEditReq} onShapeEditStart={() => setShapeEditReq(null)} />
             : view === "settings" ? <SettingsView />
             : <ScheduleView />}
         </main>

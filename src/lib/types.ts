@@ -11,11 +11,21 @@ export interface FloorGeometry {
   units: string;
 }
 
+/** A room's map shape — derived by the geometry pipeline or drawn by hand. */
+export interface StoredShape {
+  outer: [number, number][];
+  holes: [number, number][][];
+  source: "derived" | "traced" | "edited";
+  areaSqFt: number;
+}
+
 export interface Floor {
   id: string;
   buildingId: string;
   name: string;
   geometry: FloorGeometry | null;
+  /** roomId → wall-tight shape; persisted so manual edits are never lost */
+  shapes?: Record<string, StoredShape>;
   /** includes wall footprint — REFERENCE ONLY, never used in workload math */
   grossSqFt: number | null;
   /** interior floor only — the working number for all workload math */

@@ -80,7 +80,10 @@ export class RemoteAdapter implements StorageAdapter {
       shiftId: j.shift_id, employeeId: j.employee_id
     }));
     for (const row of rateTables.data ?? []) {
-      if (row.kind === "rates_v2") raw.rates = row.data;
+      if (row.kind === "floor_shapes" && raw.floors) {
+        for (const f of raw.floors) f.shapes = row.data[f.id] ?? undefined;
+      }
+      else if (row.kind === "rates_v2") raw.rates = row.data;
       else if (row.kind === "room_types_v2") raw.roomTypes = row.data;
       else if (row.kind === "departments") raw.departments = row.data;
       else if (row.kind === "frequencies") raw.frequencies = row.data;
@@ -128,7 +131,10 @@ export class RemoteAdapter implements StorageAdapter {
         })));
         const shiftColors: Record<string, string> = {};
         for (const s of state.shifts) shiftColors[s.id] = s.color;
+        const floorShapes: Record<string, unknown> = {};
+        for (const f of state.floors) if (f.shapes) floorShapes[f.id] = f.shapes;
         const rateRows = [
+          { organization_id: org, kind: "floor_shapes", data: floorShapes },
           { organization_id: org, kind: "rates_v2", data: state.rates },
           { organization_id: org, kind: "room_types_v2", data: state.roomTypes },
           { organization_id: org, kind: "departments", data: state.departments },

@@ -2,28 +2,35 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useStore } from "../state/store";
 import { useUI } from "../state/ui";
 import { roomStatus, deptKey, deptColor, byId } from "../lib/compute";
-import { deriveRoomRegions, pointInPolygon, polygonCentroid, polygonBounds, type RoomRegion } from "../lib/regions";
-import type { Floor, Room } from "../lib/types";
+import {
+  deriveShapes, snapToWalls, polygonArea, polygonCentroid, polygonBounds,
+  pointInShape, type Pt
+} from "../lib/geometry";
+import type { Floor, Room, StoredShape } from "../lib/types";
 import { FLOOR_FINISH_SHORT } from "../lib/types";
 import { fmt } from "../lib/format";
 import { MinutesButton } from "./Breakdown";
 import { RoomDrawer } from "./RoomDrawer";
+import { toast } from "./Toast";
 
 const GRAY = "#cfd8de";
-const EASE = (t: number) => 1 - Math.pow(1 - t, 3);
 
 interface ViewT { k: number; tx: number; ty: number; }
+type Mode = { kind: "view" } | { kind: "trace"; roomId: string } | { kind: "editShape"; roomId: string };
 
-function luminance(hex: string): number {
-  const n = parseInt(hex.slice(1), 16);
-  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+function shapePath(s: { outer: Pt[]; holes: Pt[][] }): string {
+  const ring = (poly: Pt[]) =>
+    poly.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(3)} ${p[1].toFixed(3)}`).join(" ") + " Z";
+  return [ring(s.outer), ...s.holes.map(ring)].join(" ");
 }
 
-export function MapView() {
+export function MapView({ pendingShapeEdit, onShapeEditStart }: {
+  pendingShapeEdit?: string | null;
+  onShapeEditStart?: () => void;
+}) {
   const { state, update } = useStore();
   const ui = useUI();
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const floors = state.floors.filter((f) => f.geometry && f.geometry.walls.length);
@@ -34,20 +41,37 @@ export function MapView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editRoomId, setEditRoomId] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [mode, setMode] = useState<Mode>({ kind: "view" });
+  const [draft, setDraft] = useState<Pt[]>([]);
+  const [cursorPt, setCursorPt] = useState<Pt | null>(null);
+  const [view, setView] = useState<ViewT>({ k: 20, tx: 0, ty: 0 });
 
   const floorRooms = useMemo(
     () => (cur ? state.rooms.filter((r) => r.floorId === cur.id) : []),
     [state.rooms, cur]
   );
+  const shapes: Record<string, StoredShape> = cur?.shapes ?? {};
 
-  // ---- derived clickable room shapes (memoized per floor geometry + rooms) ----
-  const regions = useMemo(() => {
-    if (!cur?.geometry) return new Map<string, RoomRegion>();
-    return deriveRoomRegions(cur.geometry, floorRooms.map((r) => ({
+  // ---- legacy floors (imported before this feature): derive once, persist ----
+  const derivedOnce = useRef(new Set<string>());
+  useEffect(() => {
+    if (!cur || !cur.geometry || cur.shapes || derivedOnce.current.has(cur.id)) return;
+    derivedOnce.current.add(cur.id);
+    const res = deriveShapes(cur.geometry, floorRooms.map((r) => ({
       id: r.id, mapX: r.mapX, mapY: r.mapY, cleanableSqFt: r.cleanableSqFt
     })));
-  }, [cur?.geometry, floorRooms]);
+    update((d) => {
+      const fl = byId(d.floors, cur.id);
+      if (fl && !fl.shapes) fl.shapes = res.shapes;
+    });
+  }, [cur, floorRooms, update]);
 
+  const unresolved = useMemo(
+    () => (cur?.shapes ? floorRooms.filter((r) => !cur.shapes![r.id]) : []),
+    [cur?.shapes, floorRooms]
+  );
+
+  // ---- coloring & filters ----
   const matchesFilters = useCallback((r: Room): boolean => {
     if (filters.shift && r.shiftId !== filters.shift) return false;
     if (filters.dept && deptKey(r) !== filters.dept) return false;
@@ -68,13 +92,7 @@ export function MapView() {
     return d.color;
   }, [colorBy, state.shifts, state.departments]);
 
-  // ---- view transform + animation state (refs so handlers stay stable) ----
-  const viewRef = useRef<ViewT>({ k: 1, tx: 0, ty: 0 });
-  const animRef = useRef<{ from: ViewT; to: ViewT; t0: number; dur: number } | null>(null);
-  const hoverRef = useRef<{ id: string | null; progress: Map<string, number> }>({ id: null, progress: new Map() });
-  const needsDraw = useRef(true);
-  const lastFrame = useRef(0);
-
+  // ---- view transform: screen = (tx + k·wx, ty − k·wy) ----
   const worldBounds = useMemo(() => {
     if (!cur?.geometry) return null;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -85,187 +103,60 @@ export function MapView() {
     return { minX, minY, maxX, maxY };
   }, [cur?.geometry]);
 
+  const animRef = useRef<number | null>(null);
+  const animateTo = useCallback((target: ViewT, ms = 240) => {
+    if (animRef.current) cancelAnimationFrame(animRef.current);
+    const t0 = performance.now();
+    setView((from0) => {
+      const from = { ...from0 };
+      const step = (now: number) => {
+        const t = Math.min(1, (now - t0) / ms);
+        const e = 1 - Math.pow(1 - t, 3);
+        setView({
+          k: from.k + (target.k - from.k) * e,
+          tx: from.tx + (target.tx - from.tx) * e,
+          ty: from.ty + (target.ty - from.ty) * e
+        });
+        if (t < 1) animRef.current = requestAnimationFrame(step);
+      };
+      animRef.current = requestAnimationFrame(step);
+      return from0;
+    });
+  }, []);
+
   const fitView = useCallback((b: { minX: number; minY: number; maxX: number; maxY: number } | null, animate: boolean) => {
-    const cv = canvasRef.current;
-    if (!cv || !b) return;
-    const w = cv.clientWidth, h = cv.clientHeight;
-    const pad = 46;
+    const svg = svgRef.current;
+    if (!svg || !b) return;
+    const w = svg.clientWidth || 900, h = svg.clientHeight || 600;
+    const pad = 50;
     const k = Math.min((w - pad * 2) / Math.max(1, b.maxX - b.minX), (h - pad * 2) / Math.max(1, b.maxY - b.minY));
     const target: ViewT = {
       k,
       tx: (w - (b.minX + b.maxX) * k) / 2,
       ty: (h + (b.minY + b.maxY) * k) / 2
     };
-    if (animate) {
-      animRef.current = { from: { ...viewRef.current }, to: target, t0: performance.now(), dur: 260 };
-    } else {
-      viewRef.current = target;
-    }
-    needsDraw.current = true;
-  }, []);
+    if (animate) animateTo(target);
+    else setView(target);
+  }, [animateTo]);
 
-  // world → screen (Y flipped)
-  const toS = (v: ViewT, wx: number, wy: number): [number, number] => [v.tx + wx * v.k, v.ty - wy * v.k];
-  const toW = (v: ViewT, sx: number, sy: number): [number, number] => [(sx - v.tx) / v.k, (v.ty - sy) / v.k];
-
-  // ---- draw ----
-  const draw = useCallback(() => {
-    const cv = canvasRef.current;
-    if (!cv || !cur?.geometry) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = cv.clientWidth, h = cv.clientHeight;
-    if (cv.width !== w * dpr || cv.height !== h * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
-    const ctx = cv.getContext("2d")!;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    const v = viewRef.current;
-    const hover = hoverRef.current;
-    const anyFilter = Object.values(filters).some(Boolean);
-
-    // room shapes
-    for (const r of floorRooms) {
-      const region = regions.get(r.id);
-      if (!region) continue;
-      const active = !anyFilter || matchesFilters(r);
-      const fill = active ? roomFill(r) : "#e3e9ed";
-      const hp = hover.progress.get(r.id) ?? 0;
-      const [ccx, ccy] = polygonCentroid(region.polygon);
-      const [scx, scy] = toS(v, ccx, ccy);
-      const lift = 1 + hp * 0.025;
-
-      ctx.save();
-      ctx.translate(scx, scy);
-      ctx.scale(lift, lift);
-      ctx.translate(-scx, -scy);
-      if (hp > 0.01) {
-        ctx.shadowColor = "rgba(28,43,51," + 0.28 * hp + ")";
-        ctx.shadowBlur = 14 * hp;
-        ctx.shadowOffsetY = 4 * hp;
-      }
-      ctx.beginPath();
-      region.polygon.forEach((p, i) => {
-        const [sx, sy] = toS(v, p[0], p[1]);
-        i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
-      });
-      ctx.closePath();
-      ctx.fillStyle = fill;
-      ctx.globalAlpha = active ? (0.88 + hp * 0.12) : 0.5;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.shadowColor = "transparent";
-      ctx.lineWidth = r.id === selectedId ? 3 : 1.5;
-      ctx.strokeStyle = r.id === selectedId ? "#1c2b33" : "rgba(255,255,255,0.9)";
-      ctx.stroke();
-
-      // name + sq ft inside, when there is room for it
-      const bb = polygonBounds(region.polygon);
-      const pxW = (bb.maxX - bb.minX) * v.k;
-      if (pxW > 72) {
-        const dark = luminance(fill) < 0.55 && active;
-        ctx.fillStyle = dark ? "rgba(255,255,255,0.96)" : "#243640";
-        ctx.font = "600 12.5px 'Segoe UI', sans-serif";
-        ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText(r.name, scx, scy - (pxW > 110 ? 8 : 0), pxW * 0.92);
-        if (pxW > 110) {
-          ctx.font = "11px Consolas, monospace";
-          ctx.fillStyle = dark ? "rgba(255,255,255,0.75)" : "rgba(36,54,64,0.65)";
-          ctx.fillText(fmt(r.cleanableSqFt, 0) + " ft²", scx, scy + 10);
-        }
-      }
-      ctx.restore();
-    }
-
-    // walls on top for crisp structure
-    ctx.fillStyle = "rgba(30,45,54,0.9)";
-    for (const wall of cur.geometry.walls) {
-      ctx.beginPath();
-      wall.points.forEach((p, i) => {
-        const [sx, sy] = toS(v, p[0], p[1]);
-        i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
-      });
-      ctx.closePath(); ctx.fill();
-    }
-    // door/window markers
-    ctx.fillStyle = "#d98e1f";
-    for (const o of cur.geometry.openings) {
-      const [sx, sy] = toS(v, o.x, o.y);
-      ctx.beginPath(); ctx.arc(sx, sy, Math.max(2, 0.35 * v.k), 0, Math.PI * 2); ctx.fill();
-    }
-    // scale bar
-    const bar = 10 * v.k;
-    ctx.strokeStyle = "#5b7083"; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(16, h - 16); ctx.lineTo(16 + bar, h - 16); ctx.stroke();
-    ctx.fillStyle = "#5b7083"; ctx.font = "10px Consolas, monospace"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-    ctx.fillText("10 ft", 16 + bar + 6, h - 13);
-  }, [cur, floorRooms, regions, filters, matchesFilters, roomFill, selectedId]);
-
-  // ---- animation loop ----
-  useEffect(() => {
-    let raf = 0;
-    const loop = (now: number) => {
-      raf = requestAnimationFrame(loop);
-      const dt = Math.min(50, now - (lastFrame.current || now));
-      lastFrame.current = now;
-      let animating = false;
-
-      const anim = animRef.current;
-      if (anim) {
-        const t = Math.min(1, (now - anim.t0) / anim.dur);
-        const e = EASE(t);
-        viewRef.current = {
-          k: anim.from.k + (anim.to.k - anim.from.k) * e,
-          tx: anim.from.tx + (anim.to.tx - anim.from.tx) * e,
-          ty: anim.from.ty + (anim.to.ty - anim.from.ty) * e
-        };
-        if (t >= 1) animRef.current = null;
-        animating = true;
-      }
-      const hover = hoverRef.current;
-      for (const r of floorRooms) {
-        const cur2 = hover.progress.get(r.id) ?? 0;
-        const target = hover.id === r.id ? 1 : 0;
-        if (Math.abs(cur2 - target) > 0.001) {
-          const step = dt / 180;
-          const next = cur2 + Math.sign(target - cur2) * Math.min(step, Math.abs(target - cur2));
-          hover.progress.set(r.id, next);
-          animating = true;
-        }
-      }
-      if (animating || needsDraw.current) {
-        needsDraw.current = false;
-        draw();
-      }
-    };
-    raf = requestAnimationFrame(loop);
-    // rAF never fires in hidden/background tabs — a slow fallback keeps the
-    // canvas from staying blank if the page loads while not visible
-    const fallback = window.setInterval(() => {
-      if (needsDraw.current) { needsDraw.current = false; draw(); }
-    }, 500);
-    return () => { cancelAnimationFrame(raf); window.clearInterval(fallback); };
-  }, [draw, floorRooms]);
-
-  // initial fit + refit on floor change
   useEffect(() => { fitView(worldBounds, false); }, [worldBounds, fitView]);
 
-  // redraw (and fit, on first real layout) whenever the canvas gets resized —
-  // covers the pane being hidden at mount, window resizes, and layout shifts
+  // refit on first real layout (pane hidden at mount, resizes)
   const hadSize = useRef(false);
   useEffect(() => {
-    const cv = canvasRef.current;
-    if (!cv) return;
+    const svg = svgRef.current;
+    if (!svg) return;
     const ro = new ResizeObserver(() => {
-      if (cv.clientWidth > 0 && !hadSize.current) {
+      if (svg.clientWidth > 0 && !hadSize.current) {
         hadSize.current = true;
         fitView(worldBounds, false);
       }
-      needsDraw.current = true;
     });
-    ro.observe(cv);
+    ro.observe(svg);
     return () => ro.disconnect();
   }, [worldBounds, fitView]);
 
-  // tree scope → animated zoom to that branch
+  // tree scope → animated zoom-to-fit of that branch
   useEffect(() => {
     const sc = state.ui.scope;
     if (!sc || !cur) return;
@@ -273,118 +164,204 @@ export function MapView() {
       if (sc.type === "room") return r.id === sc.roomId;
       if (sc.type === "dept") return sc.floorId === cur.id && deptKey(r) === sc.dept;
       if (sc.type === "floor") return sc.floorId === cur.id;
-      return true; // building → whole floor
+      return true;
     });
-    if (!scoped.length) { fitView(worldBounds, true); return; }
+    const withShapes = scoped.filter((r) => shapes[r.id]);
+    if (!withShapes.length) { fitView(worldBounds, true); return; }
     let b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
-    for (const r of scoped) {
-      const region = regions.get(r.id);
-      if (!region) continue;
-      const rb = polygonBounds(region.polygon);
+    for (const r of withShapes) {
+      const rb = polygonBounds(shapes[r.id].outer);
       b = {
         minX: Math.min(b.minX, rb.minX), minY: Math.min(b.minY, rb.minY),
         maxX: Math.max(b.maxX, rb.maxX), maxY: Math.max(b.maxY, rb.maxY)
       };
     }
-    if (b.minX !== Infinity) fitView(b, true);
+    fitView(b, true);
     if (sc.type === "room") setSelectedId(sc.roomId);
   }, [state.ui.scope]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ---- pointer interactions: pan / click / pinch ----
-  const pointers = useRef(new Map<number, [number, number]>());
-  const drag = useRef<{ moved: boolean; lastX: number; lastY: number; pinchDist: number | null }>({ moved: false, lastX: 0, lastY: 0, pinchDist: null });
-
-  const hitTest = useCallback((sx: number, sy: number): Room | null => {
-    const [wx, wy] = toW(viewRef.current, sx, sy);
-    // topmost = last drawn; iterate reversed
-    for (let i = floorRooms.length - 1; i >= 0; i--) {
-      const region = regions.get(floorRooms[i].id);
-      if (region && pointInPolygon(wx, wy, region.polygon)) return floorRooms[i];
+  // ---- shape edit requests from elsewhere (RoomDrawer "Adjust shape") ----
+  useEffect(() => {
+    if (!pendingShapeEdit || !cur) return;
+    const room = byId(state.rooms, pendingShapeEdit);
+    if (!room) return;
+    if (room.floorId !== cur.id) {
+      update((d) => { d.ui.mapFloorId = room.floorId; });
+      return; // effect re-runs once the right floor is current
     }
-    return null;
-  }, [floorRooms, regions]);
+    startShapeWork(pendingShapeEdit);
+    onShapeEditStart?.();
+  }, [pendingShapeEdit, cur]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function startShapeWork(roomId: string) {
+    const existing = shapes[roomId];
+    setSelectedId(roomId);
+    if (existing) {
+      setDraft(existing.outer.map((p) => [...p] as Pt));
+      setMode({ kind: "editShape", roomId });
+    } else {
+      setDraft([]);
+      setMode({ kind: "trace", roomId });
+    }
+  }
+
+  function saveShape(roomId: string, verts: Pt[], source: "traced" | "edited") {
+    if (verts.length < 3) { toast("Click at least three corners first", true); return; }
+    update((d) => {
+      const fl = byId(d.floors, cur!.id);
+      if (!fl) return;
+      if (!fl.shapes) fl.shapes = {};
+      fl.shapes[roomId] = {
+        outer: verts, holes: [], source, areaSqFt: polygonArea(verts)
+      };
+    });
+    setMode({ kind: "view" });
+    setDraft([]);
+    const room = byId(state.rooms, roomId);
+    toast(`${room?.name ?? "Room"} outlined ✓`);
+  }
+
+  // ---- coordinate helpers ----
+  const toWorld = useCallback((sx: number, sy: number): Pt => {
+    return [(sx - view.tx) / view.k, (view.ty - sy) / view.k];
+  }, [view]);
 
   function localXY(e: { clientX: number; clientY: number }): [number, number] {
-    const rect = canvasRef.current!.getBoundingClientRect();
+    const rect = svgRef.current!.getBoundingClientRect();
     return [e.clientX - rect.left, e.clientY - rect.top];
   }
 
-  const onPointerDown = (e: React.PointerEvent) => {
-    try { canvasRef.current!.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
-    const [x, y] = localXY(e);
-    pointers.current.set(e.pointerId, [x, y]);
-    drag.current = { moved: false, lastX: x, lastY: y, pinchDist: null };
-    animRef.current = null;
-  };
-  const onPointerMove = (e: React.PointerEvent) => {
-    const [x, y] = localXY(e);
-    if (!pointers.current.has(e.pointerId)) {
-      // plain hover
-      const hit = hitTest(x, y);
-      const id = hit ? hit.id : null;
-      if (hoverRef.current.id !== id) {
-        hoverRef.current.id = id;
-        canvasRef.current!.style.cursor = id ? "pointer" : "grab";
-      }
-      return;
+  const snapPoint = useCallback((w: Pt, prev?: Pt): Pt => {
+    let p: Pt = [...w];
+    if (cur?.geometry) {
+      const snapped = snapToWalls(cur.geometry, p[0], p[1], 10 / view.k);
+      if (snapped) p = snapped;
     }
-    pointers.current.set(e.pointerId, [x, y]);
-    const pts = [...pointers.current.values()];
-    if (pts.length === 2) {
-      // pinch zoom
-      const dist = Math.hypot(pts[0][0] - pts[1][0], pts[0][1] - pts[1][1]);
-      const mid: [number, number] = [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2];
-      if (drag.current.pinchDist) {
-        zoomAt(mid[0], mid[1], dist / drag.current.pinchDist);
-      }
-      drag.current.pinchDist = dist;
-      drag.current.moved = true;
-      return;
+    if (prev) { // right-angle assist
+      if (Math.abs(p[0] - prev[0]) < 7 / view.k) p = [prev[0], p[1]];
+      else if (Math.abs(p[1] - prev[1]) < 7 / view.k) p = [p[0], prev[1]];
     }
-    const dx = x - drag.current.lastX, dy = y - drag.current.lastY;
-    if (Math.abs(dx) + Math.abs(dy) > 3) drag.current.moved = true;
-    if (drag.current.moved) {
-      viewRef.current.tx += dx;
-      viewRef.current.ty += dy;
-      needsDraw.current = true;
-    }
-    drag.current.lastX = x; drag.current.lastY = y;
-  };
-  const onPointerUp = (e: React.PointerEvent) => {
-    pointers.current.delete(e.pointerId);
-    drag.current.pinchDist = null;
-    if (!drag.current.moved) {
-      const [x, y] = localXY(e);
-      const hit = hitTest(x, y);
-      setSelectedId(hit ? hit.id : null);
-      needsDraw.current = true;
-    }
-  };
+    return p;
+  }, [cur?.geometry, view.k]);
+
+  // ---- pointer interactions ----
+  const pointers = useRef(new Map<number, [number, number]>());
+  const gesture = useRef<{ moved: boolean; lastX: number; lastY: number; pinch: number | null; dragVertex: number | null }>(
+    { moved: false, lastX: 0, lastY: 0, pinch: null, dragVertex: null });
 
   const zoomAt = useCallback((sx: number, sy: number, factor: number) => {
-    const v = viewRef.current;
-    const k2 = Math.max(0.4, Math.min(200, v.k * factor));
-    const real = k2 / v.k;
-    viewRef.current = {
-      k: k2,
-      tx: sx - (sx - v.tx) * real,
-      ty: sy - (sy - v.ty) * real
-    };
-    needsDraw.current = true;
+    setView((v) => {
+      const k2 = Math.max(1, Math.min(400, v.k * factor));
+      const real = k2 / v.k;
+      return { k: k2, tx: sx - (sx - v.tx) * real, ty: sy - (sy - v.ty) * real };
+    });
   }, []);
 
-  // wheel zoom — non-passive so the PAGE never scrolls over the map
   useEffect(() => {
-    const cv = canvasRef.current;
-    if (!cv) return;
+    const svg = svgRef.current;
+    if (!svg) return;
     const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const rect = cv.getBoundingClientRect();
+      e.preventDefault(); // the page never scrolls while over the map
+      const rect = svg.getBoundingClientRect();
       zoomAt(e.clientX - rect.left, e.clientY - rect.top, Math.exp(-e.deltaY * 0.0016));
     };
-    cv.addEventListener("wheel", onWheel, { passive: false });
-    return () => cv.removeEventListener("wheel", onWheel);
+    svg.addEventListener("wheel", onWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheel);
   }, [zoomAt, cur]);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    try { svgRef.current!.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+    const [x, y] = localXY(e);
+    pointers.current.set(e.pointerId, [x, y]);
+    gesture.current = { moved: false, lastX: x, lastY: y, pinch: null, dragVertex: gesture.current.dragVertex };
+    if (animRef.current) cancelAnimationFrame(animRef.current);
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const [x, y] = localXY(e);
+    if (mode.kind === "trace") {
+      const w = toWorld(x, y);
+      setCursorPt(snapPoint(w, draft[draft.length - 1]));
+    }
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, [x, y]);
+
+    // vertex dragging (edit mode)
+    if (gesture.current.dragVertex !== null && mode.kind === "editShape") {
+      const w = snapPoint(toWorld(x, y));
+      setDraft((dv) => dv.map((p, i) => (i === gesture.current.dragVertex ? w : p)));
+      gesture.current.moved = true;
+      return;
+    }
+
+    const pts = [...pointers.current.values()];
+    if (pts.length === 2) {
+      const dist = Math.hypot(pts[0][0] - pts[1][0], pts[0][1] - pts[1][1]);
+      const mid: [number, number] = [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2];
+      if (gesture.current.pinch) zoomAt(mid[0], mid[1], dist / gesture.current.pinch);
+      gesture.current.pinch = dist;
+      gesture.current.moved = true;
+      return;
+    }
+    const dx = x - gesture.current.lastX, dy = y - gesture.current.lastY;
+    if (Math.abs(dx) + Math.abs(dy) > 3) gesture.current.moved = true;
+    if (gesture.current.moved && mode.kind !== "trace") {
+      setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }));
+    }
+    gesture.current.lastX = x; gesture.current.lastY = y;
+  };
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    gesture.current.pinch = null;
+    const wasVertexDrag = gesture.current.dragVertex !== null;
+    gesture.current.dragVertex = null;
+    if (gesture.current.moved || wasVertexDrag) return;
+
+    const [x, y] = localXY(e);
+    const w = toWorld(x, y);
+
+    if (mode.kind === "trace") {
+      const p = snapPoint(w, draft[draft.length - 1]);
+      // close if clicking near the first vertex
+      if (draft.length >= 3 && Math.hypot(p[0] - draft[0][0], p[1] - draft[0][1]) < 12 / view.k) {
+        saveShape(mode.roomId, draft, "traced");
+        return;
+      }
+      setDraft((dv) => [...dv, p]);
+      return;
+    }
+    if (mode.kind === "editShape") return; // clicks only move vertices in edit mode
+
+    // view mode: select the room under the cursor (topmost = smallest area wins)
+    let hit: Room | null = null;
+    let hitArea = Infinity;
+    for (const r of floorRooms) {
+      const s = shapes[r.id];
+      if (s && pointInShape(w[0], w[1], s) && s.areaSqFt < hitArea) {
+        hit = r; hitArea = s.areaSqFt;
+      }
+    }
+    setSelectedId(hit ? hit.id : null);
+  };
+
+  // Esc / Enter
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (mode.kind !== "view") { setMode({ kind: "view" }); setDraft([]); }
+        else setSelectedId(null);
+      }
+      if (e.key === "Enter" && mode.kind === "trace" && draft.length >= 3) {
+        saveShape(mode.roomId, draft, "traced");
+      }
+      if (e.key === "Enter" && mode.kind === "editShape") {
+        saveShape(mode.roomId, draft, "edited");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }); // deliberately unmemoized: cheap, always fresh
 
   if (!cur) {
     return (
@@ -398,9 +375,10 @@ export function MapView() {
 
   const selected = selectedId ? floorRooms.find((r) => r.id === selectedId) ?? null : null;
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
-  const noShape = floorRooms.filter((r) => !regions.has(r.id));
+  const anyFilter = activeFilterCount > 0;
+  const traceRoom = mode.kind !== "view" ? byId(state.rooms, mode.roomId) : null;
 
-  // legend entries for the active coloring
+  // legend
   const legend: [string, string][] = [];
   if (colorBy === "department") {
     const seen = new Set<string>();
@@ -415,6 +393,10 @@ export function MapView() {
     }
     legend.push(["Not scheduled yet", GRAY]);
   }
+
+  const wallsPath = cur.geometry!.walls
+    .map((w) => w.points.map((p, i) => `${i === 0 ? "M" : "L"}${p[0]} ${p[1]}`).join(" ") + " Z")
+    .join(" ");
 
   return (
     <div className="mappage">
@@ -461,7 +443,7 @@ export function MapView() {
         )}
       </div>
 
-      {/* ---- exactly two friendly controls + Filters ---- */}
+      {/* ---- two friendly controls + Filters ---- */}
       <div className="mapcontrols">
         {floors.length > 1 ? (
           floors.length <= 4 ? (
@@ -502,36 +484,135 @@ export function MapView() {
         </button>
       </div>
 
+      {/* ---- unresolved-rooms queue ---- */}
+      {mode.kind === "view" && unresolved.length > 0 && ui.canEditFacility && (
+        <div className="hintbar">
+          <span>
+            ✏️ {unresolved.length === 1
+              ? `"${unresolved[0].name}" doesn't have an outline on the plan yet.`
+              : `${unresolved.length} rooms don't have outlines on the plan yet.`}
+          </span>
+          <button className="btn small primary" style={{ marginLeft: "auto" }}
+            onClick={() => startShapeWork(unresolved[0].id)}>
+            Outline "{unresolved[0].name}"
+          </button>
+        </div>
+      )}
+
+      {/* ---- trace / edit toolbar ---- */}
+      {mode.kind !== "view" && traceRoom && (
+        <div className="tracebar">
+          {mode.kind === "trace" ? (
+            <span>✏️ Outlining <b>{traceRoom.name}</b> — click corner to corner around the room, then press Enter or click the first corner to finish.</span>
+          ) : (
+            <span>✏️ Adjusting <b>{traceRoom.name}</b> — drag the corner dots. Press Enter or Done when it looks right.</span>
+          )}
+          <span className="spacer" />
+          {mode.kind === "editShape" && (
+            <>
+              <button className="btn small" onClick={() => { setDraft([]); setMode({ kind: "trace", roomId: mode.roomId }); }}>Start over</button>
+              <button className="btn small primary" onClick={() => saveShape(mode.roomId, draft, "edited")}>Done</button>
+            </>
+          )}
+          {mode.kind === "trace" && (
+            <button className="btn small primary" disabled={draft.length < 3}
+              onClick={() => saveShape(mode.roomId, draft, "traced")}>Finish outline</button>
+          )}
+          <button className="btn small" onClick={() => { setMode({ kind: "view" }); setDraft([]); }}>Cancel</button>
+        </div>
+      )}
+
       {/* ---- the map ---- */}
       <div className="card mapcard" ref={wrapRef}>
-        <canvas ref={canvasRef} className="floorcv2"
+        <svg ref={svgRef} className={"floorsvg" + (mode.kind !== "view" ? " tracing" : "")}
           onPointerDown={onPointerDown} onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
-          onPointerLeave={() => { hoverRef.current.id = null; }}
-        />
+          onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
+          <g transform={`translate(${view.tx} ${view.ty}) scale(${view.k} ${-view.k})`}>
+            {/* room fills — the rooms ARE the interface */}
+            {floorRooms.map((r) => {
+              const s = shapes[r.id];
+              if (!s) return null;
+              const active = !anyFilter || matchesFilters(r);
+              const fill = active ? roomFill(r) : "#e3e9ed";
+              const isSel = r.id === selectedId;
+              const beingEdited = mode.kind !== "view" && mode.roomId === r.id;
+              if (beingEdited) return null; // drawn as draft overlay instead
+              return (
+                <g key={r.id} className={"roomG" + (isSel ? " sel" : "") + (active ? "" : " dim")}>
+                  <path className="roomfill" d={shapePath(s)} fill={fill}
+                    fillRule="evenodd" vectorEffect="non-scaling-stroke" />
+                </g>
+              );
+            })}
+            {/* walls on top — crisp structure */}
+            <path className="wallsP" d={wallsPath} fillRule="nonzero" />
+            {/* door/window markers */}
+            {cur.geometry!.openings.map((o, i) => (
+              <circle key={i} className="openingDot" cx={o.x} cy={o.y} r={0.32} />
+            ))}
+            {/* labels (upright via counter-flip), auto-hide when small */}
+            {floorRooms.map((r) => {
+              const s = shapes[r.id];
+              if (!s || (mode.kind !== "view" && mode.roomId === r.id)) return null;
+              const bb = polygonBounds(s.outer);
+              const pxW = (bb.maxX - bb.minX) * view.k;
+              if (pxW < 64) return null;
+              const [cx, cy] = polygonCentroid(s.outer);
+              const active = !anyFilter || matchesFilters(r);
+              const dark = !active ? false : luminance(roomFill(r)) < 0.55;
+              return (
+                <g key={"lb" + r.id} className="roomlabel"
+                  transform={`translate(${cx} ${cy}) scale(${1 / view.k} ${-1 / view.k})`}>
+                  <text className={dark ? "onDark" : "onLight"} y={pxW > 110 ? -3 : 4}>{r.name}</text>
+                  {pxW > 110 && (
+                    <text className={"sqft " + (dark ? "onDark" : "onLight")} y={14}>
+                      {fmt(r.cleanableSqFt, 0)} ft²
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+            {/* trace / edit overlay */}
+            {mode.kind !== "view" && (
+              <g className="traceG">
+                {draft.length > 0 && (
+                  <path
+                    d={draft.map((p, i) => `${i === 0 ? "M" : "L"}${p[0]} ${p[1]}`).join(" ") +
+                      (mode.kind === "editShape" ? " Z" : cursorPt && mode.kind === "trace" ? ` L${cursorPt[0]} ${cursorPt[1]}` : "")}
+                    className={"tracePath" + (mode.kind === "editShape" || draft.length >= 3 ? " closable" : "")}
+                    vectorEffect="non-scaling-stroke" />
+                )}
+                {mode.kind === "trace" && cursorPt && (
+                  <circle className="traceCursor" cx={cursorPt[0]} cy={cursorPt[1]} r={5 / view.k} />
+                )}
+                {draft.map((p, i) => (
+                  <circle key={i} className={"traceVert" + (i === 0 && mode.kind === "trace" && draft.length >= 3 ? " first" : "")}
+                    cx={p[0]} cy={p[1]} r={(mode.kind === "editShape" ? 6 : 4.5) / view.k}
+                    onPointerDown={(e) => {
+                      if (mode.kind !== "editShape") return;
+                      e.stopPropagation();
+                      try { svgRef.current!.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+                      pointers.current.set(e.pointerId, localXY(e));
+                      gesture.current.dragVertex = i;
+                      gesture.current.moved = false;
+                    }} />
+                ))}
+              </g>
+            )}
+          </g>
+        </svg>
         <div className="zoomctl">
           <button aria-label="Zoom in" onClick={() => {
-            const cv = canvasRef.current!;
-            zoomAt(cv.clientWidth / 2, cv.clientHeight / 2, 1.35);
+            const svg = svgRef.current!;
+            zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, 1.35);
           }}>+</button>
           <button aria-label="Zoom out" onClick={() => {
-            const cv = canvasRef.current!;
-            zoomAt(cv.clientWidth / 2, cv.clientHeight / 2, 1 / 1.35);
+            const svg = svgRef.current!;
+            zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, 1 / 1.35);
           }}>−</button>
           <button aria-label="Fit whole floor" className="fitbtn" onClick={() => fitView(worldBounds, true)}>⤢</button>
         </div>
       </div>
-
-      {noShape.length > 0 && (
-        <div className="nolabel">
-          <span>No spot on the map for: </span>
-          {noShape.map((r) => (
-            <span key={r.id} className="chiplink" tabIndex={0}
-              onClick={() => ui.openRoom(r.id)}
-              onKeyDown={(e) => { if (e.key === "Enter") ui.openRoom(r.id); }}>{r.name}</span>
-          ))}
-        </div>
-      )}
 
       <div className="maplegend">
         {legend.map(([label, color]) => (
@@ -539,7 +620,7 @@ export function MapView() {
         ))}
       </div>
 
-      {/* ---- filters slide-over (power users) ---- */}
+      {/* ---- filters slide-over ---- */}
       <div className={"slideover" + (filtersOpen ? " open" : "")} aria-hidden={!filtersOpen}>
         <div className="sohead">
           <h3>Filters</h3>
@@ -570,7 +651,16 @@ export function MapView() {
       </div>
       {filtersOpen && <div className="soback" onClick={() => setFiltersOpen(false)} />}
 
-      {editRoomId && <RoomDrawer roomId={editRoomId} onClose={() => setEditRoomId(null)} />}
+      {editRoomId && (
+        <RoomDrawer roomId={editRoomId} onClose={() => setEditRoomId(null)}
+          onAdjustShape={(roomId) => { setEditRoomId(null); startShapeWork(roomId); }} />
+      )}
     </div>
   );
+}
+
+function luminance(hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 }

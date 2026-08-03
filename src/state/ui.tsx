@@ -5,6 +5,8 @@ export interface UICtx {
   openRoom: (roomId: string) => void;
   closeRoom: () => void;
   printSchedules: () => void;
+  /** jump to the map and open the shape trace/edit tool for a room */
+  requestShapeEdit: (roomId: string) => void;
   role: Role;
   /** convenience permission flags derived from role */
   canEditFacility: boolean;
@@ -13,6 +15,7 @@ export interface UICtx {
 
 export const UIContext = createContext<UICtx>({
   openRoom: () => {}, closeRoom: () => {}, printSchedules: () => {},
+  requestShapeEdit: () => {},
   role: "director", canEditFacility: true, canEditSchedule: true
 });
 

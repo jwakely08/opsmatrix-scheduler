@@ -9,7 +9,9 @@ import { toast } from "./Toast";
 import { Modal } from "./Modal";
 import { MinutesButton } from "./Breakdown";
 
-export function RoomDrawer({ roomId, onClose }: { roomId: string; onClose: () => void }) {
+export function RoomDrawer({ roomId, onClose, onAdjustShape }: {
+  roomId: string; onClose: () => void; onAdjustShape?: (roomId: string) => void;
+}) {
   const { state, update } = useStore();
   const ui = useUI();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -137,9 +139,17 @@ export function RoomDrawer({ roomId, onClose }: { roomId: string; onClose: () =>
           <textarea rows={3} defaultValue={r.tasks.join("\n")} disabled={!canFacility}
             onBlur={(e) => set({ tasks: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })} /></div>
 
-        {canFacility && (
-          <button className="btn danger small" onClick={() => setConfirmDelete(true)}>Delete room</button>
-        )}
+        <div className="row">
+          {canFacility && fl?.geometry && (
+            <button className="btn small" onClick={() => {
+              if (onAdjustShape) onAdjustShape(roomId);
+              else { ui.requestShapeEdit(roomId); onClose(); }
+            }}>✏️ Adjust shape on map</button>
+          )}
+          {canFacility && (
+            <button className="btn danger small" onClick={() => setConfirmDelete(true)}>Delete room</button>
+          )}
+        </div>
       </div>
 
       {confirmDelete && (

@@ -5,6 +5,7 @@ import dxfRaw from "../../test-fixtures/Test_project_-_1st_Floor.dxf?raw";
 import csvRaw from "../../test-fixtures/Test_project_statistics.csv?raw";
 import { parseDXF, parseStatsCSV } from "./parsers";
 import { defaultState, guessRoomType, ensureDepartment } from "./seeds";
+import { deriveShapes } from "./geometry";
 import type { AppState } from "./types";
 import { uid } from "./types";
 
@@ -42,6 +43,15 @@ export function buildDemoState(): AppState {
         source: "demo"
       });
     }
+  }
+
+  // wall-tight room shapes, straight through the real pipeline
+  for (const fl of state.floors) {
+    if (!fl.geometry) continue;
+    const flRooms = state.rooms.filter((r) => r.floorId === fl.id);
+    fl.shapes = deriveShapes(fl.geometry, flRooms.map((r) => ({
+      id: r.id, mapX: r.mapX, mapY: r.mapY, cleanableSqFt: r.cleanableSqFt
+    }))).shapes;
   }
 
   state.employees.push(
