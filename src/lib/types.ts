@@ -19,6 +19,18 @@ export interface StoredShape {
   areaSqFt: number;
 }
 
+/** Undo record for a room merge — everything needed to split it back apart. */
+export interface MergeRecord {
+  id: string;
+  intoRoomId: string;
+  prevShape: StoredShape;
+  prevSqFt: number;
+  /** full copy of the absorbed room, when a real room was merged in */
+  absorbedRoom: Room | null;
+  absorbedShape: StoredShape;
+  wasUnassigned: boolean;
+}
+
 export interface Floor {
   id: string;
   buildingId: string;
@@ -26,6 +38,12 @@ export interface Floor {
   geometry: FloorGeometry | null;
   /** roomId → wall-tight shape; persisted so manual edits are never lost */
   shapes?: Record<string, StoredShape>;
+  /** enclosed spaces no room claimed — visible on the map, never lost */
+  unassigned?: StoredShape[];
+  /** merge history (undoable, persisted) */
+  merges?: MergeRecord[];
+  /** true when the outer boundary was closed approximately (open scan side) */
+  approxBoundary?: boolean;
   /** includes wall footprint — REFERENCE ONLY, never used in workload math */
   grossSqFt: number | null;
   /** interior floor only — the working number for all workload math */

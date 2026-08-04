@@ -105,20 +105,31 @@ function orderQuad(pts: Pt[]): Pt[] {
     Math.atan2(p[1] - cy, p[0] - cx) - Math.atan2(q[1] - cy, q[0] - cx));
 }
 
-/**
- * Closure patches for door/window openings plus a general small-gap healer.
- * A patch spans exactly between the cut ends of the two flanking wall strips,
- * so room interiors keep their precise drawn extent.
- */
-export function sealingPatches(geometry: FloorGeometry, maxDoorFt = 4.6, healTolFt = 1.1): Pt[][] {
+/** Everything the pipeline (and the door glyph renderer) knows about one opening. */
+export interface OpeningInfo {
+  x: number; y: number;
+  name: string;
+  /** unit vector along the wall */
+  u: Pt;
+  /** true when flanking wall ends were found — a real gap (a door) */
+  isGap: boolean;
+  /** gap span along the wall (ft), 0 for windows on solid wall */
+  span: number;
+  /** wall thickness estimate at the opening */
+  thickness: number;
+  /** the sealing quad (only when isGap) */
+  quad: Pt[] | null;
+}
+
+/** Analyze every insert: find the flanking wall ends and the sealing quad. */
+export function analyzeOpenings(geometry: FloorGeometry, maxDoorFt = 4.6): OpeningInfo[] {
   const strips = (geometry?.walls ?? []).map((w) => w.points as Pt[]).filter((p) => p.length >= 3);
   if (!strips.length) return [];
   const edges = collectEdges(strips);
   const t = estimateThickness(edges);
-  const endEdges = edges.filter((e) => e.len <= t * 2.6); // cut ends of strips
-  const patches: Pt[][] = [];
+  const endEdges = edges.filter((e) => e.len <= t * 2.6);
+  const out: OpeningInfo[] = [];
 
-  // 1) explicit patches at every door/window insert
   for (const o of geometry.openings ?? []) {
     // wall direction at the opening = direction of the nearest long edge
     let bestD = Infinity, u: Pt = [1, 0];
@@ -130,7 +141,6 @@ export function sealingPatches(geometry: FloorGeometry, maxDoorFt = 4.6, healTol
     const n: Pt = [-u[1], u[0]];
     const along = (p: Pt) => (p[0] - o.x) * u[0] + (p[1] - o.y) * u[1];
     const across = (p: Pt) => (p[0] - o.x) * n[0] + (p[1] - o.y) * n[1];
-    // flanking cut ends: perpendicular-ish short edges near the wall line
     let right: Edge | null = null, left: Edge | null = null;
     let rD = maxDoorFt, lD = maxDoorFt;
     for (const e of endEdges) {
@@ -141,22 +151,50 @@ export function sealingPatches(geometry: FloorGeometry, maxDoorFt = 4.6, healTol
       if (d < -0.02 && -d < lD) { lD = -d; left = e; }
     }
     if (right && left) {
-      patches.push(orderQuad([right.a, right.b, left.a, left.b]));
+      out.push({
+        x: o.x, y: o.y, name: o.name, u, isGap: true,
+        span: rD + lD, thickness: t,
+        quad: orderQuad([right.a, right.b, left.a, left.b])
+      });
     } else if (right || left) {
-      // odd geometry with a single flanking end: modest rectangle, union-safe
       const hl = maxDoorFt / 2, ht = t * 0.45;
-      patches.push([
-        [o.x - u[0] * hl - n[0] * ht, o.y - u[1] * hl - n[1] * ht],
-        [o.x + u[0] * hl - n[0] * ht, o.y + u[1] * hl - n[1] * ht],
-        [o.x + u[0] * hl + n[0] * ht, o.y + u[1] * hl + n[1] * ht],
-        [o.x - u[0] * hl + n[0] * ht, o.y - u[1] * hl + n[1] * ht]
-      ]);
+      out.push({
+        x: o.x, y: o.y, name: o.name, u, isGap: true, span: maxDoorFt, thickness: t,
+        quad: [
+          [o.x - u[0] * hl - n[0] * ht, o.y - u[1] * hl - n[1] * ht],
+          [o.x + u[0] * hl - n[0] * ht, o.y + u[1] * hl - n[1] * ht],
+          [o.x + u[0] * hl + n[0] * ht, o.y + u[1] * hl + n[1] * ht],
+          [o.x - u[0] * hl + n[0] * ht, o.y - u[1] * hl + n[1] * ht]
+        ]
+      });
+    } else {
+      // solid wall behind the insert → a window; nothing to seal
+      out.push({ x: o.x, y: o.y, name: o.name, u, isGap: false, span: 0, thickness: t, quad: null });
     }
-    // no flanking cut ends at all → the insert sits on solid wall (a window):
-    // there is no gap to seal, so no patch — never shave interior area
+  }
+  return out;
+}
+
+/**
+ * Closure patches for door/window openings plus a general small-gap healer.
+ * A patch spans exactly between the cut ends of the two flanking wall strips,
+ * so room interiors keep their precise drawn extent.
+ */
+export function sealingPatches(geometry: FloorGeometry, maxDoorFt = 4.6, healTolFt = 1.1): Pt[][] {
+  const strips = (geometry?.walls ?? []).map((w) => w.points as Pt[]).filter((p) => p.length >= 3);
+  if (!strips.length) return [];
+  const patches: Pt[][] = [];
+
+  // 1) explicit patches at every door insert
+  for (const info of analyzeOpenings(geometry, maxDoorFt)) {
+    if (info.quad) patches.push(info.quad);
   }
 
-  // 2) general healer: bridge near-adjacent cut ends (scan imperfections)
+  // 2) general healer: bridge near-facing cut ends (scan imperfections and
+  //    doorways that have no insert marker)
+  const edges = collectEdges(strips);
+  const t = estimateThickness(edges);
+  const endEdges = edges.filter((e) => e.len <= t * 2.6);
   for (let i = 0; i < endEdges.length; i++) {
     for (let j = i + 1; j < endEdges.length; j++) {
       const e1 = endEdges[i], e2 = endEdges[j];
@@ -168,6 +206,65 @@ export function sealingPatches(geometry: FloorGeometry, maxDoorFt = 4.6, healTol
     }
   }
   return patches;
+}
+
+/**
+ * Conservative outer-boundary closure for partially open scans: thin strips
+ * along convex-hull edges that aren't already covered by walls. Only used
+ * when normal extraction can't enclose the labeled rooms; floors that needed
+ * it are flagged so the boundary can render as "approximate."
+ */
+export function hullClosureStrips(geometry: FloorGeometry): Pt[][] {
+  const pts: Pt[] = [];
+  for (const w of geometry?.walls ?? []) for (const p of w.points) pts.push(p as Pt);
+  if (pts.length < 3) return [];
+  // Andrew monotone chain
+  const sorted = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o: Pt, a: Pt, b: Pt) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower: Pt[] = [];
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: Pt[] = [];
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const p = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
+
+  const edges = collectEdges((geometry.walls ?? []).map((w) => w.points as Pt[]).filter((p) => p.length >= 3));
+  const t = estimateThickness(edges);
+  // strip reaches inward past a typical wall thickness so it seals flush with
+  // the interior — no thin leak channel between strip and the open room edge
+  const IN = t * 1.5, OUT = 0.15;
+  let cxAll = 0, cyAll = 0;
+  for (const p of pts) { cxAll += p[0]; cyAll += p[1]; }
+  cxAll /= pts.length; cyAll /= pts.length;
+
+  const strips: Pt[][] = [];
+  for (let i = 0, j = hull.length - 1; i < hull.length; j = i++) {
+    const a = hull[j], b = hull[i];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (len < 0.5) continue;
+    // covered already? sample the midpoint against existing wall edges
+    const mid: Pt = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    let minD = Infinity;
+    for (const e of edges) minD = Math.min(minD, pointSegDist(mid[0], mid[1], e.a, e.b));
+    if (minD < 1.2) continue; // a real wall is already there
+    const u: Pt = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+    let n: Pt = [-u[1], u[0]];
+    // orient n toward the building interior
+    if ((cxAll - mid[0]) * n[0] + (cyAll - mid[1]) * n[1] < 0) n = [-n[0], -n[1]];
+    strips.push([
+      [a[0] - n[0] * OUT, a[1] - n[1] * OUT],
+      [b[0] - n[0] * OUT, b[1] - n[1] * OUT],
+      [b[0] + n[0] * IN, b[1] + n[1] * IN],
+      [a[0] + n[0] * IN, a[1] + n[1] * IN]
+    ]);
+  }
+  return strips;
 }
 
 function pointSegDist(x: number, y: number, a: Pt, b: Pt): number {
@@ -272,6 +369,8 @@ export interface ExtractOptions {
   healTolFt?: number;
   /** ignore enclosed faces smaller than this (wall cavities, noise) */
   minRoomSqFt?: number;
+  /** extra sealing polygons (hull closure strips for open scans) */
+  extraStrips?: Pt[][];
 }
 
 /**
@@ -287,7 +386,8 @@ export function extractRoomFaces(geometry: FloorGeometry, options?: ExtractOptio
   if (!strips.length) return [];
 
   const patches = sealingPatches(geometry, options?.maxDoorFt, options?.healTolFt);
-  const wallRegion = unionPaths([...strips, ...patches].map(toIntPath));
+  const wallRegion = unionPaths(
+    [...strips, ...patches, ...(options?.extraStrips ?? [])].map(toIntPath));
 
   // Interior = (bounding box) − (sealed walls). Each enclosed open region
   // comes back as its OWN positive polygon — rooms can never get stitched
@@ -395,6 +495,168 @@ export function deriveShapes(
     shapes,
     unresolved,
     unlabeledFaces: faces.filter((_, fi) => !claimed.has(fi) && faceLabels[fi].length === 0)
+  };
+}
+
+// ---------- auto-tuned derivation (the normal path) ----------
+
+export interface AutoDeriveResult extends DeriveResult {
+  /** the winning tolerances, for the diagnostic overlay */
+  tuning: { maxDoorFt: number; healTolFt: number; usedHullClosure: boolean };
+}
+
+/**
+ * Fuzzy CSV-name ↔ DXF-label matcher. Real exports rarely agree exactly
+ * (case, stray spaces, unicode escapes, truncation).
+ */
+export function matchLabel(
+  labels: { text: string; x: number; y: number }[],
+  roomName: string
+): { x: number; y: number } | null {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const target = norm(roomName);
+  if (!target) return null;
+  let candidate =
+    labels.find((l) => norm(l.text) === target) ??
+    labels.find((l) => norm(l.text).startsWith(target) || target.startsWith(norm(l.text))) ??
+    labels.find((l) => norm(l.text).includes(target) || target.includes(norm(l.text)));
+  return candidate ? { x: candidate.x, y: candidate.y } : null;
+}
+
+/**
+ * The pipeline the app actually calls. Runs the extraction at increasing
+ * healing tolerances (and, as a last resort, with a conservative hull
+ * closure), scores each run by how many labeled rooms were found and how
+ * well face areas agree with the CSV square footages, and keeps the best.
+ * CSV areas validate and select — they never fabricate shapes. Rooms that
+ * still lack a shape get one final chance: an unlabeled face whose area
+ * uniquely matches their CSV area within 12%.
+ */
+export function deriveShapesAuto(
+  geometry: FloorGeometry,
+  rooms: DeriveRoomInput[],
+  options?: { minRoomSqFt?: number }
+): AutoDeriveResult {
+  const combos: { maxDoorFt: number; healTolFt: number; hull: boolean }[] = [];
+  for (const hull of [false, true]) {
+    for (const healTolFt of [0.7, 1.2, 2.0, 3.0, 4.2]) {
+      for (const maxDoorFt of [4.6, 6.2]) combos.push({ maxDoorFt, healTolFt, hull });
+    }
+  }
+  const hullStrips = hullClosureStrips(geometry);
+
+  let best: { res: DeriveResult; score: number; combo: typeof combos[0] } | null = null;
+  for (const combo of combos) {
+    const res = deriveShapes(geometry, rooms, {
+      maxDoorFt: combo.maxDoorFt,
+      healTolFt: combo.healTolFt,
+      minRoomSqFt: options?.minRoomSqFt,
+      extraStrips: combo.hull ? hullStrips : undefined
+    });
+    const assigned = Object.keys(res.shapes).length;
+    let areaScore = 0;
+    for (const room of rooms) {
+      const s = res.shapes[room.id];
+      if (!s || !room.cleanableSqFt) continue;
+      const rel = Math.abs(s.areaSqFt - room.cleanableSqFt) / room.cleanableSqFt;
+      areaScore += Math.max(0, 1 - rel);
+    }
+    // prefer: more rooms assigned » better area agreement » no hull closure » gentler healing
+    const score = assigned * 10000 + areaScore * 100 - (combo.hull ? 5 : 0) - combo.healTolFt;
+    if (!best || score > best.score) best = { res, score, combo };
+    if (assigned === rooms.length && areaScore / Math.max(1, rooms.length) > 0.9 && !combo.hull) break;
+  }
+
+  const res = best!.res;
+  // last-chance rescue: unlabeled face whose area uniquely matches a CSV room
+  const stillUnresolved = rooms.filter((r) => !res.shapes[r.id]);
+  for (const room of stillUnresolved) {
+    if (!room.cleanableSqFt) continue;
+    const matches = res.unlabeledFaces
+      .map((f, i) => ({ f, i, rel: Math.abs(f.areaSqFt - room.cleanableSqFt) / room.cleanableSqFt }))
+      .filter((m) => m.rel < 0.12)
+      .sort((a, b) => a.rel - b.rel);
+    // only when unambiguous: exactly one face fits this room's square footage
+    if (matches.length === 1) {
+      const { f, i } = matches[0];
+      res.shapes[room.id] = { outer: f.outer, holes: f.holes, source: "derived", areaSqFt: f.areaSqFt };
+      res.unlabeledFaces.splice(i, 1);
+      res.unresolved = res.unresolved.filter((id) => id !== room.id);
+    }
+  }
+
+  return {
+    ...res,
+    tuning: {
+      maxDoorFt: best!.combo.maxDoorFt,
+      healTolFt: best!.combo.healTolFt,
+      usedHullClosure: best!.combo.hull
+    }
+  };
+}
+
+/**
+ * Merge several room shapes into one polygon. Door patches that touch two or
+ * more of the shapes act as bridges, so the merged room flows through its
+ * doorways instead of coming back as disconnected pieces.
+ */
+export function mergeShapes(
+  geometry: FloorGeometry,
+  parts: { outer: Pt[]; holes: Pt[][] }[]
+): { outer: Pt[]; holes: Pt[][]; areaSqFt: number } | null {
+  if (parts.length < 2) return null;
+  const bridgeQuads: Pt[][] = [];
+  for (const info of analyzeOpenings(geometry)) {
+    if (!info.quad) continue;
+    // grow the patch slightly so edge-touching counts as contact
+    const grown = growQuad(info.quad, 0.3);
+    let touches = 0;
+    for (const p of parts) {
+      if (grown.some(([x, y]) => pointInShape(x, y, p)) ||
+          p.outer.some(([x, y]) => pointInPolygon(x, y, grown))) touches++;
+    }
+    if (touches >= 2) bridgeQuads.push(grown);
+  }
+  const c = new ClipperLib.Clipper();
+  c.StrictlySimple = true;
+  c.AddPaths([...parts.map((p) => toIntPath(p.outer)), ...bridgeQuads.map(toIntPath)],
+    ClipperLib.PolyType.ptSubject, true);
+  for (const p of parts) for (const h of p.holes) {
+    c.AddPath(toIntPath(h), ClipperLib.PolyType.ptClip, true);
+  }
+  const out: IntPt[][] = [];
+  c.Execute(parts.some((p) => p.holes.length) ? ClipperLib.ClipType.ctDifference : ClipperLib.ClipType.ctUnion,
+    out, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+  const outers = out.filter((p) => signedArea(p) > 0).sort((a, b) => signedArea(b) - signedArea(a));
+  if (!outers.length) return null;
+  if (outers.length > 1) return null; // still disconnected — caller keeps parts separate
+  const holes = out.filter((p) => signedArea(p) < 0).map((h) => simplifyPolygon(fromIntPath(h).reverse()));
+  const outer = simplifyPolygon(fromIntPath(outers[0]));
+  return { outer, holes, areaSqFt: polygonArea(outer) - holes.reduce((s, h) => s + polygonArea(h), 0) };
+}
+
+function growQuad(quad: Pt[], by: number): Pt[] {
+  const cx = quad.reduce((s, p) => s + p[0], 0) / quad.length;
+  const cy = quad.reduce((s, p) => s + p[1], 0) / quad.length;
+  return quad.map(([x, y]) => {
+    const dx = x - cx, dy = y - cy;
+    const d = Math.hypot(dx, dy) || 1;
+    return [x + (dx / d) * by, y + (dy / d) * by] as Pt;
+  });
+}
+
+/** Every pipeline stage in one bag — feeds the dev diagnostic overlay. */
+export function debugExtract(geometry: FloorGeometry, rooms: DeriveRoomInput[]) {
+  const auto = deriveShapesAuto(geometry, rooms);
+  return {
+    strips: (geometry?.walls ?? []).map((w) => w.points as Pt[]),
+    patches: sealingPatches(geometry, auto.tuning.maxDoorFt, auto.tuning.healTolFt),
+    hullStrips: auto.tuning.usedHullClosure ? hullClosureStrips(geometry) : [],
+    faces: extractRoomFaces(geometry, {
+      maxDoorFt: auto.tuning.maxDoorFt, healTolFt: auto.tuning.healTolFt,
+      extraStrips: auto.tuning.usedHullClosure ? hullClosureStrips(geometry) : undefined
+    }),
+    result: auto
   };
 }
 

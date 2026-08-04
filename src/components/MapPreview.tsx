@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { FloorGeometry } from "../lib/types";
-import { deriveShapes, polygonCentroid, type DeriveRoomInput } from "../lib/geometry";
+import { deriveShapesAuto, polygonCentroid, type DeriveRoomInput } from "../lib/geometry";
 import { COLOR_PALETTE } from "../lib/seeds";
 
 /**
@@ -11,7 +11,7 @@ export function MapPreview({ geometry, rooms }: {
   geometry: FloorGeometry;
   rooms: (DeriveRoomInput & { name: string })[];
 }) {
-  const derived = useMemo(() => deriveShapes(geometry, rooms), [geometry, rooms]);
+  const derived = useMemo(() => deriveShapesAuto(geometry, rooms), [geometry, rooms]);
 
   const bounds = useMemo(() => {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;

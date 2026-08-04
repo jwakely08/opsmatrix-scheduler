@@ -5,7 +5,7 @@ import dxfRaw from "../../test-fixtures/Test_project_-_1st_Floor.dxf?raw";
 import csvRaw from "../../test-fixtures/Test_project_statistics.csv?raw";
 import { parseDXF, parseStatsCSV } from "./parsers";
 import { defaultState, guessRoomType, ensureDepartment } from "./seeds";
-import { deriveShapes } from "./geometry";
+import { deriveShapesAuto, matchLabel } from "./geometry";
 import type { AppState } from "./types";
 import { uid } from "./types";
 
@@ -27,7 +27,7 @@ export function buildDemoState(): AppState {
     for (const rm of fl.rooms) {
       const tplId = guessRoomType(rm.name);
       const tpl = state.roomTypes.find((t) => t.id === tplId) ?? null;
-      const label = dxf.labels.find((l) => l.text.toLowerCase().trim() === rm.name.toLowerCase().trim());
+      const label = matchLabel(dxf.labels, rm.name);
       ensureDepartment(state, "Med-Surg West");
       state.rooms.push({
         id: uid("rm"), floorId: floor.id, department: "Med-Surg West", name: rm.name,
@@ -45,13 +45,18 @@ export function buildDemoState(): AppState {
     }
   }
 
-  // wall-tight room shapes, straight through the real pipeline
+  // wall-tight room shapes, straight through the real auto-tuned pipeline
   for (const fl of state.floors) {
     if (!fl.geometry) continue;
     const flRooms = state.rooms.filter((r) => r.floorId === fl.id);
-    fl.shapes = deriveShapes(fl.geometry, flRooms.map((r) => ({
+    const res = deriveShapesAuto(fl.geometry, flRooms.map((r) => ({
       id: r.id, mapX: r.mapX, mapY: r.mapY, cleanableSqFt: r.cleanableSqFt
-    }))).shapes;
+    })));
+    fl.shapes = res.shapes;
+    fl.unassigned = res.unlabeledFaces.map((f) => ({
+      outer: f.outer, holes: f.holes, source: "derived" as const, areaSqFt: f.areaSqFt
+    }));
+    fl.approxBoundary = res.tuning.usedHullClosure;
   }
 
   state.employees.push(
