@@ -8,6 +8,20 @@ with accurate workload math.
 staff assignments only. There is nowhere to enter patient names, occupant data,
 or medical information, and no database column to hold them.
 
+## Two apps, one capability
+
+- **`/` (the new scheduler)** — the map-first React app.
+- **`/classic.html` (OpsMatrix Classic + fusion)** — Josh's original full
+  OpsMatrix (Max AI, inspections, reports, visual schedule builder),
+  byte-identical to the archive, with ONE injected addition: an
+  **"⚡ Import magicplan Scan"** button in Max Space → Floor Plans. It runs the
+  modern auto-detection pipeline in the browser and writes the classic app's
+  own data stores (`opsmatrix_v7`, `opsmatrix_v7_plans`): plan image rendered
+  from the DXF, rooms pre-traced as polygons, square footage from the CSV,
+  minutes via the classic rate table. Everything else about Classic is
+  untouched. Regenerate after pipeline changes with `npm run build:classic`
+  (commits `public/classic.html`).
+
 ## What's in this repo
 
 | Path | What it is |
