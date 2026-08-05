@@ -200,6 +200,103 @@ export function importScan(
   };
 }
 
+// ── Client-demo seed: the real scan + a lived-in operation ─────────────────
+import dxfRaw from "../../test-fixtures/Test_project_-_1st_Floor.dxf?raw";
+import csvRaw from "../../test-fixtures/Test_project_Statistics.csv?raw";
+
+export function demoStamp(): string {
+  return "classic-demo-v1:" + dxfRaw.length + ":" + csvRaw.length;
+}
+
+export function buildClassicDemo() {
+  const scan = importScan(dxfRaw, csvRaw, { building: "Demo Medical Center" });
+  const now = new Date();
+  const iso = now.toISOString();
+  const today = (d: Date) => d.toISOString().slice(0, 10);
+  const inDays = (n: number) => { const d = new Date(now); d.setDate(d.getDate() + n); return d; };
+  const mmdd = (d: Date) => `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+
+  const mkEmp = (first: string, last: string, role: string, shift: string, extra?: Record<string, unknown>) => ({
+    id: `emp-demo-${slug(first + last)}`,
+    firstName: first, lastName: last, displayName: `${first} ${last}`,
+    role, shift, buildingOrArea: "Demo Medical Center",
+    phone: "", email: `${(first[0] + last).toLowerCase()}@demomed.org`,
+    languages: "", certifications: "", birthday: "", startDate: "2023-04-10",
+    payRate: "", onDays: "Mon–Fri", offDays: "Sat, Sun", ptoDates: "",
+    isProjectTech: false, updatedAt: iso, ...(extra ?? {})
+  });
+
+  const employees = [
+    mkEmp("Maria", "Alvarez", "EVS Supervisor", "1st Shift"),
+    mkEmp("Denise", "Carter", "EVS Worker", "1st Shift", { birthday: mmdd(inDays(3)) }),
+    mkEmp("James", "Okafor", "EVS Worker", "1st Shift"),
+    mkEmp("Linda", "Tran", "EVS Worker", "1st Shift"),
+    mkEmp("Robert", "Miller", "Floor Tech", "1st Shift", { isProjectTech: true }),
+    mkEmp("Keisha", "Osei", "EVS Worker", "2nd Shift", { onDays: "Tue–Sat", offDays: "Sun, Mon" }),
+    mkEmp("Carlos", "Reyes", "EVS Worker", "2nd Shift"),
+    mkEmp("Angela", "Brooks", "EVS Worker", "2nd Shift"),
+    mkEmp("Sam", "Whitfield", "EVS Worker", "3rd Shift", { onDays: "Wed–Sun", offDays: "Mon, Tue" }),
+    mkEmp("Dorothy", "Nguyen", "EVS Worker", "3rd Shift")
+  ];
+
+  // two daily schedules covering the scanned rooms, owned by real roster names
+  const spaces = scan.spaces.map((sp) => ({ ...sp }));
+  const ids = spaces.map((sp) => sp.id as string);
+  const half = Math.ceil(ids.length / 2);
+  const groupA = ids.slice(0, half), groupB = ids.slice(half);
+  const tasksFor = (spId: string) => {
+    const sp = spaces.find((s) => s.id === spId)!;
+    return String(sp.roomType) === "Restroom"
+      ? ["general-cleaning", "trash-pull", "wet-mop"]
+      : ["general-cleaning", "trash-pull", "dust-mop"];
+  };
+  const mkSched = (num: string, name: string, emp: typeof employees[0], color: string, group: string[]) => ({
+    id: `sched-demo-${num}`,
+    num, name, shift: "1st Shift",
+    employeeId: emp.id, employee: emp.displayName,
+    color, targetHours: 8,
+    spaceOrder: group,
+    roomTasks: Object.fromEntries(group.map((sid) => [sid, tasksFor(sid)])),
+    tasks: [], notes: "",
+    createdAt: iso, updatedAt: iso
+  });
+  const schedules = [
+    mkSched("101", "East Wing — Daily Clean", employees[1], "#22c55e", groupA),
+    mkSched("102", "West Wing — Daily Clean", employees[2], "#3b82f6", groupB)
+  ];
+  for (const sp of spaces) {
+    sp.assignedScheduleId = groupA.includes(sp.id as string) ? "sched-demo-101" : "sched-demo-102";
+  }
+
+  const notes = [
+    {
+      id: "note-demo-1", date: now.toLocaleDateString(),
+      title: "Client walkthrough prep",
+      body: "High-touch surfaces in both wings get a second pass before 10am. Check supply carts are stocked and staged.",
+      linkedSpaceId: "", linkedScheduleId: "sched-demo-101", linkedEmployeeId: employees[0].id,
+      tags: [], kind: "note", isProject: false,
+      projectDate: "", projectTime: "", projectDuration: "", projectPriority: "", projectStatus: "",
+      readAt: "", createdAt: iso, updatedAt: iso
+    },
+    {
+      id: "note-demo-2", date: now.toLocaleDateString(),
+      title: "Strip & wax — East Wing",
+      body: "Quarterly floor refinish ahead of the site visit.",
+      linkedSpaceId: ids[0] ?? "", linkedScheduleId: "", linkedEmployeeId: employees[4].id,
+      tags: ["Project"], kind: "project", isProject: true,
+      projectDate: today(inDays(1)), projectTime: "14:00", projectDuration: "120",
+      projectPriority: "high", projectStatus: "scheduled",
+      readAt: "", createdAt: iso, updatedAt: iso
+    }
+  ];
+
+  return {
+    v7: { spaces, employees, schedules, notes },
+    plans: [scan.plan],
+    summary: scan.summary
+  };
+}
+
 function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }

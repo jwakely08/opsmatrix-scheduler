@@ -124,6 +124,7 @@
   }
 
   // the classic app re-renders constantly; keep our button present cheaply
+  // (demo seeding lives in fusion-seed.js, injected BEFORE the app's script)
   var mo = new MutationObserver(function () { ensureButton(); });
   function boot() {
     ensureButton();
