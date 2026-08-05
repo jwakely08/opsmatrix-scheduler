@@ -512,10 +512,19 @@ svg.floorsvg.tracing:active { cursor: crosshair; }
   filter: brightness(1.07) drop-shadow(0 0 10px rgba(28,43,51,.28));
 }
 .roomG.sel .roomfill {
-  transform: scale(1.02);
+  transform: scale(1.03);
   fill-opacity: 1;
-  stroke: #16303a; stroke-width: 2.6px;
-  filter: brightness(1.05) drop-shadow(0 0 12px rgba(15,107,98,.55));
+  stroke: #ffffff; stroke-width: 3.2px;
+  filter: brightness(1.18) saturate(1.25)
+    drop-shadow(0 0 3px rgba(22,48,58,.9))
+    drop-shadow(0 0 16px rgba(15,107,98,.75))
+    drop-shadow(0 6px 18px rgba(28,43,51,.35));
+  animation: selpop .28s ease;
+}
+@keyframes selpop {
+  0% { transform: scale(1); }
+  55% { transform: scale(1.055); }
+  100% { transform: scale(1.03); }
 }
 .roomG.dim .roomfill { fill-opacity: .38; cursor: default; }
 .roomG.dim:hover .roomfill { transform: none; filter: none; }
