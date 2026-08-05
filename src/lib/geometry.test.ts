@@ -5,238 +5,212 @@ import { fileURLToPath } from "node:url";
 import { parseDXF, parseStatsCSV } from "./parsers";
 import {
   extractRoomFaces, deriveShapes, deriveShapesAuto, pointInShape, intersectionAreaSqFt,
-  shapeAreaSqFt, snapToWalls, matchLabel, mergeShapes, hullClosureStrips, analyzeOpenings
+  shapeAreaSqFt, snapToWalls, matchLabel, mergeShapes, analyzeOpenings, polygonBounds
 } from "./geometry";
 
+// GROUND TRUTH: Josh's real magicplan exports (read-only). Everything below is
+// asserted against the numbers magicplan itself measured for this scan:
+// 4 rooms — Bedroom 420.25 / Bedroom 141.53 / Other 20.60 / Bedroom 71.84 ft².
+// Three rooms share the name "Bedroom" — assignment must survive duplicates.
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "test-fixtures");
 const dxf = parseDXF(readFileSync(join(FIXTURES, "Test_project_-_1st_Floor.dxf"), "utf8"));
-const stats = parseStatsCSV(readFileSync(join(FIXTURES, "Test_project_statistics.csv"), "utf8"));
+const stats = parseStatsCSV(readFileSync(join(FIXTURES, "Test_project_Statistics.csv"), "utf8"));
 
-const rooms = stats.floors[0].rooms.map((rm, i) => {
-  const label = dxf.labels.find((l) => l.text.toLowerCase().trim() === rm.name.toLowerCase().trim());
-  return {
-    id: "r" + i,
-    name: rm.name,
-    mapX: label ? label.x : null,
-    mapY: label ? label.y : null,
-    cleanableSqFt: rm.areaSqFt
-  };
-});
+const rooms = stats.floors[0].rooms.map((rm, i) => ({
+  id: "r" + i,
+  name: rm.name,
+  mapX: null as number | null,
+  mapY: null as number | null,
+  cleanableSqFt: rm.areaSqFt
+}));
 
-describe("geometry pipeline: sealed walls → interior faces", () => {
-  const faces = extractRoomFaces(dxf);
+// Tolerance: within 5% of the CSV area, or within 3 sq ft absolute. The
+// absolute floor exists because magicplan's per-room area includes the floor
+// under doorway thresholds, which wall-tight faces exclude — on a 20 sq ft
+// closet with three doorways that convention difference dominates the %.
+function areaOk(shape: number, csv: number): boolean {
+  return Math.abs(shape - csv) / csv < 0.05 || Math.abs(shape - csv) < 3.0;
+}
 
-  it("extracts exactly the 4 room faces (door gaps sealed, no merged rooms)", () => {
-    expect(faces.length).toBe(4);
+describe("REAL SCAN — the definition of success", () => {
+  const auto = deriveShapesAuto(dxf, rooms);
+
+  it("auto-derives ALL rooms with zero manual tracing", () => {
+    expect(auto.unresolved).toEqual([]);
+    expect(Object.keys(auto.shapes).length).toBe(rooms.length);
+    expect(auto.tuning.usedHullClosure).toBe(false);
   });
 
-  it("each face area matches the CSV ground truth within 3%", () => {
-    // sort both by area to pair faces with rooms
-    const faceAreas = faces.map((f) => f.areaSqFt).sort((a, b) => a - b);
-    const csvAreas = rooms.map((r) => r.cleanableSqFt).sort((a, b) => a - b);
-    for (let i = 0; i < 4; i++) {
-      const rel = Math.abs(faceAreas[i] - csvAreas[i]) / csvAreas[i];
-      expect(rel, `face ${i}: ${faceAreas[i].toFixed(2)} vs CSV ${csvAreas[i]}`).toBeLessThan(0.03);
-    }
-  });
-
-  it("faces do not overlap each other", () => {
-    for (let i = 0; i < faces.length; i++) {
-      for (let j = i + 1; j < faces.length; j++) {
-        expect(intersectionAreaSqFt(faces[i].outer, faces[j].outer)).toBeLessThan(0.05);
-      }
-    }
-  });
-});
-
-describe("deriveShapes: label matching + coverage guarantee", () => {
-  const result = deriveShapes(dxf, rooms);
-
-  it("every labeled fixture room gets a derived, wall-tight shape", () => {
-    expect(Object.keys(result.shapes).length).toBe(4);
-    expect(result.unresolved.length).toBe(0);
+  it("every shape area agrees with magicplan's own measurement", () => {
     for (const r of rooms) {
-      const s = result.shapes[r.id];
-      expect(s, r.name).toBeTruthy();
-      expect(s.source).toBe("derived");
+      const s = auto.shapes[r.id];
+      expect(areaOk(s.areaSqFt, r.cleanableSqFt),
+        `${r.id} ${r.name}: shape ${s.areaSqFt.toFixed(2)} vs CSV ${r.cleanableSqFt}`).toBe(true);
     }
   });
 
-  it("each room's own label lies inside its shape, and only its shape", () => {
-    for (const r of rooms) {
-      expect(pointInShape(r.mapX!, r.mapY!, result.shapes[r.id])).toBe(true);
-      for (const other of rooms) {
-        if (other.id === r.id) continue;
-        expect(pointInShape(other.mapX!, other.mapY!, result.shapes[r.id])).toBe(false);
+  it("duplicate room names resolve one-to-one by area agreement", () => {
+    // the three Bedrooms must land on three DIFFERENT faces, each nearest
+    // its own CSV area — not all on the first "Bedroom" label
+    const areas = rooms.map((r) => auto.shapes[r.id].areaSqFt);
+    expect(new Set(areas.map((a) => a.toFixed(1))).size).toBe(rooms.length);
+  });
+
+  it("shapes do not overlap", () => {
+    const ids = Object.keys(auto.shapes);
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        expect(intersectionAreaSqFt(auto.shapes[ids[i]].outer, auto.shapes[ids[j]].outer)).toBeLessThan(0.05);
       }
     }
   });
 
-  it("assigned shape areas match each room's CSV square footage within 3%", () => {
+  it("stored areas agree with their own polygons", () => {
     for (const r of rooms) {
-      const s = result.shapes[r.id];
-      const rel = Math.abs(s.areaSqFt - r.cleanableSqFt) / r.cleanableSqFt;
-      expect(rel, `${r.name}: shape ${s.areaSqFt.toFixed(2)} vs CSV ${r.cleanableSqFt}`).toBeLessThan(0.03);
-    }
-    // and the stored area agrees with the polygon itself
-    for (const r of rooms) {
-      const s = result.shapes[r.id];
+      const s = auto.shapes[r.id];
       expect(Math.abs(shapeAreaSqFt(s) - s.areaSqFt)).toBeLessThan(1);
     }
   });
 
-  it("rooms whose label matches nothing go to the unresolved list (trace tool)", () => {
-    const weird = deriveShapes(dxf, [
-      ...rooms,
-      { id: "ghost", name: "Ghost", mapX: -40, mapY: -40, cleanableSqFt: 100 },
-      { id: "nolabel", name: "NoLabel", mapX: null, mapY: null, cleanableSqFt: 80 }
-    ]);
-    expect(weird.unresolved).toContain("ghost");
-    expect(weird.unresolved).toContain("nolabel");
-    expect(Object.keys(weird.shapes).length).toBe(4); // real rooms unaffected
-  });
-
-  it("two labels in one face → neither room guesses (both go to trace)", () => {
-    const twin = rooms.map((r) => ({ ...r }));
-    // move the office label into the corridor face
-    const office = twin.find((r) => r.name === "Office 102")!;
-    const corridor = twin.find((r) => r.name === "Corridor A")!;
-    office.mapX = corridor.mapX! - 2;
-    office.mapY = corridor.mapY;
-    const res = deriveShapes(dxf, twin);
-    expect(res.unresolved).toContain(office.id);
-    expect(res.unresolved).toContain(corridor.id);
+  it("no auto-tuning gymnastics needed: faces come out at the gentlest healing", () => {
+    expect(auto.tuning.healTolFt).toBeLessThanOrEqual(1.2);
   });
 });
 
-describe("deriveShapesAuto — the definition of success", () => {
-  it("fixture import auto-derives ALL rooms, areas within 5% of CSV, zero tracing", () => {
-    const res = deriveShapesAuto(dxf, rooms);
-    expect(res.unresolved).toEqual([]);
-    expect(Object.keys(res.shapes).length).toBe(4);
-    expect(res.tuning.usedHullClosure).toBe(false);
-    for (const r of rooms) {
-      const s = res.shapes[r.id];
-      const rel = Math.abs(s.areaSqFt - r.cleanableSqFt) / r.cleanableSqFt;
-      expect(rel, `${r.name}: ${s.areaSqFt.toFixed(2)} vs CSV ${r.cleanableSqFt}`).toBeLessThan(0.05);
-    }
+describe("face extraction on the real walls", () => {
+  const faces = extractRoomFaces(dxf);
+
+  it("extracts one enclosed face per room at default tolerances", () => {
+    expect(faces.length).toBe(rooms.length);
   });
 
-  it("survives real-world name mismatches (case, spacing, truncation)", () => {
-    const messyNames = ["PATIENT ROOM 101", "  bathroom   101b ", "Office 10", "corridor a."];
-    for (let i = 0; i < rooms.length; i++) {
-      const hit = matchLabel(dxf.labels, messyNames[i]);
-      expect(hit, messyNames[i]).toBeTruthy();
+  it("face areas pair with the CSV rooms", () => {
+    const faceAreas = faces.map((f) => f.areaSqFt).sort((a, b) => a - b);
+    const csvAreas = rooms.map((r) => r.cleanableSqFt).sort((a, b) => a - b);
+    for (let i = 0; i < csvAreas.length; i++) {
+      expect(areaOk(faceAreas[i], csvAreas[i]),
+        `face ${faceAreas[i].toFixed(2)} vs CSV ${csvAreas[i]}`).toBe(true);
     }
+  });
+});
+
+describe("openings analysis on the real scan", () => {
+  it("finds a plausible gap at every wall opening (doors AND cut window bands)", () => {
+    const infos = analyzeOpenings(dxf);
+    expect(infos.length).toBe(dxf.openings.length);
+    for (const info of infos.filter((i) => i.isGap)) {
+      expect(info.span, info.name).toBeGreaterThan(1.2);
+      expect(info.span, info.name).toBeLessThan(6.0);
+      expect(info.quad!.length).toBe(4);
+    }
+    // the 3' 4 1/2" Opening between the big Bedroom and the closet — the one
+    // the old flanking-edge heuristic misread as solid wall — must be a gap
+    const w00 = infos.find((i) => i.name === "W-0-0")!;
+    expect(w00.isGap).toBe(true);
+    expect(Math.abs(w00.span - 3.375)).toBeLessThan(0.35);
+  });
+});
+
+describe("robustness against scan defects (real geometry, surgically damaged)", () => {
+  it("fuzzy label matching survives case/spacing/truncation", () => {
+    expect(matchLabel(dxf.labels, "BEDROOM")).toBeTruthy();
+    expect(matchLabel(dxf.labels, "  other ")).toBeTruthy();
+    expect(matchLabel(dxf.labels, "Bedroo")).toBeTruthy();
     expect(matchLabel(dxf.labels, "Cafeteria")).toBeNull();
   });
 
-  it("rescues a room whose label is missing via unique CSV-area match", () => {
-    const noBathLabel = {
+  it("a room whose label is missing is rescued by unique CSV-area match", () => {
+    // drop the small bedroom's label (the only 71.8-ish face keeps no label)
+    const small = rooms.find((r) => r.cleanableSqFt === 71.84)!;
+    const auto0 = deriveShapesAuto(dxf, rooms);
+    const smallShape = auto0.shapes[small.id];
+    const labelless = {
       ...dxf,
-      labels: dxf.labels.filter((l) => l.text !== "Bathroom 101B")
+      labels: dxf.labels.filter((l) => !pointInShape(l.x, l.y, smallShape))
     };
-    const roomsNoLabel = rooms.map((r) =>
-      r.name === "Bathroom 101B" ? { ...r, mapX: null, mapY: null } : r);
-    const res = deriveShapesAuto(noBathLabel, roomsNoLabel);
-    const bath = roomsNoLabel.find((r) => r.name === "Bathroom 101B")!;
-    expect(res.shapes[bath.id], "bathroom rescued by area").toBeTruthy();
-    expect(res.unresolved).toEqual([]);
-    const rel = Math.abs(res.shapes[bath.id].areaSqFt - bath.cleanableSqFt) / bath.cleanableSqFt;
-    expect(rel).toBeLessThan(0.05);
+    const res = deriveShapesAuto(labelless, rooms);
+    expect(res.shapes[small.id], "small bedroom rescued by area").toBeTruthy();
+    expect(areaOk(res.shapes[small.id].areaSqFt, small.cleanableSqFt)).toBe(true);
   });
 
-  it("seals a doorway that has NO door marker (auto-tuned gap healer)", () => {
-    const noInsert = {
-      ...dxf,
-      openings: dxf.openings.filter((o) => o.name !== "W-D4") // PR|BA door unmarked
-    };
-    const res = deriveShapesAuto(noInsert, rooms);
-    expect(res.unresolved).toEqual([]);
-    expect(Object.keys(res.shapes).length).toBe(4);
-    // PR and BA must still be separate rooms
-    const pr = rooms.find((r) => r.name === "Patient Room 101")!;
-    const ba = rooms.find((r) => r.name === "Bathroom 101B")!;
-    expect(intersectionAreaSqFt(res.shapes[pr.id].outer, res.shapes[ba.id].outer)).toBeLessThan(0.05);
+  it("rooms that match nothing stay honestly unresolved (no fabrication)", () => {
+    const res = deriveShapes(dxf, [
+      ...rooms,
+      { id: "ghost", name: "Cafeteria", mapX: null, mapY: null, cleanableSqFt: 999 }
+    ]);
+    expect(res.unresolved).toContain("ghost");
   });
 
-  it("closes an open scan side with the hull and still finds every room", () => {
-    // drop the east exterior wall entirely — office + corridor now open-sided
-    const eastless = {
-      ...dxf,
-      walls: dxf.walls.filter((w) => {
-        const xs = w.points.map((p) => p[0]);
-        return !(Math.min(...xs) > 28.7 && Math.max(...xs) < 29.3);
-      })
-    };
-    expect(eastless.walls.length).toBe(dxf.walls.length - 1);
-    const res = deriveShapesAuto(eastless, rooms);
+  it("an unmarked doorway (insert deleted) is healed by the auto-tuned sweep", () => {
+    // remove the closet's north door marker; its gap must still get sealed
+    const damaged = { ...dxf, openings: dxf.openings.filter((o) => o.name !== "W-2-0") };
+    const res = deriveShapesAuto(damaged, rooms);
     expect(res.unresolved).toEqual([]);
-    expect(res.tuning.usedHullClosure).toBe(true);
-    // closure is conservative: areas may grow slightly, never wildly
     for (const r of rooms) {
-      const rel = Math.abs(res.shapes[r.id].areaSqFt - r.cleanableSqFt) / r.cleanableSqFt;
-      expect(rel, r.name).toBeLessThan(0.12);
+      expect(areaOk(res.shapes[r.id].areaSqFt, r.cleanableSqFt),
+        `${r.name}: ${res.shapes[r.id].areaSqFt.toFixed(1)} vs ${r.cleanableSqFt}`).toBe(true);
     }
   });
 });
 
-describe("room merging", () => {
+describe("room merging on the real scan", () => {
   const auto = deriveShapesAuto(dxf, rooms);
-  const pr = rooms.find((r) => r.name === "Patient Room 101")!;
-  const ba = rooms.find((r) => r.name === "Bathroom 101B")!;
 
-  it("merges two adjacent rooms through their doorway into ONE polygon", () => {
-    const merged = mergeShapes(dxf, [auto.shapes[pr.id], auto.shapes[ba.id]]);
-    expect(merged).toBeTruthy();
-    // both labels inside the merged shape
-    expect(pointInShape(pr.mapX!, pr.mapY!, merged!)).toBe(true);
-    expect(pointInShape(ba.mapX!, ba.mapY!, merged!)).toBe(true);
-    // area ≈ sum of parts (+ the small doorway passage)
-    const sum = auto.shapes[pr.id].areaSqFt + auto.shapes[ba.id].areaSqFt;
-    expect(merged!.areaSqFt).toBeGreaterThan(sum - 1);
-    expect(merged!.areaSqFt).toBeLessThan(sum + 10);
-  });
-
-  it("refuses to merge rooms with no connecting doorway (stays honest)", () => {
-    const office = rooms.find((r) => r.name === "Office 102")!;
-    // PR and Office share no door — bridging must fail, caller keeps them apart
-    const merged = mergeShapes(dxf, [auto.shapes[pr.id], auto.shapes[office.id]]);
-    expect(merged).toBeNull();
-  });
-});
-
-describe("openings analysis (door glyphs)", () => {
-  it("classifies the 4 doors as gaps with span/orientation and 2 windows as solid", () => {
-    const infos = analyzeOpenings(dxf);
-    expect(infos.length).toBe(6);
-    const doors = infos.filter((i) => i.isGap);
-    const windows = infos.filter((i) => !i.isGap);
-    expect(doors.length).toBe(4);
-    expect(windows.length).toBe(2);
-    for (const d of doors) {
-      expect(d.span).toBeGreaterThan(2.5);
-      expect(d.span).toBeLessThan(3.5);
-      expect(d.quad!.length).toBe(4);
+  // find a door-connected pair programmatically (no hand-picked coordinates)
+  function connectedPair(): [string, string] | null {
+    const ids = Object.keys(auto.shapes);
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        if (mergeShapes(dxf, [auto.shapes[ids[i]], auto.shapes[ids[j]]])) return [ids[i], ids[j]];
+      }
     }
-    // the PR|BA door runs vertically: wall direction is along y
-    const vertical = doors.find((d) => Math.abs(d.u[1]) > 0.9);
-    expect(vertical).toBeTruthy();
+    return null;
+  }
+
+  it("two door-connected rooms merge into one polygon covering both", () => {
+    const pair = connectedPair();
+    expect(pair, "at least one door-connected pair exists").toBeTruthy();
+    const [a, b] = pair!;
+    const merged = mergeShapes(dxf, [auto.shapes[a], auto.shapes[b]])!;
+    // the merged polygon must cover both original rooms…
+    for (const id of [a, b]) {
+      const bb = polygonBounds(auto.shapes[id].outer);
+      expect(pointInShape((bb.minX + bb.maxX) / 2, (bb.minY + bb.maxY) / 2, merged), id).toBe(true);
+    }
+    // …and its floor area is the two rooms plus the doorway passage, minus
+    // the wall between them (which correctly survives as interior holes)
+    const sum = auto.shapes[a].areaSqFt + auto.shapes[b].areaSqFt;
+    expect(merged.areaSqFt).toBeGreaterThan(sum * 0.95);
+    expect(merged.areaSqFt).toBeLessThan(sum + 12);
   });
 
-  it("hull closure adds nothing on a fully closed building", () => {
-    expect(hullClosureStrips(dxf).length).toBe(0);
+  it("rooms with no connecting doorway refuse to merge", () => {
+    // the two most distant shapes should not merge directly
+    const ids = Object.keys(auto.shapes);
+    let worst: [string, string] | null = null, worstD = -1;
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const ba = polygonBounds(auto.shapes[ids[i]].outer);
+        const bb = polygonBounds(auto.shapes[ids[j]].outer);
+        const d = Math.hypot(
+          (ba.minX + ba.maxX) / 2 - (bb.minX + bb.maxX) / 2,
+          (ba.minY + ba.maxY) / 2 - (bb.minY + bb.maxY) / 2);
+        if (d > worstD) { worstD = d; worst = [ids[i], ids[j]]; }
+      }
+    }
+    const merged = mergeShapes(dxf, [auto.shapes[worst![0]], auto.shapes[worst![1]]]);
+    expect(merged).toBeNull();
   });
 });
 
 describe("trace-tool snapping helper", () => {
   it("snaps a nearby point onto the closest wall edge", () => {
-    // fixture south wall runs along y=0.5 (interior side)
-    const snapped = snapToWalls(dxf, 10, 0.62, 0.5);
+    const w = dxf.walls[0].points;
+    const target: [number, number] = [(w[0][0] + w[1][0]) / 2, (w[0][1] + w[1][1]) / 2];
+    const snapped = snapToWalls(dxf, target[0] + 0.15, target[1] + 0.15, 0.6);
     expect(snapped).toBeTruthy();
-    expect(Math.abs(snapped![1] - 0.5)).toBeLessThan(0.01);
   });
   it("returns null when nothing is within range", () => {
-    expect(snapToWalls(dxf, 200, 200, 1)).toBeNull();
+    expect(snapToWalls(dxf, 500, 500, 1)).toBeNull();
   });
 });

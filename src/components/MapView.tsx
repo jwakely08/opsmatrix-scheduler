@@ -66,7 +66,7 @@ export function MapView({ pendingShapeEdit, onShapeEditStart }: {
     if (!cur || !cur.geometry || cur.shapes || derivedOnce.current.has(cur.id)) return;
     derivedOnce.current.add(cur.id);
     const res = deriveShapesAuto(cur.geometry, floorRooms.map((r) => ({
-      id: r.id, mapX: r.mapX, mapY: r.mapY, cleanableSqFt: r.cleanableSqFt
+      id: r.id, name: r.name, mapX: r.mapX, mapY: r.mapY, cleanableSqFt: r.cleanableSqFt
     })));
     update((d) => {
       const fl = byId(d.floors, cur.id);
@@ -94,7 +94,7 @@ export function MapView({ pendingShapeEdit, onShapeEditStart }: {
   const debugData = useMemo(() => {
     if (!debugOn || !cur?.geometry) return null;
     return debugExtract(cur.geometry, floorRooms.map((r) => ({
-      id: r.id, mapX: r.mapX, mapY: r.mapY, cleanableSqFt: r.cleanableSqFt
+      id: r.id, name: r.name, mapX: r.mapX, mapY: r.mapY, cleanableSqFt: r.cleanableSqFt
     })));
   }, [debugOn, cur?.geometry, floorRooms]);
 

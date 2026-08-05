@@ -41,9 +41,22 @@ export interface DeriveResult {
 
 export interface DeriveRoomInput {
   id: string;
+  /** CSV room name — used for label-text matching (duplicates are fine) */
+  name?: string;
   mapX: number | null;
   mapY: number | null;
   cleanableSqFt: number;
+}
+
+/** shared name normalization for CSV-name ↔ DXF-label comparison */
+function normName(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function namesMatch(a: string, b: string): boolean {
+  const na = normName(a), nb = normName(b);
+  if (!na || !nb) return false;
+  return na === nb || na.startsWith(nb) || nb.startsWith(na) || na.includes(nb) || nb.includes(na);
 }
 
 // ---------- int/float conversion ----------
@@ -121,54 +134,132 @@ export interface OpeningInfo {
   quad: Pt[] | null;
 }
 
-/** Analyze every insert: find the flanking wall ends and the sealing quad. */
+/**
+ * Analyze every insert by RAYCASTING against the actual wall material:
+ * march from the opening point along the wall direction until wall polygons
+ * are hit on both sides — that IS the gap, regardless of how the strips are
+ * cut at the doorway (junctions, jamb geometry, angled walls). The sealing
+ * quad spans hit-to-hit, flush with the measured wall thickness.
+ */
 export function analyzeOpenings(geometry: FloorGeometry, maxDoorFt = 4.6): OpeningInfo[] {
   const strips = (geometry?.walls ?? []).map((w) => w.points as Pt[]).filter((p) => p.length >= 3);
   if (!strips.length) return [];
   const edges = collectEdges(strips);
   const t = estimateThickness(edges);
-  const endEdges = edges.filter((e) => e.len <= t * 2.6);
   const out: OpeningInfo[] = [];
 
+  const inWall = (x: number, y: number): boolean => {
+    for (const s of strips) if (pointInPolygon(x, y, s)) return true;
+    return false;
+  };
+  const STEP = 0.04;
+  const march = (from: Pt, dir: Pt, maxD: number): number | null => {
+    for (let d = STEP; d <= maxD; d += STEP) {
+      if (inWall(from[0] + dir[0] * d, from[1] + dir[1] * d)) return d;
+    }
+    return null;
+  };
+  // wall band extent across the gap, measured just inside the hit wall
+  const crossExtent = (p: Pt, n: Pt): { lo: number; hi: number } => {
+    let hi = 0, lo = 0;
+    for (let d = 0; d <= 2.2; d += STEP) {
+      if (inWall(p[0] + n[0] * d, p[1] + n[1] * d)) hi = d; else if (d > t) break;
+    }
+    for (let d = 0; d <= 2.2; d += STEP) {
+      if (inWall(p[0] - n[0] * d, p[1] - n[1] * d)) lo = d; else if (d > t) break;
+    }
+    return { lo, hi };
+  };
+
   for (const o of geometry.openings ?? []) {
-    // wall direction at the opening = direction of the nearest long edge
-    let bestD = Infinity, u: Pt = [1, 0];
-    for (const e of edges) {
-      if (e.len <= t * 2.6) continue;
-      const d = pointSegDist(o.x, o.y, e.a, e.b);
-      if (d < bestD) { bestD = d; u = e.dir; }
+    // candidate gap directions: the few nearest long wall edges AND their
+    // perpendiculars (a doorway at a T-junction often sits nearest to an edge
+    // of the CROSSING wall — assuming that edge's axis marches into open room
+    // space and misreads the door as solid)
+    const nearest = edges
+      .filter((e) => e.len > t * 2.6)
+      .map((e) => ({ e, d: pointSegDist(o.x, o.y, e.a, e.b) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 4);
+    const candDirs: Pt[] = [];
+    const pushDir = (dir: Pt) => {
+      if (!candDirs.some((c) => Math.abs(c[0] * dir[0] + c[1] * dir[1]) > 0.985)) candDirs.push(dir);
+    };
+    for (const { e } of nearest) {
+      pushDir(e.dir);
+      pushDir([-e.dir[1], e.dir[0]]);
     }
+    if (!candDirs.length) candDirs.push([1, 0], [0, 1]);
+
+    // evaluate every candidate; a two-sided hit with the SMALLEST span is the
+    // true gap axis (the wrong axis reads long or one-sided)
+    let best: { u: Pt; origin: Pt; tR: number | null; tL: number | null; nudged: number } | null = null;
+    for (const u0 of candDirs) {
+      const n0: Pt = [-u0[1], u0[0]];
+      let origin: Pt = [o.x, o.y];
+      let nudged = 0; // n-sign we escaped toward (wall material lies the other way)
+      if (inWall(origin[0], origin[1])) {
+        let freed = false;
+        for (let d = STEP; d <= t * 2 && !freed; d += STEP) {
+          for (const sgn of [1, -1]) {
+            const cand: Pt = [o.x + n0[0] * d * sgn, o.y + n0[1] * d * sgn];
+            if (!inWall(cand[0], cand[1])) { origin = cand; nudged = sgn; freed = true; break; }
+          }
+        }
+        if (!freed) continue; // buried along this axis
+      }
+      const tR = march(origin, u0, maxDoorFt);
+      const tL = march(origin, [-u0[0], -u0[1]], maxDoorFt);
+      const cand = { u: u0, origin, tR, tL, nudged };
+      const rank = (c: typeof cand) =>
+        c.tR !== null && c.tL !== null ? (c.tR + c.tL) : c.tR !== null || c.tL !== null ? 100 : 1000;
+      if (!best || rank(cand) < rank(best)) best = cand;
+    }
+    if (!best) {
+      out.push({ x: o.x, y: o.y, name: o.name, u: [1, 0], isGap: false, span: 0, thickness: t, quad: null });
+      continue;
+    }
+    const u = best.u;
     const n: Pt = [-u[1], u[0]];
-    const along = (p: Pt) => (p[0] - o.x) * u[0] + (p[1] - o.y) * u[1];
-    const across = (p: Pt) => (p[0] - o.x) * n[0] + (p[1] - o.y) * n[1];
-    let right: Edge | null = null, left: Edge | null = null;
-    let rD = maxDoorFt, lD = maxDoorFt;
-    for (const e of endEdges) {
-      if (Math.abs(e.dir[0] * u[0] + e.dir[1] * u[1]) > 0.5) continue; // not a cross-cut
-      if (Math.abs(across(e.mid)) > t * 1.6) continue;                 // off the wall line
-      const d = along(e.mid);
-      if (d > 0.02 && d < rD) { rD = d; right = e; }
-      if (d < -0.02 && -d < lD) { lD = -d; left = e; }
-    }
-    if (right && left) {
+    const origin = best.origin;
+    const tR = best.tR, tL = best.tL;
+
+    if (tR !== null && tL !== null) {
+      const pR: Pt = [origin[0] + u[0] * (tR + 0.1), origin[1] + u[1] * (tR + 0.1)];
+      const pL: Pt = [origin[0] - u[0] * (tL + 0.1), origin[1] - u[1] * (tL + 0.1)];
+      const eR = crossExtent(pR, n);
+      const eL = crossExtent(pL, n);
+      // flush with the thinner of the two flanks, and never wider than a real
+      // wall: at T-junctions both flanks can be long PARALLEL bands, and an
+      // unclamped patch would swallow a strip of the room's interior
+      const tMax = Math.min(1.0, Math.max(0.35, t * 1.5));
+      let hi = Math.max(0.08, Math.min(eR.hi, eL.hi, tMax));
+      let lo = Math.max(0.08, Math.min(eR.lo, eL.lo, tMax));
+      if (best.nudged > 0) { lo = Math.max(lo, tMax); hi = 0.1; }       // wall lies at −n
+      else if (best.nudged < 0) { hi = Math.max(hi, tMax); lo = 0.1; }  // wall lies at +n
+      const aR = tR + 0.12, aL = tL + 0.12; // overlap into the walls so the union fuses
       out.push({
         x: o.x, y: o.y, name: o.name, u, isGap: true,
-        span: rD + lD, thickness: t,
-        quad: orderQuad([right.a, right.b, left.a, left.b])
+        span: tR + tL, thickness: hi + lo,
+        quad: [
+          [origin[0] + u[0] * aR + n[0] * hi, origin[1] + u[1] * aR + n[1] * hi],
+          [origin[0] + u[0] * aR - n[0] * lo, origin[1] + u[1] * aR - n[1] * lo],
+          [origin[0] - u[0] * aL - n[0] * lo, origin[1] - u[1] * aL - n[1] * lo],
+          [origin[0] - u[0] * aL + n[0] * hi, origin[1] - u[1] * aL + n[1] * hi]
+        ]
       });
-    } else if (right || left) {
+    } else if (tR !== null || tL !== null) {
       const hl = maxDoorFt / 2, ht = t * 0.45;
       out.push({
         x: o.x, y: o.y, name: o.name, u, isGap: true, span: maxDoorFt, thickness: t,
         quad: [
-          [o.x - u[0] * hl - n[0] * ht, o.y - u[1] * hl - n[1] * ht],
-          [o.x + u[0] * hl - n[0] * ht, o.y + u[1] * hl - n[1] * ht],
-          [o.x + u[0] * hl + n[0] * ht, o.y + u[1] * hl + n[1] * ht],
-          [o.x - u[0] * hl + n[0] * ht, o.y - u[1] * hl + n[1] * ht]
+          [origin[0] - u[0] * hl - n[0] * ht, origin[1] - u[1] * hl - n[1] * ht],
+          [origin[0] + u[0] * hl - n[0] * ht, origin[1] + u[1] * hl - n[1] * ht],
+          [origin[0] + u[0] * hl + n[0] * ht, origin[1] + u[1] * hl + n[1] * ht],
+          [origin[0] - u[0] * hl + n[0] * ht, origin[1] - u[1] * hl + n[1] * ht]
         ]
       });
     } else {
-      // solid wall behind the insert → a window; nothing to seal
       out.push({ x: o.x, y: o.y, name: o.name, u, isGap: false, span: 0, thickness: t, quad: null });
     }
   }
@@ -459,42 +550,53 @@ export function deriveShapes(
 ): DeriveResult {
   const faces = extractRoomFaces(geometry, options);
   const shapes: Record<string, RoomShape> = {};
-  const unresolved: string[] = [];
-  const claimed = new Set<number>();
+  const claimedFace = new Set<number>();
+  const claimedRoom = new Set<string>();
 
-  // labels per face
-  const faceLabels: DeriveRoomInput[][] = faces.map(() => []);
-  for (const room of rooms) {
-    if (room.mapX === null || room.mapY === null) continue;
-    for (let fi = 0; fi < faces.length; fi++) {
-      if (pointInShape(room.mapX, room.mapY, faces[fi])) {
-        faceLabels[fi].push(room);
-        break; // faces don't overlap; first hit is the only hit
-      }
-    }
-  }
+  // DXF labels contained in each face (text matching works even when several
+  // rooms share a name — assignment below is one-to-one, ranked by how well
+  // the face's area agrees with the room's CSV square footage)
+  const faceLabelTexts: string[][] = faces.map((f) =>
+    (geometry.labels ?? [])
+      .filter((l) => pointInShape(l.x, l.y, f))
+      .map((l) => l.text));
 
+  interface Candidate { fi: number; roomId: string; areaErr: number; }
+  const candidates: Candidate[] = [];
   for (let fi = 0; fi < faces.length; fi++) {
-    if (faceLabels[fi].length === 1) {
-      const room = faceLabels[fi][0];
-      shapes[room.id] = {
-        outer: faces[fi].outer,
-        holes: faces[fi].holes,
-        source: "derived",
-        areaSqFt: faces[fi].areaSqFt
-      };
-      claimed.add(fi);
+    for (const room of rooms) {
+      const byName = room.name !== undefined &&
+        faceLabelTexts[fi].some((txt) => namesMatch(txt, room.name!));
+      const byPoint = room.mapX !== null && room.mapY !== null &&
+        pointInShape(room.mapX, room.mapY, faces[fi]);
+      if (!byName && !byPoint) continue;
+      const areaErr = room.cleanableSqFt > 0
+        ? Math.abs(faces[fi].areaSqFt - room.cleanableSqFt) / room.cleanableSqFt
+        : 0.5;
+      candidates.push({ fi, roomId: room.id, areaErr });
     }
-    // 0 labels → unlabeled face; ≥2 labels → a door seal failed somewhere:
-    // don't guess, leave those rooms for the trace tool
   }
-  for (const room of rooms) {
-    if (!shapes[room.id]) unresolved.push(room.id);
+  // best area agreement wins; each face and each room used at most once
+  candidates.sort((a, b) => a.areaErr - b.areaErr);
+  for (const c of candidates) {
+    if (claimedFace.has(c.fi) || claimedRoom.has(c.roomId)) continue;
+    // a face that "matches" but disagrees wildly on area is not a match —
+    // it's two merged rooms or a fragment; leave it for tuning/rescue
+    if (c.areaErr > 0.5) continue;
+    claimedFace.add(c.fi);
+    claimedRoom.add(c.roomId);
+    shapes[c.roomId] = {
+      outer: faces[c.fi].outer,
+      holes: faces[c.fi].holes,
+      source: "derived",
+      areaSqFt: faces[c.fi].areaSqFt
+    };
   }
+
   return {
     shapes,
-    unresolved,
-    unlabeledFaces: faces.filter((_, fi) => !claimed.has(fi) && faceLabels[fi].length === 0)
+    unresolved: rooms.filter((r) => !claimedRoom.has(r.id)).map((r) => r.id),
+    unlabeledFaces: faces.filter((_, fi) => !claimedFace.has(fi))
   };
 }
 
@@ -608,14 +710,24 @@ export function mergeShapes(
   const bridgeQuads: Pt[][] = [];
   for (const info of analyzeOpenings(geometry)) {
     if (!info.quad) continue;
-    // grow the patch slightly so edge-touching counts as contact
-    const grown = growQuad(info.quad, 0.3);
-    let touches = 0;
-    for (const p of parts) {
-      if (grown.some(([x, y]) => pointInShape(x, y, p)) ||
-          p.outer.some(([x, y]) => pointInPolygon(x, y, grown))) touches++;
+    // a doorway connects two rooms across the wall band: probe a little way
+    // out on each side of the wall line and see which parts we land in
+    const n: Pt = [-info.u[1], info.u[0]];
+    const reach = info.thickness / 2 + 0.4;
+    const touched = new Set<number>();
+    for (const d of [reach, -reach, reach * 1.8, -reach * 1.8]) {
+      const px = info.x + n[0] * d, py = info.y + n[1] * d;
+      parts.forEach((p, pi) => { if (pointInShape(px, py, p)) touched.add(pi); });
     }
-    if (touches >= 2) bridgeQuads.push(grown);
+    if (touched.size >= 2) {
+      // widen the sealing quad across the wall so the union overlaps both rooms
+      const cx = info.quad.reduce((s, q) => s + q[0], 0) / info.quad.length;
+      const cy = info.quad.reduce((s, q) => s + q[1], 0) / info.quad.length;
+      bridgeQuads.push(info.quad.map(([x, y]) => {
+        const side = Math.sign((x - cx) * n[0] + (y - cy) * n[1]) || 1;
+        return [x + n[0] * 0.55 * side, y + n[1] * 0.55 * side] as Pt;
+      }));
+    }
   }
   const c = new ClipperLib.Clipper();
   c.StrictlySimple = true;

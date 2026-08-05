@@ -2,7 +2,7 @@
 // run through the real parsers (so the demo exercises the same code path as a
 // genuine import). Loaded onto the local adapter — no login, no backend.
 import dxfRaw from "../../test-fixtures/Test_project_-_1st_Floor.dxf?raw";
-import csvRaw from "../../test-fixtures/Test_project_statistics.csv?raw";
+import csvRaw from "../../test-fixtures/Test_project_Statistics.csv?raw";
 import { parseDXF, parseStatsCSV } from "./parsers";
 import { defaultState, guessRoomType, ensureDepartment } from "./seeds";
 import { deriveShapesAuto, matchLabel } from "./geometry";
@@ -50,7 +50,7 @@ export function buildDemoState(): AppState {
     if (!fl.geometry) continue;
     const flRooms = state.rooms.filter((r) => r.floorId === fl.id);
     const res = deriveShapesAuto(fl.geometry, flRooms.map((r) => ({
-      id: r.id, mapX: r.mapX, mapY: r.mapY, cleanableSqFt: r.cleanableSqFt
+      id: r.id, name: r.name, mapX: r.mapX, mapY: r.mapY, cleanableSqFt: r.cleanableSqFt
     })));
     fl.shapes = res.shapes;
     fl.unassigned = res.unlabeledFaces.map((f) => ({

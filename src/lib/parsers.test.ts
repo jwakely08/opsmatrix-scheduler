@@ -4,13 +4,13 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDXF, parseStatsCSV, decodeDxfText } from "./parsers";
 
-// Ground truth documented for the magicplan test exports:
-// 4 rooms, 653.88 cleanable sq ft (interior), 799.11 gross sq ft (with walls).
+// GROUND TRUTH: Josh's real magicplan exports (read-only).
+// Plan: 4 rooms, 653.88 cleanable sq ft (interior), 799.11 gross sq ft.
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "test-fixtures");
 const dxfText = readFileSync(join(FIXTURES, "Test_project_-_1st_Floor.dxf"), "utf8");
-const csvText = readFileSync(join(FIXTURES, "Test_project_statistics.csv"), "utf8");
+const csvText = readFileSync(join(FIXTURES, "Test_project_Statistics.csv"), "utf8");
 
-describe("parseStatsCSV", () => {
+describe("parseStatsCSV (real export)", () => {
   const stats = parseStatsCSV(csvText);
 
   it("finds exactly 4 rooms", () => {
@@ -28,35 +28,40 @@ describe("parseStatsCSV", () => {
     expect(stats.grossSqFt).toBe(799.11);
   });
 
-  it("per-room interior areas sum to the cleanable total", () => {
-    const sum = stats.floors.reduce(
-      (s, f) => s + f.rooms.reduce((a, r) => a + r.areaSqFt, 0), 0);
-    expect(Number(sum.toFixed(2))).toBe(653.88);
+  it("reads the real per-room areas (three Bedrooms + Other)", () => {
+    const rooms = stats.floors[0].rooms;
+    expect(rooms.map((r) => r.name)).toEqual(["Bedroom", "Bedroom", "Other", "Bedroom"]);
+    expect(rooms.map((r) => r.areaSqFt)).toEqual([420.25, 141.53, 20.6, 71.84]);
+    // per-room areas sum near the plan total (magicplan's own rounding drift)
+    const sum = rooms.reduce((s, r) => s + r.areaSqFt, 0);
+    expect(Math.abs(sum - 653.88)).toBeLessThan(0.5);
   });
 
-  it("captures per-room detail (perimeter, doors, windows, ceiling)", () => {
+  it("captures per-room detail (doors, windows, ceiling)", () => {
     const first = stats.floors[0].rooms[0];
-    expect(first.name).toBe("Patient Room 101");
+    expect(first.doorAreaSqFt).toBe(138.5);
+    expect(first.windowAreaSqFt).toBe(25.38);
     expect(first.ceilingHeight).not.toBe("");
-    expect(first.doorAreaSqFt).toBeGreaterThan(0);
   });
 });
 
-describe("parseDXF", () => {
+describe("parseDXF (real export)", () => {
   const dxf = parseDXF(dxfText);
 
-  it("extracts wall polylines from layer 'walls'", () => {
-    expect(dxf.walls.length).toBeGreaterThan(0);
+  it("extracts the 10 wall strips from layer 'walls'", () => {
+    expect(dxf.walls.length).toBe(10);
     for (const w of dxf.walls) expect(w.points.length).toBeGreaterThan(2);
   });
 
-  it("extracts 4 room labels", () => {
+  it("extracts and decodes the 4 room labels (unicode-escaped in the file)", () => {
     expect(dxf.labels.length).toBe(4);
-    expect(dxf.labels.map((l) => l.text)).toContain("Corridor A");
+    const texts = dxf.labels.map((l) => l.text);
+    expect(texts.filter((t) => t === "Bedroom").length).toBe(3);
+    expect(texts).toContain("Other");
   });
 
-  it("extracts W-* door/window openings", () => {
-    expect(dxf.openings.length).toBe(6);
+  it("extracts all 13 W-* door/window inserts", () => {
+    expect(dxf.openings.length).toBe(13);
     for (const o of dxf.openings) expect(o.name.startsWith("W-")).toBe(true);
   });
 
@@ -66,7 +71,8 @@ describe("parseDXF", () => {
 });
 
 describe("decodeDxfText", () => {
-  it("decodes \\U+XXXX escapes", () => {
+  it("decodes \\U+XXXX escapes (as magicplan writes labels)", () => {
+    expect(decodeDxfText("\\U+0042\\U+0065\\U+0064")).toBe("Bed");
     expect(decodeDxfText("Caf\\U+00E9")).toBe("Café");
   });
   it("passes plain text through", () => {

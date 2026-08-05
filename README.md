@@ -20,11 +20,11 @@ or medical information, and no database column to hold them.
 | `test-fixtures/` | magicplan-format test files + generator (see note below) |
 | `vercel.json` | Vercel deploy configuration |
 
-> **Test-fixture note:** the original magicplan exports were not present in the
-> project folder, so `test-fixtures/` contains synthetic files generated to the
-> documented ground truth (4 rooms, 653.88 cleanable sq ft, 799.11 gross).
-> When you have the real `Test_project_-_1st_Floor.dxf` + statistics CSV, drop
-> them into `test-fixtures/` with the same names — the tests don't change.
+> **Test-fixture note:** `test-fixtures/` contains Josh's REAL magicplan
+> exports (added 2026-08-04) — they are read-only ground truth. The whole test
+> suite validates against the numbers magicplan itself measured: 4 rooms
+> (Bedroom 420.25 / Bedroom 141.53 / Other 20.60 / Bedroom 71.84 ft²),
+> 653.88 cleanable / 799.11 gross. Never regenerate or substitute these files.
 
 ## Quick start (no accounts needed)
 

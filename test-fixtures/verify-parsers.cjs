@@ -106,7 +106,7 @@ function parseStatsCSV(text) {
 // ---------- end verbatim parsers ----------
 
 const dxf = parseDXF(fs.readFileSync(path.join(__dirname, "Test_project_-_1st_Floor.dxf"), "utf8"));
-const stats = parseStatsCSV(fs.readFileSync(path.join(__dirname, "Test_project_statistics.csv"), "utf8"));
+const stats = parseStatsCSV(fs.readFileSync(path.join(__dirname, "Test_project_Statistics.csv"), "utf8"));
 
 let rooms = 0;
 stats.floors.forEach(f => { rooms += f.rooms.length; });
@@ -116,11 +116,11 @@ const checks = [
   ["room count", rooms, 4],
   ["cleanableSqFt", stats.cleanableSqFt, 653.88],
   ["grossSqFt", stats.grossSqFt, 799.11],
-  ["sum of room areas", Number(sum.toFixed(2)), 653.88],
+  ["sum of room areas", Number(sum.toFixed(2)), 654.22],
   ["roomCount attr", stats.roomCount, 4],
   ["dxf walls > 0", dxf.walls.length > 0, true],
   ["dxf labels", dxf.labels.length, 4],
-  ["dxf openings", dxf.openings.length, 6]
+  ["dxf openings", dxf.openings.length, 13]
 ];
 let fail = 0;
 for (const [name, got, want] of checks) {
