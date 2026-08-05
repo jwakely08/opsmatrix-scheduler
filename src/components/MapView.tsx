@@ -12,6 +12,7 @@ import { uid } from "../lib/types";
 import { fmt } from "../lib/format";
 import { MinutesButton } from "./Breakdown";
 import { RoomDrawer } from "./RoomDrawer";
+import { Modal } from "./Modal";
 import { toast } from "./Toast";
 
 const GRAY = "#cfd8de";
@@ -52,6 +53,7 @@ export function MapView({ pendingShapeEdit, onShapeEditStart }: {
   const [view, setView] = useState<ViewT>({ k: 20, tx: 0, ty: 0 });
   const debugAllowed = import.meta.env.DEV || new URLSearchParams(window.location.search).has("debug");
   const [debugOn, setDebugOn] = useState(false);
+  const [redetectOpen, setRedetectOpen] = useState(false);
 
   const floorRooms = useMemo(
     () => (cur ? state.rooms.filter((r) => r.floorId === cur.id) : []),
@@ -216,6 +218,42 @@ export function MapView({ pendingShapeEdit, onShapeEditStart }: {
     startShapeWork(pendingShapeEdit);
     onShapeEditStart?.();
   }, [pendingShapeEdit, cur]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Re-run auto-detection on this floor's current data (undoes merges first). */
+  function redetect(keepManual: boolean) {
+    if (!cur?.geometry) return;
+    update((d) => {
+      const fl = byId(d.floors, cur.id)!;
+      // restore any merges so absorbed rooms come back before re-deriving
+      for (const rec of [...(fl.merges ?? [])].reverse()) {
+        if (rec.wasUnassigned) continue; // spaces get rebuilt by the derivation below
+        if (rec.absorbedRoom && !d.rooms.some((r) => r.id === rec.absorbedRoom!.id)) {
+          d.rooms.push(rec.absorbedRoom);
+        }
+        const room = byId(d.rooms, rec.intoRoomId);
+        if (room) room.cleanableSqFt = rec.prevSqFt;
+      }
+      fl.merges = [];
+      const flRooms = d.rooms.filter((r) => r.floorId === fl.id);
+      const res = deriveShapesAuto(fl.geometry!, flRooms.map((r) => ({
+        id: r.id, name: r.name, mapX: r.mapX, mapY: r.mapY, cleanableSqFt: r.cleanableSqFt
+      })));
+      const prev = fl.shapes ?? {};
+      fl.shapes = { ...res.shapes };
+      if (keepManual) {
+        for (const [id, s] of Object.entries(prev)) {
+          if (s.source !== "derived") fl.shapes[id] = s;
+        }
+      }
+      fl.unassigned = res.unlabeledFaces.map((f) => ({
+        outer: f.outer, holes: f.holes, source: "derived" as const, areaSqFt: f.areaSqFt
+      }));
+      fl.approxBoundary = res.tuning.usedHullClosure;
+    });
+    setRedetectOpen(false);
+    setSelectedId(null);
+    toast("Rooms re-detected from the scan ✓");
+  }
 
   function startShapeWork(roomId: string) {
     const existing = shapes[roomId];
@@ -646,6 +684,9 @@ export function MapView({ pendingShapeEdit, onShapeEditStart }: {
         </div>
 
         <span className="spacer" />
+        {ui.canEditFacility && cur.geometry && (
+          <button className="btn small" onClick={() => setRedetectOpen(true)}>↻ Re-detect rooms</button>
+        )}
         {debugAllowed && (
           <button className={"btn small" + (debugOn ? " primary" : "")}
             onClick={() => setDebugOn(!debugOn)}>🔧 Stages</button>
@@ -912,6 +953,23 @@ export function MapView({ pendingShapeEdit, onShapeEditStart }: {
       {editRoomId && (
         <RoomDrawer roomId={editRoomId} onClose={() => setEditRoomId(null)}
           onAdjustShape={(roomId) => { setEditRoomId(null); startShapeWork(roomId); }} />
+      )}
+
+      {redetectOpen && (
+        <Modal title="Re-detect the rooms on this floor?" onClose={() => setRedetectOpen(false)} buttons={[
+          { label: "Re-detect (keep my hand-drawn fixes)", primary: true, onClick: () => redetect(true) },
+          { label: "Re-detect everything from scratch", onClick: () => redetect(false) },
+          { label: "Cancel", onClick: () => setRedetectOpen(false) }
+        ]}>
+          <p style={{ marginBottom: 8 }}>
+            This re-runs the automatic room detection on this floor's scan with the latest
+            algorithm — useful if the map was imported by an older version of the app.
+          </p>
+          <p className="note">
+            Any merged rooms are split back apart first. Room details, schedules and
+            assignments are not affected — only the shapes on the map.
+          </p>
+        </Modal>
       )}
     </div>
   );

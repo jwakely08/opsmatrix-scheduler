@@ -1,6 +1,8 @@
 import { useMemo, useState, useCallback } from "react";
 import { useAuth } from "./auth/AuthContext";
 import { supabase } from "./auth/supabaseClient";
+import { buildDemoState } from "./lib/demo";
+import { Modal } from "./components/Modal";
 import { StoreProvider, useStore } from "./state/store";
 import { UIContext } from "./state/ui";
 import { LocalAdapter } from "./storage/localAdapter";
@@ -22,12 +24,13 @@ const TABS: [string, string][] = [
 ];
 
 function Shell() {
-  const { state, update, conflict, dismissConflict, reload, adapterMode } = useStore();
+  const { state, update, replaceState, conflict, dismissConflict, reload, adapterMode } = useStore();
   const auth = useAuth();
   const [drawerRoomId, setDrawerRoomId] = useState<string | null>(null);
   const [printing, setPrinting] = useState(false);
   const [treeOpen, setTreeOpen] = useState(false);
   const [shapeEditReq, setShapeEditReq] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const printSchedules = useCallback(() => {
     setPrinting(true);
@@ -74,7 +77,7 @@ function Shell() {
           onClick={() => setTreeOpen(!treeOpen)}>☰</button>
         <div className="brand">
           <span className="logo">OPS<b>MATRIX</b></span>
-          <span className="tag">Scheduler</span>
+          <span className="tag">Scheduler · {__BUILD_INFO__.hash}</span>
         </div>
         <nav className="tabs">
           {TABS.map(([id, label]) => (
@@ -90,7 +93,25 @@ function Shell() {
         <div className="banner">
           Local / demo mode — no login configured. Data lives in this browser only.
           {auth.orgName !== "Local workspace" ? " · " + auth.orgName : ""}
+          <button className="btn small" onClick={() => setConfirmReset(true)}>Load fresh sample</button>
         </div>
+      )}
+      {confirmReset && (
+        <Modal title="Load the fresh sample building?" onClose={() => setConfirmReset(false)} buttons={[
+          {
+            label: "Load fresh sample", primary: true, onClick: () => {
+              replaceState(buildDemoState());
+              setConfirmReset(false);
+            }
+          },
+          { label: "Cancel", onClick: () => setConfirmReset(false) }
+        ]}>
+          <p>
+            This replaces everything saved in this browser with the current sample building
+            (the latest scan, freshly auto-detected). If you have real work saved here,
+            download a backup first (Settings → Data).
+          </p>
+        </Modal>
       )}
       {conflict && (
         <div className="banner conflict">
