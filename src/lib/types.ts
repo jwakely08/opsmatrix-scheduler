@@ -165,6 +165,8 @@ export type Scope =
 
 export interface AppState {
   version: number; // 2
+  /** set only on demo-seeded data; lets a newer build refresh a stale demo */
+  demoStamp?: string;
   buildings: Building[];
   floors: Floor[];
   rooms: Room[];

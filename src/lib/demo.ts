@@ -9,6 +9,11 @@ import { deriveShapesAuto, matchLabel } from "./geometry";
 import type { AppState } from "./types";
 import { uid } from "./types";
 
+/** changes whenever the bundled scan data changes → stale demos self-refresh */
+export function demoStamp(): string {
+  return "demo:" + dxfRaw.length + ":" + csvRaw.length + ":v5";
+}
+
 export function buildDemoState(): AppState {
   const dxf = parseDXF(dxfRaw);
   const stats = parseStatsCSV(csvRaw);
@@ -68,5 +73,6 @@ export function buildDemoState(): AppState {
     minutes: 0, unitsPerDay: 6, minutesPerUnit: 45, shiftId: "sh_eves", employeeId: null
   });
   state.ui.view = "map";
+  state.demoStamp = demoStamp();
   return state;
 }

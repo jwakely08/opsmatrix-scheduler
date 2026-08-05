@@ -3,14 +3,28 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { AuthProvider } from "./auth/AuthContext";
 import { LS_KEY } from "./storage/localAdapter";
-import { buildDemoState } from "./lib/demo";
+import { buildDemoState, demoStamp } from "./lib/demo";
 import "./styles.css";
 
-// Visiting ?demo=1 on a fresh browser seeds the sample building (generated
-// from the test-file data) so a shared demo link shows a working schedule
-// immediately. Existing data is never overwritten.
-if (new URLSearchParams(window.location.search).has("demo") && !localStorage.getItem(LS_KEY)) {
-  localStorage.setItem(LS_KEY, JSON.stringify(buildDemoState()));
+// Visiting ?demo=1 seeds the sample building (built from the bundled scan).
+// A STALE demo — data that was itself demo-seeded, by any earlier build —
+// refreshes automatically so the link always shows the current floor plan.
+// Real imported work (rooms not sourced from the demo) is never touched.
+if (new URLSearchParams(window.location.search).has("demo")) {
+  const raw = localStorage.getItem(LS_KEY);
+  let shouldSeed = !raw;
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      const isDemoData = parsed.demoStamp !== undefined ||
+        (Array.isArray(parsed.rooms) && parsed.rooms.length > 0 &&
+          parsed.rooms.every((r: { source?: string }) => r.source === "demo"));
+      shouldSeed = isDemoData && parsed.demoStamp !== demoStamp();
+    } catch {
+      shouldSeed = true; // unreadable data — reseed
+    }
+  }
+  if (shouldSeed) localStorage.setItem(LS_KEY, JSON.stringify(buildDemoState()));
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
