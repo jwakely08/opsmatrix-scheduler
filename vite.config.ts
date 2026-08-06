@@ -14,6 +14,14 @@ export default defineConfig({
   // (username.github.io/repo/), Vercel, or a plain file server
   base: "./",
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        maps: "maps.html"
+      }
+    }
+  },
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"]

@@ -41483,18 +41483,46 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
   }
 
   function ensureButton() {
-    if (document.getElementById(BTN_ID)) return;
-    var anchors = findAnchorButtons();
-    if (!anchors.length) return;
-    var anchor = anchors[0];
-    var btn = document.createElement("button");
-    btn.id = BTN_ID;
-    btn.type = "button";
-    btn.textContent = "⚡ Import magicplan Scan";
-    btn.className = anchor.className; // borrow the classic app's own styling
-    btn.style.marginLeft = "8px";
-    btn.addEventListener("click", openOverlay);
-    anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+    if (!document.getElementById(BTN_ID)) {
+      var anchors = findAnchorButtons();
+      if (anchors.length) {
+        var anchor = anchors[0];
+        var btn = document.createElement("button");
+        btn.id = BTN_ID;
+        btn.type = "button";
+        btn.textContent = "⚡ Import magicplan Scan";
+        btn.className = anchor.className; // borrow the classic app's own styling
+        btn.style.marginLeft = "8px";
+        btn.addEventListener("click", openOverlay);
+        anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+      }
+    }
+    ensureNavLink();
+  }
+
+  // "Map Scheduler" entry in the classic sidebar → the Pro page
+  function ensureNavLink() {
+    if (document.getElementById("fusion-pro-nav")) return;
+    var navBtns = document.querySelectorAll("button");
+    var anchor = null;
+    for (var i = 0; i < navBtns.length; i++) {
+      if ((navBtns[i].textContent || "").trim() === "Max Schedules") { anchor = navBtns[i]; break; }
+    }
+    if (!anchor || !anchor.parentNode) return;
+    var link = document.createElement("button");
+    link.id = "fusion-pro-nav";
+    link.type = "button";
+    link.className = anchor.className;
+    link.textContent = "";
+    var icon = document.createElement("span");
+    icon.textContent = "⚡";
+    icon.style.marginRight = "8px";
+    var label = document.createElement("span");
+    label.textContent = "Map Scheduler";
+    link.appendChild(icon);
+    link.appendChild(label);
+    link.addEventListener("click", function () { window.location.href = "./maps.html"; });
+    anchor.parentNode.insertBefore(link, anchor.nextSibling);
   }
 
   function openOverlay() {
