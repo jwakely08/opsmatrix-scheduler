@@ -22,6 +22,16 @@ export interface RoomTypeRule {
   label: string;
   /** flat qualifier minutes on top of general cleaning */
   qualifierMin: number;
+  /** how often this type is cleaned, e.g. "7x / week" — editable per account */
+  frequency: string;
+  builtIn?: boolean;
+}
+
+/** reusable non-space work definitions (discharges, sanitation routes, porters) */
+export interface NonSpaceDef {
+  id: string;
+  label: string;
+  defaultHours: number;
   builtIn?: boolean;
 }
 
@@ -34,7 +44,12 @@ export interface Rules {
   };
   tasks: TaskRule[];
   roomTypes: RoomTypeRule[];
+  nonSpaceDefs: NonSpaceDef[];
 }
+
+export const FREQUENCIES = [
+  "7x / week", "6x / week", "5x / week", "3x / week", "2x / week", "1x / week", "Every other week", "Monthly"
+];
 
 export const RULES_KEY = "opsmatrix_fusion_rules";
 
@@ -50,18 +65,23 @@ export function defaultRules(): Rules {
       { id: "trash-pull", label: "Trash Pull", sqftPerMin: null, flatMin: 2, autoFor: [], addable: true, builtIn: true }
     ],
     roomTypes: [
-      { id: "office", label: "Office", qualifierMin: 0, builtIn: true },
-      { id: "exam-room", label: "Exam Room", qualifierMin: 4, builtIn: true },
-      { id: "emergency-room", label: "Emergency Room", qualifierMin: 10, builtIn: true },
-      { id: "patient-room", label: "Patient Room", qualifierMin: 6, builtIn: true },
-      { id: "lounge", label: "Lounge", qualifierMin: 2, builtIn: true },
-      { id: "lobby", label: "Lobby", qualifierMin: 2, builtIn: true },
-      { id: "waiting-room", label: "Waiting Room", qualifierMin: 2, builtIn: true },
-      { id: "procedure-room", label: "Procedure Room", qualifierMin: 8, builtIn: true },
-      { id: "restroom", label: "Restroom", qualifierMin: 8, builtIn: true },
-      { id: "operating-room", label: "Operating Room", qualifierMin: 25, builtIn: true },
-      { id: "corridor", label: "Corridor", qualifierMin: 0, builtIn: true },
-      { id: "hallway", label: "Hallway", qualifierMin: 0, builtIn: true }
+      { id: "office", label: "Office", qualifierMin: 0, frequency: "5x / week", builtIn: true },
+      { id: "exam-room", label: "Exam Room", qualifierMin: 4, frequency: "7x / week", builtIn: true },
+      { id: "emergency-room", label: "Emergency Room", qualifierMin: 10, frequency: "7x / week", builtIn: true },
+      { id: "patient-room", label: "Patient Room", qualifierMin: 6, frequency: "7x / week", builtIn: true },
+      { id: "lounge", label: "Lounge", qualifierMin: 2, frequency: "7x / week", builtIn: true },
+      { id: "lobby", label: "Lobby", qualifierMin: 2, frequency: "7x / week", builtIn: true },
+      { id: "waiting-room", label: "Waiting Room", qualifierMin: 2, frequency: "7x / week", builtIn: true },
+      { id: "procedure-room", label: "Procedure Room", qualifierMin: 8, frequency: "7x / week", builtIn: true },
+      { id: "restroom", label: "Restroom", qualifierMin: 8, frequency: "7x / week", builtIn: true },
+      { id: "operating-room", label: "Operating Room", qualifierMin: 25, frequency: "7x / week", builtIn: true },
+      { id: "corridor", label: "Corridor", qualifierMin: 0, frequency: "7x / week", builtIn: true },
+      { id: "hallway", label: "Hallway", qualifierMin: 0, frequency: "7x / week", builtIn: true }
+    ],
+    nonSpaceDefs: [
+      { id: "discharge", label: "Discharges", defaultHours: 2, builtIn: true },
+      { id: "sanitation-route", label: "Sanitation Route", defaultHours: 3, builtIn: true },
+      { id: "day-porter", label: "Day Porter", defaultHours: 8, builtIn: true }
     ]
   };
 }
@@ -77,13 +97,21 @@ export function loadRules(): Rules {
       version: 1,
       general: { ...def.general, ...(parsed.general ?? {}) },
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : def.tasks,
-      roomTypes: Array.isArray(parsed.roomTypes) ? parsed.roomTypes : def.roomTypes
+      roomTypes: Array.isArray(parsed.roomTypes) ? parsed.roomTypes : def.roomTypes,
+      nonSpaceDefs: def.nonSpaceDefs
     };
+    rules.nonSpaceDefs = Array.isArray(parsed.nonSpaceDefs) ? parsed.nonSpaceDefs : def.nonSpaceDefs;
     for (const t of def.tasks) {
       if (!rules.tasks.some((x: TaskRule) => x.id === t.id)) rules.tasks.push(t);
     }
     for (const rt of def.roomTypes) {
       if (!rules.roomTypes.some((x: RoomTypeRule) => x.id === rt.id)) rules.roomTypes.push(rt);
+    }
+    for (const rt of rules.roomTypes) {
+      if (!rt.frequency) rt.frequency = def.roomTypes.find((x) => x.id === rt.id)?.frequency ?? "7x / week";
+    }
+    for (const ns of def.nonSpaceDefs) {
+      if (!rules.nonSpaceDefs.some((x: NonSpaceDef) => x.id === ns.id)) rules.nonSpaceDefs.push(ns);
     }
     return rules;
   } catch {
@@ -114,33 +142,65 @@ export function isCarpet(floorType: string | undefined): boolean {
 
 export interface MinuteLine { label: string; minutes: number; }
 
-/** The whole formula for one space, as visible line items. */
+export interface SpaceLike {
+  squareFeet?: number;
+  roomType?: string;
+  floorType?: string;
+  /** tasks this SPACE requires (general clean is always implicit) */
+  spaceTasks?: string[];
+  /** legacy field name, migrated on read */
+  fusionTasks?: string[];
+}
+
+export function requiredTasks(rules: Rules, space: SpaceLike): string[] {
+  const explicit = space.spaceTasks ?? space.fusionTasks;
+  if (Array.isArray(explicit)) return explicit;
+  return autoTasksFor(rules, typeIdFromLabel(rules, space.roomType ?? ""));
+}
+
+export interface MinuteOptions {
+  /** compute only these extra tasks (default: the space's required tasks) */
+  tasks?: string[];
+  /** include the general-clean base + room-type qualifier (default true) */
+  includeBase?: boolean;
+}
+
+/**
+ * The formula for one space, as visible line items.
+ * With options it prices a SUBSET — e.g. what one schedule covers in a room.
+ */
 export function computeMinutes(
   rules: Rules,
-  space: { squareFeet?: number; roomType?: string; floorType?: string; fusionTasks?: string[] }
+  space: SpaceLike,
+  opts?: MinuteOptions
 ): { lines: MinuteLine[]; total: number } {
   const sqft = Number(space.squareFeet) || 0;
   const carpet = isCarpet(space.floorType);
-  const per = carpet ? rules.general.carpetSqftPerMin : rules.general.hardSqftPerMin;
+  const includeBase = opts?.includeBase !== false;
   const lines: MinuteLine[] = [];
-  const base = per > 0 ? sqft / per : 0;
-  lines.push({
-    label: `General cleaning — 1 min per ${per} sq ft (${carpet ? "carpet, vacuuming included" : "hard floor, mopping included"})`,
-    minutes: base
-  });
-  const typeId = typeIdFromLabel(rules, space.roomType ?? "");
-  const rt = rules.roomTypes.find((x) => x.id === typeId);
-  if (rt && rt.qualifierMin) {
-    lines.push({ label: `${rt.label} qualifier`, minutes: rt.qualifierMin });
+
+  if (includeBase) {
+    const per = carpet ? rules.general.carpetSqftPerMin : rules.general.hardSqftPerMin;
+    lines.push({
+      label: `General cleaning — 1 min per ${per} sq ft (${carpet ? "carpet, vacuuming included" : "hard floor, mopping included"})`,
+      minutes: per > 0 ? sqft / per : 0
+    });
+    const rt = rules.roomTypes.find((x) => x.id === typeIdFromLabel(rules, space.roomType ?? ""));
+    if (rt && rt.qualifierMin) {
+      lines.push({ label: `${rt.label} qualifier`, minutes: rt.qualifierMin });
+    }
   }
-  const taskIds = space.fusionTasks ?? autoTasksFor(rules, typeId);
+  const taskIds = opts?.tasks ?? requiredTasks(rules, space);
   for (const tid of taskIds) {
     const t = rules.tasks.find((x) => x.id === tid);
     if (!t) continue;
     const m = t.sqftPerMin ? sqft / t.sqftPerMin : t.flatMin;
     lines.push({ label: t.label + (t.sqftPerMin ? ` — 1 min per ${t.sqftPerMin} sq ft` : ` — ${t.flatMin} min`), minutes: m });
   }
-  const total = Math.max(rules.general.minMinutes, Math.round(lines.reduce((s, l) => s + l.minutes, 0)));
+  const raw = lines.reduce((s, l) => s + l.minutes, 0);
+  const total = includeBase
+    ? Math.max(rules.general.minMinutes, Math.round(raw))
+    : Math.round(raw);
   return { lines, total };
 }
 
@@ -148,16 +208,40 @@ export function autoTasksFor(rules: Rules, typeId: string): string[] {
   return rules.tasks.filter((t) => t.autoFor.includes(typeId)).map((t) => t.id);
 }
 
-/** classic scope-task ids for a space's fusion tasks (keeps Classic screens sane) */
-export function classicTaskIds(space: { floorType?: string; fusionTasks?: string[] }): string[] {
-  const out = ["general-cleaning", "trash-pull", isCarpet(space.floorType) ? "vacuuming" : "wet-mop"];
-  const map: Record<string, string> = {
-    "auto-scrub": "floor-scrub", "dust-mop": "dust-mop", "high-dusting": "high-dusting",
-    "burnish": "floor-scrub", "trash-pull": "trash-pull"
-  };
-  for (const t of space.fusionTasks ?? []) {
-    const c = map[t];
-    if (c && !out.includes(c)) out.push(c);
+// ── our-vocab ↔ classic-vocab bridges (schedules store classic-friendly ids) ──
+const TO_CLASSIC: Record<string, string> = {
+  "auto-scrub": "floor-scrub", "dust-mop": "dust-mop", "high-dusting": "high-dusting",
+  "burnish": "burnish", "trash-pull": "trash-pull"
+};
+const FROM_CLASSIC: Record<string, string> = {
+  "floor-scrub": "auto-scrub", "dust-mop": "dust-mop", "high-dusting": "high-dusting",
+  "burnish": "burnish", "trash-pull": "trash-pull"
+};
+
+/**
+ * roomTasks entry for a schedule covering `ourTaskIds` in a room.
+ * "general" in the list marks primary coverage (base clean included).
+ */
+export function toClassicRoomTasks(space: SpaceLike, ourTaskIds: string[], primary: boolean): string[] {
+  const out: string[] = [];
+  if (primary) {
+    out.push("general-cleaning", isCarpet(space.floorType) ? "vacuuming" : "wet-mop");
+  }
+  for (const t of ourTaskIds) {
+    const c = TO_CLASSIC[t] ?? t;
+    if (!out.includes(c)) out.push(c);
   }
   return out;
+}
+
+export function fromClassicRoomTasks(ids: string[] | undefined): { primary: boolean; tasks: string[] } {
+  const list = ids ?? [];
+  const primary = list.includes("general-cleaning");
+  const tasks: string[] = [];
+  for (const id of list) {
+    if (["general-cleaning", "wet-mop", "vacuuming"].includes(id)) continue;
+    const ours = FROM_CLASSIC[id] ?? id;
+    if (!tasks.includes(ours)) tasks.push(ours);
+  }
+  return { primary, tasks };
 }

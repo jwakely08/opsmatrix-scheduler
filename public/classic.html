@@ -41500,29 +41500,41 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
     ensureNavLink();
   }
 
-  // "Map Scheduler" entry in the classic sidebar → the Pro page
+  // Max Schedules IS the consolidated hub now: the classic nav item opens it.
   function ensureNavLink() {
-    if (document.getElementById("fusion-pro-nav")) return;
     var navBtns = document.querySelectorAll("button");
-    var anchor = null;
     for (var i = 0; i < navBtns.length; i++) {
-      if ((navBtns[i].textContent || "").trim() === "Max Schedules") { anchor = navBtns[i]; break; }
+      var b = navBtns[i];
+      var t = (b.textContent || "").trim();
+      if (t === "Max Schedules" && !b.getAttribute("data-fusion-wired")) {
+        b.setAttribute("data-fusion-wired", "1");
+        b.addEventListener("click", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.location.href = "./maps.html";
+        }, true); // capture: beat the classic app's own handler
+      }
+      // retire the sections Scope now owns
+      if ((t === "Break Times" || t === "Turn Times" || t === "Turn Rules") && b.style.display !== "none") {
+        b.style.display = "none";
+      }
     }
-    if (!anchor || !anchor.parentNode) return;
-    var link = document.createElement("button");
-    link.id = "fusion-pro-nav";
-    link.type = "button";
-    link.className = anchor.className;
-    link.textContent = "";
-    var icon = document.createElement("span");
-    icon.textContent = "⚡";
-    icon.style.marginRight = "8px";
-    var label = document.createElement("span");
-    label.textContent = "Map Scheduler";
-    link.appendChild(icon);
-    link.appendChild(label);
-    link.addEventListener("click", function () { window.location.href = "./maps.html"; });
-    anchor.parentNode.insertBefore(link, anchor.nextSibling);
+    // Max Space gets its map entrance next to the Floor Plans tab
+    if (!document.getElementById("fusion-space-map")) {
+      var anchor = null;
+      for (var j = 0; j < navBtns.length; j++) {
+        if ((navBtns[j].textContent || "").trim() === "Floor Plans") { anchor = navBtns[j]; }
+      }
+      if (anchor && anchor.parentNode) {
+        var mapBtn = document.createElement("button");
+        mapBtn.id = "fusion-space-map";
+        mapBtn.type = "button";
+        mapBtn.className = anchor.className;
+        mapBtn.textContent = "🗺 Map View";
+        mapBtn.addEventListener("click", function () { window.location.href = "./maps.html#spaces"; });
+        anchor.parentNode.insertBefore(mapBtn, anchor.nextSibling);
+      }
+    }
   }
 
   function openOverlay() {
