@@ -21,8 +21,11 @@ type Tab = "map" | "schedules" | "spaces" | "scope";
 export function MapsApp() {
   const [data, setData] = useState<ClassicData>(() => loadClassic());
   const [rules, setRules] = useState<Rules>(() => loadRules());
+  // #scope = the Admin Settings → Scope manager (not a hub tab);
+  // #spaces = Max Space's map entrance
+  const scopeOnly = window.location.hash === "#scope";
   const [tab, setTab] = useState<Tab>(() =>
-    window.location.hash === "#spaces" ? "spaces" : "map");
+    scopeOnly ? "scope" : window.location.hash === "#spaces" ? "spaces" : "map");
   const [roomSel, setRoomSel] = useState<string | null>(null);
   const [schedSel, setSchedSel] = useState<string | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -108,16 +111,24 @@ export function MapsApp() {
     <div className="pro-shell">
       <header className="pro-head">
         <a className="pbtn ghost" href="./classic.html">← OpsMatrix</a>
-        <h1>Max <span>Schedules</span></h1>
-        <nav className="ptabs">
-          {(["map", "schedules", "spaces", "scope"] as Tab[]).map((t) => (
-            <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
-              {t === "map" ? "Map" : t === "schedules" ? "Schedules" : t === "spaces" ? "Spaces" : "Scope"}
-            </button>
-          ))}
-        </nav>
+        {scopeOnly ? (
+          <h1>Admin Settings — <span>Scope</span></h1>
+        ) : (
+          <>
+            <h1>Max <span>Schedules</span></h1>
+            <nav className="ptabs">
+              {(["map", "schedules", "spaces"] as Tab[]).map((t) => (
+                <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
+                  {t === "map" ? "Map" : t === "schedules" ? "Schedules" : "Spaces"}
+                </button>
+              ))}
+            </nav>
+          </>
+        )}
         <span className="grow" />
-        <button className="pbtn" onClick={() => setReport(true)}>⚠ Unassigned Tasks</button>
+        {!scopeOnly && (
+          <button className="pbtn" onClick={() => setReport(true)}>⚠ Unassigned Tasks</button>
+        )}
       </header>
 
       {(tab === "map" || tab === "spaces") && (

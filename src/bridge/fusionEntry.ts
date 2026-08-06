@@ -205,7 +205,7 @@ import dxfRaw from "../../test-fixtures/Test_project_-_1st_Floor.dxf?raw";
 import csvRaw from "../../test-fixtures/Test_project_Statistics.csv?raw";
 
 export function demoStamp(): string {
-  return "classic-demo-v1:" + dxfRaw.length + ":" + csvRaw.length;
+  return "classic-demo-v2:" + dxfRaw.length + ":" + csvRaw.length;
 }
 
 export function buildClassicDemo() {

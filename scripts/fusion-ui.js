@@ -54,6 +54,15 @@
       if ((t === "Break Times" || t === "Turn Times" || t === "Turn Rules") && b.style.display !== "none") {
         b.style.display = "none";
       }
+      // Admin Settings → scope opens the Scope manager (the one source of truth)
+      if (t === "scope" && !b.getAttribute("data-fusion-wired")) {
+        b.setAttribute("data-fusion-wired", "1");
+        b.addEventListener("click", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.location.href = "./maps.html#scope";
+        }, true);
+      }
     }
     // Max Space gets its map entrance next to the Floor Plans tab
     if (!document.getElementById("fusion-space-map")) {
