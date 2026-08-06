@@ -64,13 +64,14 @@
         }, true);
       }
     }
-    // Max Space gets its map entrance next to the Floor Plans tab
-    if (!document.getElementById("fusion-space-map")) {
-      var anchor = null;
-      for (var j = 0; j < navBtns.length; j++) {
-        if ((navBtns[j].textContent || "").trim() === "Floor Plans") { anchor = navBtns[j]; }
-      }
-      if (anchor && anchor.parentNode) {
+    // Max Space: the Floor Plans tab is replaced by Map View (its own page,
+    // where all room details get edited — unique to Max Space)
+    var anchor = null;
+    for (var j = 0; j < navBtns.length; j++) {
+      if ((navBtns[j].textContent || "").trim() === "Floor Plans") { anchor = navBtns[j]; }
+    }
+    if (anchor) {
+      if (!document.getElementById("fusion-space-map") && anchor.parentNode) {
         var mapBtn = document.createElement("button");
         mapBtn.id = "fusion-space-map";
         mapBtn.type = "button";
@@ -79,6 +80,7 @@
         mapBtn.addEventListener("click", function () { window.location.href = "./maps.html#spaces"; });
         anchor.parentNode.insertBefore(mapBtn, anchor.nextSibling);
       }
+      if (anchor.style.display !== "none") anchor.style.display = "none";
     }
   }
 

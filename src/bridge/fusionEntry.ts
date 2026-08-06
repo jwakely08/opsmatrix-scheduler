@@ -205,11 +205,24 @@ import dxfRaw from "../../test-fixtures/Test_project_-_1st_Floor.dxf?raw";
 import csvRaw from "../../test-fixtures/Test_project_Statistics.csv?raw";
 
 export function demoStamp(): string {
-  return "classic-demo-v2:" + dxfRaw.length + ":" + csvRaw.length;
+  return "classic-demo-v3:" + dxfRaw.length + ":" + csvRaw.length;
 }
+
+/** demo floor finishes: real values on most rooms, ONE genuinely missing so
+ *  the Spaces map shows an honest red "needs attention" example */
+const DEMO_FLOORS: Record<string, string> = {
+  "Bedroom 1": "Carpet",
+  "Bedroom 2": "Hard floor — finished",
+  "Bedroom 3": "Carpet"
+  // "Other" stays empty on purpose — the demo's fix-me room
+};
 
 export function buildClassicDemo() {
   const scan = importScan(dxfRaw, csvRaw, { building: "Demo Medical Center" });
+  for (const sp of scan.spaces) {
+    const ft = DEMO_FLOORS[String(sp.roomNumber)];
+    if (ft) sp.floorType = ft;
+  }
   const now = new Date();
   const iso = now.toISOString();
   const today = (d: Date) => d.toISOString().slice(0, 10);

@@ -158,20 +158,22 @@ export function uncovered(data: ClassicData, rules: Rules, space: ClassicSpace):
 
 /**
  * Set one schedule's coverage of one room. tasks = our task ids;
- * primary = covers the base general clean. Empty tasks + !primary → remove.
+ * primary = covers the base general clean. Empty tasks + !primary → remove,
+ * unless keepEmpty (an explicit "add to schedule, tasks picked next").
  */
 export function setCoverage(
   data: ClassicData,
   spaceId: string,
   scheduleId: string,
   primary: boolean,
-  tasks: string[]
+  tasks: string[],
+  keepEmpty = false
 ) {
   const space = (data.v7.spaces ?? []).find((s) => s.id === spaceId);
   const sched = (data.v7.schedules ?? []).find((s) => s.id === scheduleId);
   if (!space || !sched) return;
   const inOrder = (sched.spaceOrder ?? []).includes(spaceId);
-  const wants = primary || tasks.length > 0;
+  const wants = primary || tasks.length > 0 || keepEmpty;
   if (wants && !inOrder) sched.spaceOrder = [...(sched.spaceOrder ?? []), spaceId];
   if (!wants && inOrder) {
     sched.spaceOrder = (sched.spaceOrder ?? []).filter((id) => id !== spaceId);
@@ -266,6 +268,9 @@ export function scheduleColor(schedules: ClassicSchedule[], id: string | undefin
   const s = schedules.find((x) => x.id === id);
   return (s?.color as string) || "#64748b";
 }
+
+/** the three floor finishes (wax or no wax, plus carpet) */
+export const FLOOR_TYPES = ["Carpet", "Hard floor — finished", "Hard floor — unfinished"];
 
 /** data-completeness check for the Spaces map (red = fix me) */
 export function spaceIncomplete(space: ClassicSpace): string[] {
