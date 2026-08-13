@@ -41630,8 +41630,35 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
     return file && (file.type === "application/pdf" || /\.pdf$/i.test(file.name || ""));
   }
 
+  /**
+   * The archive's own wording predates PDF support and actively tells the user
+   * PDFs are not allowed ("Choose Floor Plan Image", "PNG or JPG"). Retext both
+   * — replacing only the text node, so the button keeps its icon <span>.
+   * Runs on every re-render; the guards stop it re-firing on its own change.
+   */
+  function relabelPlanPicker() {
+    var btns = document.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) {
+      var kids = btns[i].childNodes;
+      for (var k = 0; k < kids.length; k++) {
+        if (kids[k].nodeType === 3 && (kids[k].nodeValue || "").trim() === "Choose Floor Plan Image") {
+          kids[k].nodeValue = "Choose Floor Plan (image or PDF)";
+        }
+      }
+    }
+    var hints = document.querySelectorAll("p");
+    for (var j = 0; j < hints.length; j++) {
+      if (hints[j].children.length) continue;
+      var txt = hints[j].textContent || "";
+      if (txt.indexOf("PNG or JPG") !== -1) {
+        hints[j].textContent = txt.replace("PNG or JPG", "PNG, JPG or PDF");
+      }
+    }
+  }
+
   /** widen the plan picker and transparently convert PDFs */
   function ensurePdfSupport() {
+    relabelPlanPicker();
     var inputs = document.querySelectorAll('input[type="file"]');
     for (var i = 0; i < inputs.length; i++) {
       var input = inputs[i];
@@ -41643,15 +41670,53 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
     }
   }
 
+  /**
+   * The classic app requires Building and Floor BEFORE a file, and silently
+   * throws the file away when they are blank — you pick a plan and nothing
+   * happens, with no message. Find those two fields so we can say so.
+   * Returns nulls if the form ever changes shape; we then fail open rather
+   * than block a working upload.
+   */
+  function planFormFields() {
+    var building = null, floor = null;
+    var inputs = document.querySelectorAll("input");
+    for (var i = 0; i < inputs.length; i++) {
+      var ph = inputs[i].placeholder || "";
+      if (/main tower/i.test(ph)) building = inputs[i];
+      else if (/^e\.g\.\s*4$/i.test(ph.trim())) floor = inputs[i];
+    }
+    return { building: building, floor: floor };
+  }
+
   function onPlanFileChosen(e) {
     var input = e.target;
     var file = input.files && input.files[0];
-    if (!isPdf(file) || input.getAttribute("data-fusion-converting")) return;
+    if (!file || input.getAttribute("data-fusion-converting")) return;
+
+    // say what the app won't: which box still needs filling in
+    var f = planFormFields();
+    var missing = [];
+    if (f.building && !f.building.value.trim()) missing.push("Building");
+    if (f.floor && !f.floor.value.trim()) missing.push("Floor");
+    if (missing.length) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      input.value = "";
+      var warn = showNote("Type the " + missing.join(" and ") +
+        " above first, then choose your floor plan again.");
+      warn.style.background = "#b45309";
+      setTimeout(function () { warn.remove(); }, 6000);
+      var focusMe = (f.building && !f.building.value.trim()) ? f.building : f.floor;
+      if (focusMe) focusMe.focus();
+      return;
+    }
+
+    if (!isPdf(file)) return; // images already work — let them straight through
     // hold the PDF back; hand the app a PNG instead
     e.stopImmediatePropagation();
     e.preventDefault();
     input.setAttribute("data-fusion-converting", "1");
-    var note = showPdfNote("Converting " + file.name + "…");
+    var note = showNote("Converting " + file.name + "…");
     pdfToPngFile(file).then(function (png) {
       var dt = new DataTransfer();
       dt.items.add(png);
@@ -41668,7 +41733,7 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
     });
   }
 
-  function showPdfNote(text) {
+  function showNote(text) {
     var n = document.createElement("div");
     n.textContent = text;
     n.style.cssText = "position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:99999;" +
@@ -41774,7 +41839,10 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
   function boot() {
     ensureSpaceScreen();
     ensureButton();
-    mo.observe(document.body, { childList: true, subtree: true });
+    // characterData too: React swaps some labels (e.g. the plan picker's) by
+    // rewriting the text node in place, which is not a childList mutation.
+    // Our relabels are guarded by an exact-match test, so this cannot loop.
+    mo.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();
