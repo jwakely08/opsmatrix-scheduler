@@ -326,6 +326,12 @@ export const FLOOR_TYPES = ["Carpet", "Hard floor — finished", "Hard floor —
 /** data-completeness check for the Spaces map (red = fix me) */
 export function spaceIncomplete(space: ClassicSpace): string[] {
   const issues: string[] = [];
+  const number = String(space.roomNumber ?? "").trim();
+  const name = String(space.roomName ?? "").trim();
+  // the FULL truth, not a subset: a room with no number can't be printed on
+  // a schedule meaningfully, and one with no name at all can't be discussed
+  if (!name && !number) issues.push("room name");
+  if (!number) issues.push("room number");
   if (!space.roomType || space.roomType === "Other") issues.push("room type");
   if (!space.floorType) issues.push("floor type");
   if (!Number(space.squareFeet)) issues.push("square feet");

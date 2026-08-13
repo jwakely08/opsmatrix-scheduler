@@ -246,28 +246,80 @@
     });
   }
 
-  /** any plan file → { dataUrl, aspect } for the AI reader */
+  /** a box within a box → the same box on the original source */
+  function composeBoxes(outer, inner) {
+    var w = outer.x1 - outer.x0, h = outer.y1 - outer.y0;
+    return {
+      x0: outer.x0 + inner.x0 * w, y0: outer.y0 + inner.y0 * h,
+      x1: outer.x0 + inner.x1 * w, y1: outer.y0 + inner.y1 * h
+    };
+  }
+
+  /**
+   * Any plan file → { dataUrl, width, height, aspect, renderRegion } for the
+   * AI reader. renderRegion re-renders a slice of the SOURCE at full quality,
+   * which is what lets the reader zoom in on the drawing part of an
+   * architect's sheet — PDFs re-rasterise from vectors, images crop from the
+   * original pixels.
+   */
   function fileToPlanImage(file) {
     if (isPdf(file)) {
-      return pdfToCanvas(file).then(function (canvas) {
-        return { dataUrl: canvas.toDataURL("image/png"), width: canvas.width, height: canvas.height, aspect: canvas.width / canvas.height };
-      });
+      return loadPdfLib()
+        .then(function (lib) { return file.arrayBuffer().then(function (buf) { return lib.getDocument({ data: buf }).promise; }); })
+        .then(function (doc) { return doc.getPage(1); })
+        .then(function (page) {
+          var base = page.getViewport({ scale: 1 });
+          function renderAt(box, target) {
+            var bw = (box.x1 - box.x0) * base.width;
+            var bh = (box.y1 - box.y0) * base.height;
+            var scale = Math.min(8, Math.max(1, target / Math.max(bw, bh)));
+            var viewport = page.getViewport({
+              scale: scale,
+              offsetX: -box.x0 * base.width * scale,
+              offsetY: -box.y0 * base.height * scale
+            });
+            var canvas = document.createElement("canvas");
+            canvas.width = Math.round(bw * scale);
+            canvas.height = Math.round(bh * scale);
+            var ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            return page.render({ canvasContext: ctx, viewport: viewport, canvas: canvas }).promise
+              .then(function () {
+                return {
+                  dataUrl: canvas.toDataURL("image/png"),
+                  width: canvas.width, height: canvas.height,
+                  aspect: canvas.width / canvas.height,
+                  renderRegion: function (b, t) { return renderAt(composeBoxes(box, b), t); }
+                };
+              });
+          }
+          return renderAt({ x0: 0, y0: 0, x1: 1, y1: 1 }, 2000);
+        });
     }
     return new Promise(function (resolve, reject) {
       var url = URL.createObjectURL(file);
       var img = new Image();
       img.onload = function () {
-        var long = Math.max(img.width, img.height);
-        var scale = long > 2000 ? 2000 / long : 1;
-        var canvas = document.createElement("canvas");
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        var ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        URL.revokeObjectURL(url);
-        resolve({ dataUrl: canvas.toDataURL("image/jpeg", 0.92), width: canvas.width, height: canvas.height, aspect: canvas.width / canvas.height });
+        function renderAt(box, target) {
+          var sx = box.x0 * img.width, sy = box.y0 * img.height;
+          var sw = (box.x1 - box.x0) * img.width, sh = (box.y1 - box.y0) * img.height;
+          var scale = Math.min(1, target / Math.max(sw, sh)); // never upscale pixels
+          var canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(sw * scale));
+          canvas.height = Math.max(1, Math.round(sh * scale));
+          var ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+          return Promise.resolve({
+            dataUrl: canvas.toDataURL("image/jpeg", 0.92),
+            width: canvas.width, height: canvas.height,
+            aspect: canvas.width / canvas.height,
+            renderRegion: function (b, t) { return renderAt(composeBoxes(box, b), t); }
+          });
+        }
+        renderAt({ x0: 0, y0: 0, x1: 1, y1: 1 }, 2000).then(resolve, reject);
       };
       img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("That image could not be opened.")); };
       img.src = url;
@@ -387,12 +439,20 @@
     // screen exists to reach the smart path.
     e.stopImmediatePropagation();
     e.preventDefault();
+    // WE hold the file from here. The picker is emptied immediately so the
+    // classic app cannot also store the raw picture — one upload, one plan.
+    input.value = "";
     showSmartChoice(input, file, f.building ? f.building.value.trim() : "", f.floor ? f.floor.value.trim() : "");
   }
 
-  /** hand the picked file to the classic app's own handler, untouched */
+  /** hand the held file to the classic app's own handler, untouched */
   function passThrough(input, file) {
     input.setAttribute("data-fusion-passthrough", "1");
+    if (!isPdf(file)) {
+      var dt0 = new DataTransfer();
+      dt0.items.add(file);
+      input.files = dt0.files;
+    }
     if (isPdf(file)) {
       input.setAttribute("data-fusion-converting", "1");
       var note = showNote("Converting " + file.name + "…");
@@ -517,6 +577,7 @@
         imageWidth: picture.width,
         imageHeight: picture.height,
         aspect: picture.aspect,
+        renderRegion: picture.renderRegion,
         building: building,
         floor: floor,
         onProgress: function (m) { setSmartStatus(m); }

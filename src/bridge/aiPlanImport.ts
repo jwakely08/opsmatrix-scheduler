@@ -75,8 +75,17 @@ export function planSchema(): Record<string, unknown> {
 
 export const PLAN_PROMPT = [
   "You are reading an architectural floor plan for a hospital cleaning system.",
+  "This may be a professional CAD sheet: coloured room fills, furniture in",
+  "every room, door swings, grid bubbles, dimension strings. Work from the",
+  "wall lines and the printed room tags only.",
   "",
   "Trace the CLEANABLE FLOOR AREA of every enclosed room on this plan.",
+  "",
+  "EVERY ROOM SEPARATELY. Each enclosed room — every exam room, office,",
+  "toilet, storage closet — is its own entry with its own outline. Never merge",
+  "a row of rooms into one zone, and never return a department or wing as one",
+  "big shape: if a large label covers an area that visibly contains smaller",
+  "walled rooms, return the smaller rooms. Outlines must not overlap.",
   "",
   "Ignore everything that is not a room boundary: colour fills and shading,",
   "furniture, fixtures, beds, equipment symbols, door swings, north arrows,",
@@ -108,6 +117,118 @@ export const PLAN_PROMPT = [
   "",
   "Return every room you can see. Do not stop early."
 ].join("\n");
+
+// ── pass 1: find the drawing on the sheet ───────────────────────────────────
+// Architect sheets bury the plan in a page of title blocks, legends, detail
+// views and margin. Read the whole sheet and the room tags are a few pixels
+// tall — unreadable, which comes back as a handful of coarse "zones". So the
+// reader works like a person: find the drawing first, then lean in close.
+
+export interface DrawingBox { x0: number; y0: number; x1: number; y1: number }
+
+export function boxSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      x0: { type: "number" }, y0: { type: "number" },
+      x1: { type: "number" }, y1: { type: "number" }
+    },
+    required: ["x0", "y0", "x1", "y1"],
+    additionalProperties: false
+  };
+}
+
+export const LOCATE_PROMPT = [
+  "This image is a page that contains an architectural floor plan, possibly",
+  "surrounded by a title block, legends, notes, schedules, detail views and",
+  "blank margin.",
+  "",
+  "Return the bounding box of the MAIN FLOOR PLAN DRAWING only — the walls",
+  "and rooms — excluding the title block, legends, keys, notes, north arrows,",
+  "scale bars, elevation/detail views and empty margin.",
+  "",
+  "Coordinates are fractions of the image between 0.0 and 1.0: x0,y0 is the",
+  "box's top-left corner, x1,y1 its bottom-right. Include the whole drawing",
+  "with a small margin rather than cutting any of it off."
+].join("\n");
+
+/** clamp/repair a located box; null when it is unusable */
+export function sanitizeBox(box: Partial<DrawingBox> | null | undefined): DrawingBox | null {
+  if (!box) return null;
+  let { x0, y0, x1, y1 } = box as DrawingBox;
+  if (![x0, y0, x1, y1].every(Number.isFinite)) return null;
+  // undo a pixel/percent scale the same way room outlines are rescued
+  const maxC = Math.max(Math.abs(x0), Math.abs(y0), Math.abs(x1), Math.abs(y1));
+  if (maxC > 1.5) {
+    const d = maxC <= 150 ? 100 : maxC <= 1500 ? 1000 : maxC;
+    x0 /= d; y0 /= d; x1 /= d; y1 /= d;
+  }
+  const c = (n: number) => Math.min(1, Math.max(0, n));
+  const bx: DrawingBox = {
+    x0: c(Math.min(x0, x1)), y0: c(Math.min(y0, y1)),
+    x1: c(Math.max(x0, x1)), y1: c(Math.max(y0, y1))
+  };
+  // too small to be the plan, or so large that cropping is pointless
+  if (bx.x1 - bx.x0 < 0.12 || bx.y1 - bx.y0 < 0.12) return null;
+  if (bx.x1 - bx.x0 > 0.97 && bx.y1 - bx.y0 > 0.97) return null;
+  return bx;
+}
+
+/** grow the box slightly so a tight answer never clips a wall */
+export function padBox(box: DrawingBox, pad = 0.02): DrawingBox {
+  return {
+    x0: Math.max(0, box.x0 - pad), y0: Math.max(0, box.y0 - pad),
+    x1: Math.min(1, box.x1 + pad), y1: Math.min(1, box.y1 + pad)
+  };
+}
+
+/** ask where the drawing is; null (never a throw) when it cannot say */
+export async function locateDrawing(
+  opts: Pick<ReadPlanOptions, "apiKey" | "imageDataUrl" | "model" | "signal">
+): Promise<DrawingBox | null> {
+  try {
+    const { mediaType, data } = splitDataUrl(opts.imageDataUrl);
+    const res = await fetch(API_URL, {
+      method: "POST",
+      signal: opts.signal,
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": opts.apiKey.trim(),
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: opts.model || AI_MODEL,
+        max_tokens: 2000,
+        output_config: { effort: "low", format: { type: "json_schema", schema: boxSchema() } },
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image", source: { type: "base64", media_type: mediaType, data } },
+            { type: "text", text: LOCATE_PROMPT }
+          ]
+        }]
+      })
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    if (json.stop_reason === "refusal") return null;
+    const text = (json.content || [])
+      .filter((b: { type: string }) => b.type === "text")
+      .map((b: { text: string }) => b.text).join("");
+    return sanitizeBox(JSON.parse(text));
+  } catch {
+    return null; // the crop is an optimisation — never fail the import over it
+  }
+}
+
+/** a rendered picture of the plan (or a region of it) */
+export interface PlanPicture {
+  dataUrl: string;
+  width: number;
+  height: number;
+  aspect: number;
+}
 
 export interface ReadPlanOptions {
   apiKey: string;
@@ -211,12 +332,54 @@ export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReadi
       ? `Claude found ${reported} rooms but their outlines were unusable. Try again — if it repeats, send a sharper export of the plan.`
       : "No rooms could be found on that image. Make sure the whole plan is visible and the walls are legible.");
   }
-  opts.onProgress?.(`Found ${rooms.length} rooms — drawing the plan…`);
+  const kept = dropZoneWrappers(rooms);
+  opts.onProgress?.(`Found ${kept.length} rooms — drawing the plan…`);
   return {
     buildingName: (parsed.buildingName || "").trim(),
     floorName: (parsed.floorName || "").trim(),
-    rooms
+    rooms: kept
   };
+}
+
+/**
+ * A model that read a department label sometimes returns the whole department
+ * as one giant "room" wrapped around the real ones. A wrapper is recognisable:
+ * far larger than the typical room AND holding several other rooms' centres
+ * inside it. Corridors are long and thin, so they never match both tests.
+ */
+export function dropZoneWrappers(rooms: AiRoom[]): AiRoom[] {
+  if (rooms.length < 4) return rooms;
+  const areas = rooms.map((r) => Math.abs(polygonArea(r.polygon)));
+  const sorted = [...areas].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] || 0;
+  if (median <= 0) return rooms;
+  return rooms.filter((r, i) => {
+    if (areas[i] <= 6 * median) return true;
+    let contained = 0;
+    for (let j = 0; j < rooms.length; j++) {
+      if (j === i) continue;
+      const c = centroid(rooms[j].polygon);
+      if (pointInPolygon(r.polygon, c[0], c[1])) contained++;
+    }
+    return contained < 3;
+  });
+}
+
+function centroid(poly: number[][]): number[] {
+  let x = 0, y = 0;
+  for (const p of poly) { x += p[0]; y += p[1]; }
+  return [x / poly.length, y / poly.length];
+}
+
+function pointInPolygon(poly: number[][], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    if ((poly[i][1] > y) !== (poly[j][1] > y) &&
+      x < ((poly[j][0] - poly[i][0]) * (y - poly[i][1])) / (poly[j][1] - poly[i][1]) + poly[i][0]) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }
 
 function explainHttpError(status: number, body: string): string {
@@ -363,7 +526,13 @@ export function buildPlanFromRooms(
   const floorName = opts.floor.trim() || reading.floorName || "1st Floor";
   const planId = `ai-${slug(building)}-${slug(floorName)}-${stamp}`;
 
-  const WALL = 11; // px of wall drawn around each room
+  // wall thickness follows the plan's real scale (~5–6 inches of wall) so a
+  // dense clinic floor is not blotted out by cartoon-fat walls; without a
+  // scale, stay thin — thin walls on a sparse plan still read fine
+  const pxPerFtEarly = derivePxPerFt(reading.rooms, w, h);
+  const WALL = pxPerFtEarly
+    ? Math.max(3, Math.min(11, Math.round(pxPerFtEarly * 0.45)))
+    : 5;
   const toPx = (p: number[]) => ({ x: Math.round(p[0] * w * 10) / 10, y: Math.round(p[1] * h * 10) / 10 });
 
   const roomPaths = reading.rooms
@@ -383,7 +552,7 @@ export function buildPlanFromRooms(
     `</svg>`;
   const img = "data:image/svg+xml;base64," + b64(svg);
 
-  const pxPerFt = derivePxPerFt(reading.rooms, w, h);
+  const pxPerFt = pxPerFtEarly;
 
   const spaces = reading.rooms.map((r, i) => {
     const guessed = guessType(r.name || r.roomNumber);
@@ -449,15 +618,47 @@ export function buildPlanFromRooms(
   };
 }
 
-/** the whole job: picture in, finished OpsMatrix plan out */
+/**
+ * The whole job: picture in, finished OpsMatrix plan out. Two passes when the
+ * caller can re-render regions: first find the drawing on the sheet, then
+ * read the rooms from a full-resolution crop of just the drawing — the
+ * difference between reading a blueprint at arm's length and leaning in.
+ */
 export async function importPlanFromImage(
-  opts: ReadPlanOptions & { aspect?: number }
+  opts: ReadPlanOptions & {
+    aspect?: number;
+    /** re-render a region of the source at a target long edge, losslessly for PDFs */
+    renderRegion?: (box: DrawingBox, targetLongEdge: number) => Promise<PlanPicture>;
+  }
 ): Promise<ImportResult> {
-  const reading = await readPlanWithAI(opts);
+  let picture: PlanPicture = {
+    dataUrl: opts.imageDataUrl,
+    width: opts.imageWidth ?? 0,
+    height: opts.imageHeight ?? 0,
+    aspect: opts.aspect ?? 1.4
+  };
+
+  if (opts.renderRegion) {
+    opts.onProgress?.("Finding the drawing on the sheet…");
+    const box = await locateDrawing(opts);
+    if (box) {
+      try {
+        picture = await opts.renderRegion(padBox(box), 2576);
+        opts.onProgress?.("Zooming in on the plan…");
+      } catch { /* cropping is an optimisation — fall back to the full sheet */ }
+    }
+  }
+
+  const reading = await readPlanWithAI({
+    ...opts,
+    imageDataUrl: picture.dataUrl,
+    imageWidth: picture.width || undefined,
+    imageHeight: picture.height || undefined
+  });
   return buildPlanFromRooms(reading, {
     building: opts.building || "",
     floor: opts.floor || "",
-    aspect: opts.aspect
+    aspect: picture.aspect
   });
 }
 

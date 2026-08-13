@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   sanitizeRooms, normalizeCoordinateScale, polygonArea, derivePxPerFt,
-  buildPlanFromRooms, planSchema, AI_ROOM_TYPES, type AiRoom
+  buildPlanFromRooms, planSchema, AI_ROOM_TYPES, sanitizeBox, padBox,
+  dropZoneWrappers, type AiRoom
 } from "./aiPlanImport";
 
 /** a 10x10 unit square room occupying a quarter of the image */
@@ -213,6 +214,58 @@ describe("buildPlanFromRooms", () => {
     expect([wide.plan.w, wide.plan.h]).toEqual([1000, 500]);
     const tall = buildPlanFromRooms(reading, { building: "", floor: "", aspect: 0.5, size: 1000, now: "T", stamp: "s" });
     expect([tall.plan.w, tall.plan.h]).toEqual([500, 1000]);
+  });
+});
+
+describe("finding the drawing on an architect's sheet", () => {
+  it("accepts a sensible box and orders its corners", () => {
+    expect(sanitizeBox({ x0: 0.6, y0: 0.5, x1: 0.1, y1: 0.05 }))
+      .toEqual({ x0: 0.1, y0: 0.05, x1: 0.6, y1: 0.5 });
+  });
+
+  it("rescues a box answered in the wrong coordinate scale", () => {
+    expect(sanitizeBox({ x0: 100, y0: 50, x1: 600, y1: 500 }))
+      .toEqual({ x0: 0.1, y0: 0.05, x1: 0.6, y1: 0.5 });
+  });
+
+  it("rejects boxes that cannot be the plan", () => {
+    expect(sanitizeBox(null)).toBeNull();
+    expect(sanitizeBox({ x0: NaN, y0: 0, x1: 1, y1: 1 })).toBeNull();
+    expect(sanitizeBox({ x0: 0.4, y0: 0.4, x1: 0.45, y1: 0.45 })).toBeNull(); // sliver
+    expect(sanitizeBox({ x0: 0, y0: 0, x1: 1, y1: 1 })).toBeNull();           // whole sheet — no point cropping
+  });
+
+  it("pads the box so a tight answer never clips a wall", () => {
+    const p = padBox({ x0: 0.1, y0: 0.1, x1: 0.6, y1: 0.5 });
+    expect(p.x0).toBeCloseTo(0.08, 6);
+    expect(p.y1).toBeCloseTo(0.52, 6);
+    expect(padBox({ x0: 0.01, y0: 0.01, x1: 0.99, y1: 0.99 }).x0).toBe(0); // clamped
+  });
+});
+
+describe("zone wrappers (a department returned as one giant 'room')", () => {
+  const small = (x: number, y: number) => room({ name: "Exam", polygon: square(x, y, 0.08) });
+
+  it("drops a huge shape wrapped around several real rooms", () => {
+    const wrapper = room({ name: "PACT TEAM AREA", polygon: square(0.05, 0.05, 0.8) });
+    const rooms = [wrapper, small(0.1, 0.1), small(0.3, 0.1), small(0.5, 0.1), small(0.1, 0.4)];
+    const kept = dropZoneWrappers(rooms);
+    expect(kept.map((r) => r.name)).not.toContain("PACT TEAM AREA");
+    expect(kept).toHaveLength(4);
+  });
+
+  it("keeps a long thin corridor — big but containing nobody", () => {
+    const corridor = room({
+      name: "Corridor",
+      polygon: [[0.05, 0.5], [0.95, 0.5], [0.95, 0.56], [0.05, 0.56]]
+    });
+    const rooms = [corridor, small(0.1, 0.1), small(0.3, 0.1), small(0.5, 0.1), small(0.7, 0.1)];
+    expect(dropZoneWrappers(rooms).map((r) => r.name)).toContain("Corridor");
+  });
+
+  it("leaves small plans alone entirely", () => {
+    const rooms = [small(0.1, 0.1), small(0.3, 0.1), room({ polygon: square(0, 0, 0.9) })];
+    expect(dropZoneWrappers(rooms)).toHaveLength(3);
   });
 });
 

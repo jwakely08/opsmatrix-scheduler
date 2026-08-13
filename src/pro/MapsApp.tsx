@@ -687,10 +687,16 @@ function SpaceSidebar({ space, rules, onClose, onChange }: {
       </div>
       {issues.length > 0 && <p className="warntext">⚠ Missing: {issues.join(", ")}</p>}
 
-      <label className="pfield">Room name
-        <input value={String(space.roomNumber ?? "")}
-          onChange={(e) => onChange({ roomNumber: e.target.value, roomName: e.target.value })} />
-      </label>
+      <div className="prow">
+        <label className="pfield">Room number
+          <input value={String(space.roomNumber ?? "")} placeholder="e.g. 4E-102"
+            onChange={(e) => onChange({ roomNumber: e.target.value })} />
+        </label>
+        <label className="pfield">Room name
+          <input value={String(space.roomName ?? "")} placeholder="e.g. Patient Room"
+            onChange={(e) => onChange({ roomName: e.target.value })} />
+        </label>
+      </div>
       <label className="pfield">Room type
         <select value={typeId} onChange={(e) => {
           const rt = rules.roomTypes.find((x) => x.id === e.target.value);

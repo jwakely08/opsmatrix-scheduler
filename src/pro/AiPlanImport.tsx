@@ -42,6 +42,7 @@ export function AiPlanImport({ commit, onImported }: {
         imageWidth: picture.width,
         imageHeight: picture.height,
         aspect: picture.aspect,
+        renderRegion: picture.renderRegion,
         building,
         floor,
         onProgress: setStatus

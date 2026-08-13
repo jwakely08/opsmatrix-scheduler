@@ -3,7 +3,7 @@
 // most server-side examples omit — both fail at runtime, in front of a client,
 // so they are pinned here instead.
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { readPlanWithAI, AiPlanError, AI_MODEL } from "./aiPlanImport";
+import { readPlanWithAI, importPlanFromImage, AiPlanError, AI_MODEL } from "./aiPlanImport";
 
 const IMAGE = "data:image/png;base64,AAAA";
 
@@ -73,6 +73,82 @@ describe("the request we send", () => {
     expect(img).toEqual({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "ZZZZ" } });
     expect(text.type).toBe("text");
     expect(text.text).toMatch(/ignore/i); // the colour/furniture instruction
+  });
+});
+
+describe("the two-pass read: find the drawing, then lean in", () => {
+  const boxReply = {
+    stop_reason: "end_turn",
+    content: [{ type: "text", text: JSON.stringify({ x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.4 }) }]
+  };
+
+  function mockTwoCalls() {
+    const spy = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => boxReply, text: async () => "" })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => goodReply, text: async () => "" });
+    vi.stubGlobal("fetch", spy);
+    return spy;
+  }
+
+  it("locates the plan, re-renders that region, and reads rooms from the crop", async () => {
+    const spy = mockTwoCalls();
+    const renderRegion = vi.fn().mockResolvedValue({
+      dataUrl: "data:image/png;base64,CROP", width: 2500, height: 1800, aspect: 2500 / 1800
+    });
+    const result = await importPlanFromImage({
+      apiKey: "k", imageDataUrl: IMAGE, imageWidth: 2000, imageHeight: 1500,
+      aspect: 2000 / 1500, renderRegion
+    });
+
+    // pass 1 asked WHERE, cheaply
+    const locate = JSON.parse(spy.mock.calls[0][1].body as string);
+    expect(locate.output_config.effort).toBe("low");
+    expect(locate.messages[0].content[1].text).toMatch(/bounding box/i);
+
+    // the crop request used the located box, padded outward
+    const box = renderRegion.mock.calls[0][0];
+    expect(box.x0).toBeCloseTo(0.08, 6);
+    expect(box.y1).toBeCloseTo(0.42, 6);
+    expect(renderRegion.mock.calls[0][1]).toBe(2576);
+
+    // pass 2 read rooms from the CROP, not the sheet
+    const read = JSON.parse(spy.mock.calls[1][1].body as string);
+    expect(read.messages[0].content[0].source.data).toBe("CROP");
+
+    // and the finished plan is shaped like the crop, not the sheet
+    const aspect = Number(result.plan.w) / Number(result.plan.h);
+    expect(aspect).toBeCloseTo(2500 / 1800, 2);
+  });
+
+  it("falls back to the whole sheet when the locate pass returns nothing usable", async () => {
+    const spy = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ stop_reason: "end_turn", content: [{ type: "text", text: "{\"x0\":0,\"y0\":0,\"x1\":1,\"y1\":1}" }] }), text: async () => "" })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => goodReply, text: async () => "" });
+    vi.stubGlobal("fetch", spy);
+    const renderRegion = vi.fn();
+    const result = await importPlanFromImage({
+      apiKey: "k", imageDataUrl: IMAGE, aspect: 1.4, renderRegion
+    });
+    expect(renderRegion).not.toHaveBeenCalled(); // whole-sheet box = no crop
+    expect(result.spaces.length).toBeGreaterThan(0);
+  });
+
+  it("survives the crop renderer failing and still reads the full sheet", async () => {
+    const spy = mockTwoCalls();
+    const renderRegion = vi.fn().mockRejectedValue(new Error("canvas boom"));
+    const result = await importPlanFromImage({
+      apiKey: "k", imageDataUrl: IMAGE, aspect: 1.4, renderRegion
+    });
+    expect(result.spaces.length).toBeGreaterThan(0);
+    // the read fell back to the original picture
+    const read = JSON.parse(spy.mock.calls[1][1].body as string);
+    expect(read.messages[0].content[0].source.data).toBe("AAAA");
+  });
+
+  it("skips the locate pass entirely when the caller cannot re-render", async () => {
+    const spy = mockFetch(goodReply);
+    await importPlanFromImage({ apiKey: "k", imageDataUrl: IMAGE, aspect: 1.4 });
+    expect(spy).toHaveBeenCalledTimes(1); // one call: straight to reading
   });
 });
 
