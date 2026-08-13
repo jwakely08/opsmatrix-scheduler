@@ -33,6 +33,7 @@
         anchor.parentNode.insertBefore(btn, anchor.nextSibling);
       }
     }
+    ensurePdfSupport();
     ensureNavLink();
   }
 
@@ -64,8 +65,10 @@
         }, true);
       }
     }
-    // Max Space: the Floor Plans tab is replaced by Map View (its own page,
-    // where all room details get edited — unique to Max Space)
+    // Max Space gains a Map View tab, but Floor Plans STAYS: it owns uploading
+    // a floor plan image and "✨ AI Detect Rooms (Max)" — the only on-ramp for
+    // a plan that did not come from a magicplan export. Hiding it (as an
+    // earlier build did) took the whole image + AI detection path with it.
     var anchor = null;
     for (var j = 0; j < navBtns.length; j++) {
       if ((navBtns[j].textContent || "").trim() === "Floor Plans") { anchor = navBtns[j]; }
@@ -80,8 +83,135 @@
         mapBtn.addEventListener("click", function () { window.location.href = "./maps.html#spaces"; });
         anchor.parentNode.insertBefore(mapBtn, anchor.nextSibling);
       }
-      if (anchor.style.display !== "none") anchor.style.display = "none";
+      // undo the old hiding for anyone whose browser cached that build
+      if (anchor.style.display === "none") anchor.style.display = "";
+      openFloorPlansIfRequested(anchor);
     }
+  }
+
+  /**
+   * ?fp=1 lands the user straight on Max Space → Floor Plans, so the hub's
+   * "AI Detect Rooms from an image" button is one click rather than a
+   * two-step hunt through the nav.
+   */
+  var deepLinked = false;
+  function openFloorPlansIfRequested(floorPlansBtn) {
+    if (deepLinked || !/[?&]fp=1/.test(window.location.search)) return;
+    deepLinked = true;
+    floorPlansBtn.click();
+  }
+
+  // bounded: the observer fires on every re-render, so give up rather than
+  // clicking forever if a future Classic build stops showing Floor Plans
+  var spaceTries = 0;
+  function ensureSpaceScreen() {
+    if (!/[?&]fp=1/.test(window.location.search) || deepLinked) return;
+    if (spaceTries++ > 20) { deepLinked = true; return; }
+    var btns = document.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) {
+      if ((btns[i].textContent || "").trim() === "Max Space") { btns[i].click(); return; }
+    }
+  }
+
+  // ── PDF floor plans ────────────────────────────────────────────────────────
+  // The classic app's plan picker only accepts images and reads the file
+  // straight to a data URL. Rather than touch the archive, we widen the picker
+  // and convert a chosen PDF's first page to a PNG before the app ever sees
+  // it — so naming, calibration and AI detection all run unchanged.
+
+  var PDFJS_URL = "./pdfjs/pdf.min.mjs";
+  var PDF_WORKER_URL = "./pdfjs/pdf.worker.min.mjs";
+  var pdfLibPromise = null;
+
+  function loadPdfLib() {
+    if (!pdfLibPromise) {
+      // lazy: nobody downloads 1.7MB of pdf.js unless they pick a PDF
+      pdfLibPromise = import(PDFJS_URL).then(function (lib) {
+        lib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
+        return lib;
+      });
+    }
+    return pdfLibPromise;
+  }
+
+  /** first page of a PDF → PNG File, rendered big enough for room detection */
+  function pdfToPngFile(file) {
+    return loadPdfLib()
+      .then(function (lib) { return file.arrayBuffer().then(function (buf) { return lib.getDocument({ data: buf }).promise; }); })
+      .then(function (doc) { return doc.getPage(1); })
+      .then(function (page) {
+        // target ~2000px on the long edge: enough detail for Max to read walls
+        var base = page.getViewport({ scale: 1 });
+        var scale = Math.min(4, Math.max(1, 2000 / Math.max(base.width, base.height)));
+        var viewport = page.getViewport({ scale: scale });
+        var canvas = document.createElement("canvas");
+        canvas.width = Math.round(viewport.width);
+        canvas.height = Math.round(viewport.height);
+        var ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff"; // PDFs are transparent; walls need a white ground
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        return page.render({ canvasContext: ctx, viewport: viewport, canvas: canvas }).promise
+          .then(function () {
+            return new Promise(function (resolve) {
+              canvas.toBlob(function (blob) {
+                var name = (file.name || "floor-plan").replace(/\.pdf$/i, "") + ".png";
+                resolve(new File([blob], name, { type: "image/png" }));
+              }, "image/png");
+            });
+          });
+      });
+  }
+
+  function isPdf(file) {
+    return file && (file.type === "application/pdf" || /\.pdf$/i.test(file.name || ""));
+  }
+
+  /** widen the plan picker and transparently convert PDFs */
+  function ensurePdfSupport() {
+    var inputs = document.querySelectorAll('input[type="file"]');
+    for (var i = 0; i < inputs.length; i++) {
+      var input = inputs[i];
+      if ((input.accept || "").indexOf("image/") !== 0) continue; // plan picker only
+      if (input.getAttribute("data-fusion-pdf")) continue;
+      input.setAttribute("data-fusion-pdf", "1");
+      input.accept = "image/*,application/pdf,.pdf";
+      input.addEventListener("change", onPlanFileChosen, true); // capture: beat React
+    }
+  }
+
+  function onPlanFileChosen(e) {
+    var input = e.target;
+    var file = input.files && input.files[0];
+    if (!isPdf(file) || input.getAttribute("data-fusion-converting")) return;
+    // hold the PDF back; hand the app a PNG instead
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    input.setAttribute("data-fusion-converting", "1");
+    var note = showPdfNote("Converting " + file.name + "…");
+    pdfToPngFile(file).then(function (png) {
+      var dt = new DataTransfer();
+      dt.items.add(png);
+      input.files = dt.files;
+      input.removeAttribute("data-fusion-converting");
+      note.remove();
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }).catch(function (err) {
+      input.removeAttribute("data-fusion-converting");
+      input.value = "";
+      note.textContent = "Could not read that PDF (" + err + "). Try exporting it as a PNG.";
+      note.style.background = "#b91c1c";
+      setTimeout(function () { note.remove(); }, 6000);
+    });
+  }
+
+  function showPdfNote(text) {
+    var n = document.createElement("div");
+    n.textContent = text;
+    n.style.cssText = "position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:99999;" +
+      "background:#0d9488;color:#fff;padding:10px 18px;border-radius:10px;font:600 14px 'Segoe UI',sans-serif;" +
+      "box-shadow:0 8px 30px rgba(0,0,0,.45)";
+    document.body.appendChild(n);
+    return n;
   }
 
   function openOverlay() {
@@ -176,8 +306,9 @@
 
   // the classic app re-renders constantly; keep our button present cheaply
   // (demo seeding lives in fusion-seed.js, injected BEFORE the app's script)
-  var mo = new MutationObserver(function () { ensureButton(); });
+  var mo = new MutationObserver(function () { ensureSpaceScreen(); ensureButton(); });
   function boot() {
+    ensureSpaceScreen();
     ensureButton();
     mo.observe(document.body, { childList: true, subtree: true });
   }

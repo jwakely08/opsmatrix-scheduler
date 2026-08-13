@@ -1,0 +1,183 @@
+/* The printed daily schedule — light, high-contrast, built for paper and for
+   eyes that have been on a floor since 7am. Same palette on screen as on
+   paper, so the preview is honest. */
+
+.printwrap {
+  position: fixed; inset: 0; z-index: 120; overflow: auto;
+  background: #334155; padding: 0 0 40px;
+}
+.printbar {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 12px;
+  padding: 12px 20px; background: #0f172a; border-bottom: 1px solid rgba(148, 163, 184, .25);
+}
+.printbar h2 { font-size: 15px; color: #e2e8f0; }
+.printbar .hint { color: #94a3b8; font-size: 12.5px; }
+.printbar .pbtn.primary { padding: 11px 20px; font-size: 14.5px; }
+
+.printdoc { display: flex; flex-direction: column; align-items: center; gap: 22px; padding-top: 24px; }
+
+.printpage {
+  width: 7.7in; min-height: 10.2in; padding: 0; background: #fff; color: #1f2933;
+  font-family: "Segoe UI", Arial, Helvetica, sans-serif; font-size: 9.6pt;
+  display: flex; flex-direction: column;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .45);
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.printpage * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+/* ── header bar ── */
+.pbar {
+  display: flex; align-items: center; justify-content: space-between;
+  background: #1a7a7a; color: #fff; padding: 13px 18px;
+}
+.pbar h1 { font-size: 15.5pt; font-weight: 700; letter-spacing: .02em; line-height: 1.1; }
+.pbar p { font-size: 9pt; opacity: .88; margin-top: 3px; }
+.pbrand { text-align: right; }
+.pbrand b { display: block; font-size: 12pt; letter-spacing: .04em; }
+.pbrand span { font-size: 9pt; opacity: .9; }
+
+/* ── the shift / date / unit strip ── */
+.pinfo { width: 100%; border-collapse: collapse; }
+.pinfo th {
+  background: #1a7a7a; color: #fff; font-size: 7.6pt; letter-spacing: .1em;
+  padding: 4px 10px; text-align: left; font-weight: 700;
+  border-right: 1px solid rgba(255, 255, 255, .28);
+}
+.pinfo td {
+  background: #e8f0f0; padding: 6px 10px; font-size: 10pt; font-weight: 600;
+  border-right: 1px solid #cbd8d8; border-bottom: 1px solid #cbd8d8;
+}
+.pinfo th:last-child, .pinfo td:last-child { border-right: none; }
+
+/* ── section bars ── */
+.psection {
+  display: flex; align-items: center; justify-content: space-between;
+  background: #2aa8a8; color: #fff; padding: 5px 12px; margin-top: 10px;
+  font-size: 8.4pt; font-weight: 700; letter-spacing: .09em;
+}
+.psection.duties { background: #c8940e; }
+.psection em { font-style: normal; font-weight: 600; letter-spacing: .04em; }
+
+/* ── the room table ── */
+.prooms { width: 100%; border-collapse: collapse; }
+.prooms thead th {
+  background: #eaf8f8; border-top: 1px solid #2aa8a8; border-bottom: 1px solid #2aa8a8;
+  font-size: 7.4pt; letter-spacing: .07em; color: #12656a; padding: 5px 6px; text-align: left;
+}
+.prooms td {
+  padding: 5px 6px; border-bottom: 1px solid #d6e0e0; vertical-align: middle; line-height: 1.25;
+}
+.prooms tbody tr:nth-child(even) td { background: #f4fbfb; }
+
+.c-ord { width: 26px; text-align: center; font-size: 10.5pt; color: #1a7a7a; }
+.c-time { width: 62px; font-weight: 700; white-space: nowrap; }
+.c-num { width: 60px; font-weight: 700; }
+.c-name { width: 104px; }
+.c-type { width: 74px; color: #52606d; font-size: 8.6pt; }
+.c-task { }
+.c-task2 { }
+.c-pri { width: 58px; text-align: center; }
+.c-min { width: 50px; text-align: right; font-weight: 700; white-space: nowrap; }
+.c-done { width: 32px; text-align: center; }
+.c-done i { display: inline-block; width: 13px; height: 13px; border: 1.5px solid #9aa5b1; border-radius: 3px; }
+
+.tchip {
+  display: inline-block; background: #e4f4f4; border: 1px solid #a8d5d5; color: #12656a;
+  border-radius: 9px; padding: 1px 7px; margin: 1px 3px 1px 0; font-size: 8.2pt; font-weight: 600;
+}
+.tnone { color: #c0392b; font-size: 8.4pt; font-weight: 600; }
+
+.pri {
+  display: inline-block; border-radius: 9px; padding: 1px 7px;
+  font-size: 7.6pt; font-weight: 700; letter-spacing: .04em; color: #fff;
+}
+.pri.hi { background: #c0392b; }
+.pri.med { background: #c8940e; }
+.pri.lo { background: #5b6aaf; }
+
+.plunch td {
+  background: #fff5dc !important; border-top: 1.5px solid #c8940e; border-bottom: 1.5px solid #c8940e;
+  text-align: center; font-weight: 700; letter-spacing: .09em; font-size: 8.6pt; color: #7a5c07; padding: 6px;
+}
+.pempty { text-align: center; color: #7b8794; padding: 18px !important; font-style: italic; }
+
+/* ── ongoing duties: the other kind of work, deliberately a different shape ── */
+.pduties { display: flex; flex-wrap: wrap; gap: 7px; padding: 9px 12px; background: #fffaef; }
+.pduty {
+  display: flex; align-items: center; gap: 9px; flex: 1 1 46%;
+  border: 1px solid #e3cf9a; border-left: 4px solid #c8940e; border-radius: 3px;
+  background: #fff; padding: 7px 10px;
+}
+.pduty i {
+  width: 11px; height: 11px; flex: none; background: #c8940e;
+  transform: rotate(45deg); border-radius: 2px;
+}
+.pduty div { flex: 1; min-width: 0; }
+.pduty b { display: block; font-size: 10pt; }
+.pduty span { display: block; color: #7a6a3a; font-size: 8.2pt; margin-top: 1px; }
+.pduty em { font-style: normal; font-weight: 700; font-size: 9.4pt; color: #8a6508; white-space: nowrap; }
+
+/* ── summary strip ── */
+.pstrip {
+  display: flex; flex-wrap: wrap; gap: 4px 20px; margin-top: auto;
+  background: #eaf8f8; border-top: 2px solid #2aa8a8; padding: 7px 14px; font-size: 8.8pt; color: #33484f;
+}
+.pstrip b { color: #12656a; font-size: 10pt; }
+.pstrip .over b { color: #c0392b; }
+
+.pfoot {
+  display: flex; justify-content: space-between; gap: 12px;
+  background: #1a7a7a; color: #fff; padding: 5px 14px; font-size: 7.4pt; opacity: .96;
+}
+
+/* ── page 2: the floor plan ── */
+.pmapbox { margin: 10px 12px 0; border: 1.5px solid #1b3a5c; background: #edf4fa; }
+.pmaphead {
+  background: #1a7a7a; color: #fff; font-size: 7.6pt; letter-spacing: .1em;
+  padding: 3px 10px; font-weight: 700;
+}
+.pmap { display: block; width: 100%; height: 5.5in; background: #edf4fa; }
+.pmapnum {
+  fill: #fff; font-weight: 700; text-anchor: middle; dominant-baseline: central;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+.pmaplbl {
+  fill: #33484f; font-weight: 600; text-anchor: middle;
+  font-family: "Segoe UI", Arial, sans-serif;
+  paint-order: stroke; stroke: rgba(255, 255, 255, .85); stroke-width: 2.5px;
+}
+
+.pmaplegend {
+  display: flex; flex-wrap: wrap; gap: 6px 24px; padding: 8px 14px; font-size: 8.8pt; color: #33484f;
+}
+.pmaplegend span { display: inline-flex; align-items: center; gap: 7px; }
+.pmaplegend i { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
+.pmaplegend i.num {
+  border-radius: 50%; color: #fff; font-size: 7.6pt; font-weight: 700; font-style: normal;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+.porder {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px;
+  margin: 0 12px; padding: 9px 12px; border: 1px solid #c2ced9; background: #f7fafc; font-size: 9pt;
+}
+.porder > b { font-size: 8pt; letter-spacing: .09em; color: #1a7a7a; }
+.porder span { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
+.porder i {
+  width: 16px; height: 16px; border-radius: 50%; color: #fff; font-style: normal;
+  font-size: 7.8pt; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* ── printing: only the document, nothing of the app ── */
+@media print {
+  @page { size: letter portrait; margin: 0.4in; }
+  html, body { background: #fff !important; height: auto !important; }
+  .pro-shell, .noprint { display: none !important; }
+  .printwrap { position: static; overflow: visible; background: #fff; padding: 0; }
+  .printdoc { display: block; padding: 0; gap: 0; }
+  .printpage {
+    width: 100%; min-height: 0; box-shadow: none; break-after: page; page-break-after: always;
+  }
+  .printpage:last-child { break-after: auto; page-break-after: auto; }
+  .prooms tr, .plunch, .porder, .pmapbox { break-inside: avoid; page-break-inside: avoid; }
+}

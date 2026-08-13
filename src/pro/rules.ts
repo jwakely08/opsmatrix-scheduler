@@ -35,6 +35,20 @@ export interface NonSpaceDef {
   builtIn?: boolean;
 }
 
+/**
+ * Breaks and lunches for the account. Set once in Admin Settings; every
+ * schedule picks these up automatically and can override the time. The clock
+ * on a printed schedule stops for these, so the times workers read are real.
+ */
+export interface BreakRule {
+  id: string;
+  label: string;
+  minutes: number;
+  /** when it starts, e.g. "12:30 PM" — a schedule may override it */
+  start: string;
+  builtIn?: boolean;
+}
+
 export interface Rules {
   version: number;
   general: {
@@ -45,6 +59,7 @@ export interface Rules {
   tasks: TaskRule[];
   roomTypes: RoomTypeRule[];
   nonSpaceDefs: NonSpaceDef[];
+  breaks: BreakRule[];
 }
 
 export const FREQUENCIES = [
@@ -82,6 +97,11 @@ export function defaultRules(): Rules {
       { id: "discharge", label: "Discharges", defaultHours: 2, builtIn: true },
       { id: "sanitation-route", label: "Sanitation Route", defaultHours: 3, builtIn: true },
       { id: "day-porter", label: "Day Porter", defaultHours: 8, builtIn: true }
+    ],
+    breaks: [
+      { id: "break-am", label: "Morning Break", minutes: 15, start: "9:30 AM", builtIn: true },
+      { id: "lunch", label: "Lunch", minutes: 30, start: "12:30 PM", builtIn: true },
+      { id: "break-pm", label: "Afternoon Break", minutes: 15, start: "2:00 PM", builtIn: true }
     ]
   };
 }
@@ -98,7 +118,9 @@ export function loadRules(): Rules {
       general: { ...def.general, ...(parsed.general ?? {}) },
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : def.tasks,
       roomTypes: Array.isArray(parsed.roomTypes) ? parsed.roomTypes : def.roomTypes,
-      nonSpaceDefs: def.nonSpaceDefs
+      nonSpaceDefs: def.nonSpaceDefs,
+      // an account that predates break setup keeps the standard ones
+      breaks: Array.isArray(parsed.breaks) ? parsed.breaks : def.breaks
     };
     rules.nonSpaceDefs = Array.isArray(parsed.nonSpaceDefs) ? parsed.nonSpaceDefs : def.nonSpaceDefs;
     for (const t of def.tasks) {

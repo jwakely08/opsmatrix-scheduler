@@ -1,10 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   loadClassic, saveClassic, syncSpaceMinutes, coverageForSpace, uncovered, setCoverage,
   coverageMinutes, scheduleMinutes, createSchedule, deleteSchedule, scheduleColor,
   spaceIncomplete, FLOOR_TYPES, rectifyForDisplay, pathFrom, centroidOf, boundsOf, pointIn,
+  moveInSchedule, spacePriority, PRIORITIES,
   type ClassicData, type ClassicSpace, type ClassicSchedule, type NonSpaceTask
 } from "./classicStore";
+import { PrintSchedule } from "./PrintSchedule";
+import { buildScheduleDoc, parseClock, type SchedBreak } from "./scheduleDoc";
 import { importScan } from "../bridge/fusionEntry";
 import {
   loadRules, saveRules, defaultRules, computeMinutes, requiredTasks, autoTasksFor,
@@ -33,6 +37,7 @@ export function MapsApp() {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [report, setReport] = useState(false);
   const [planId, setPlanId] = useState<string | null>(null);
+  const [printId, setPrintId] = useState<string | null>(null);
 
   const plans = data.plans;
   const plan = plans.find((p) => p.id === planId) ?? plans[0] ?? null;
@@ -130,7 +135,13 @@ export function MapsApp() {
           </>
         )}
         <span className="grow" />
-        {spacesOnly && <ImportButton commit={commit} rules={rules} />}
+        {spacesOnly && <>
+          <a className="pbtn" href="./classic.html?fp=1"
+            title="Upload a floor plan picture and let Max find the rooms">
+            ✨ AI Detect Rooms from an image
+          </a>
+          <ImportButton commit={commit} rules={rules} />
+        </>}
         {!scopeOnly && !spacesOnly && (
           <button className="pbtn" onClick={() => setReport(true)}>⚠ Unassigned Tasks</button>
         )}
@@ -267,7 +278,7 @@ export function MapsApp() {
 
         {tab === "schedules" && (
           <SchedulesTab data={data} rules={rules} schedules={schedules} employees={employees}
-            commit={commit}
+            commit={commit} onPrint={setPrintId}
             onOpenOnMap={(id) => { setSchedSel(id); setTab("map"); }} />
         )}
 
@@ -281,7 +292,66 @@ export function MapsApp() {
           onClose={() => setReport(false)}
           onJump={(id) => { setReport(false); setTab("map"); setRoomSel(id); }} />
       )}
+
+      {printId && (
+        <PrintPreview data={data} rules={rules} scheduleId={printId}
+          onClose={() => setPrintId(null)} />
+      )}
     </div>
+  );
+}
+
+// ── print preview: see the schedule exactly as it prints, then print it ─────
+
+function PrintPreview({ data, rules, scheduleId, onClose }: {
+  data: ClassicData;
+  rules: Rules;
+  scheduleId: string;
+  onClose: () => void;
+}) {
+  const sched = (data.v7.schedules ?? []).find((s) => s.id === scheduleId);
+  const doc = useMemo(
+    () => (sched ? buildScheduleDoc(data, rules, sched) : null),
+    [data, rules, sched]
+  );
+
+  // the floor plan this schedule's rooms actually live on
+  const plan = useMemo(() => {
+    if (!doc) return null;
+    const spaces = data.v7.spaces ?? [];
+    for (const r of doc.rows) {
+      const sp = spaces.find((s) => s.id === r.spaceId);
+      const hit = data.plans.find((p) => p.id === sp?.visualPlanId);
+      if (hit) return hit;
+    }
+    return data.plans[0] ?? null;
+  }, [doc, data]);
+
+  // Escape closes, like every other overlay in the app
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  if (!doc) return null;
+
+  // Rendered straight into <body>, deliberately: printing hides the whole app
+  // shell, and anything nested inside it would be hidden along with it.
+  return createPortal(
+    <div className="printwrap">
+      <div className="printbar noprint">
+        <button className="pbtn ghost" onClick={onClose}>← Back</button>
+        <h2>Schedule #{doc.num} · {doc.name}</h2>
+        <span className="hint">
+          This is exactly what prints. Two pages: the room list, and your area on the floor plan.
+        </span>
+        <span className="grow" />
+        <button className="pbtn primary" onClick={() => window.print()}>🖨 Print / Save as PDF</button>
+      </div>
+      <PrintSchedule doc={doc} plan={plan} spaces={data.v7.spaces ?? []} />
+    </div>,
+    document.body
   );
 }
 
@@ -644,6 +714,16 @@ function SpaceSidebar({ space, rules, onClose, onChange }: {
             onChange={(e) => onChange({ squareFeet: Number(e.target.value) || 0 })} />
         </label>
       </div>
+      <div className="pfield"><span>How urgent is this room?</span>
+        <div className="prio">
+          {PRIORITIES.map((p) => (
+            <button key={p} className={"priobtn " + p.toLowerCase() + (spacePriority(space) === p ? " on" : "")}
+              onClick={() => onChange({ priority: p })}>{p}</button>
+          ))}
+        </div>
+        <small>Prints on every schedule this room appears on, so the worker knows what cannot wait.</small>
+      </div>
+
       <div className="prow">
         <label className="pfield">Fixtures
           <input type="number" min={0} value={Number(space.fixtureCount) || 0}
@@ -687,13 +767,14 @@ function SpaceSidebar({ space, rules, onClose, onChange }: {
 
 // ── Schedules tab: the list view, bidirectional with the map ────────────────
 
-function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap }: {
+function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, onPrint }: {
   data: ClassicData;
   rules: Rules;
   schedules: ClassicSchedule[];
   employees: ClassicData["v7"]["employees"] & {};
   commit: (mut: (d: ClassicData) => void) => void;
   onOpenOnMap: (id: string) => void;
+  onPrint: (id: string) => void;
 }) {
   const [draft, setDraft] = useState({ name: "", shift: "1st Shift", employeeId: "" });
   const spaces = data.v7.spaces ?? [];
@@ -729,21 +810,37 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap }
               <b>{s.num} · {s.name}</b>
               <span>{s.shift} · {s.employee || "unassigned"}</span>
               <em className={mins > target ? "over" : ""}>{mins}m of {target}m</em>
-              <button className="pbtn small" onClick={() => onOpenOnMap(s.id)}>🗺 Edit on map</button>
-              <button className="pbtn small danger" onClick={() => {
-                if (confirm(`Delete schedule "${s.name}"? Rooms stay, just unscheduled.`)) {
-                  commit((d) => deleteSchedule(d, s.id));
-                }
-              }}>✕</button>
+              <span className="schedacts">
+                <button className="pbtn small primary" onClick={() => onPrint(s.id)}>🖨 Print schedule</button>
+                <button className="pbtn small" onClick={() => onOpenOnMap(s.id)}>🗺 Edit on map</button>
+                <button className="pbtn small danger" onClick={() => {
+                  if (confirm(`Delete schedule "${s.name}"? Rooms stay, just unscheduled.`)) {
+                    commit((d) => deleteSchedule(d, s.id));
+                  }
+                }}>✕</button>
+              </span>
             </div>
+            <BreakRow sched={s} rules={rules} commit={commit} />
             <div className="schedrooms">
-              {members.map((sp) => {
+              {members.length > 1 && (
+                <p className="pnote" style={{ margin: "0 0 4px" }}>
+                  Cleaned in this order — the order rooms were tapped. Use ↑ ↓ to fix a mis-tap.
+                </p>
+              )}
+              {members.map((sp, i) => {
                 const c = coverageForSpace(data, sp.id).find((x) => x.scheduleId === s.id)!;
                 return (
                   <div key={sp.id} className="schedroom">
+                    <span className="ordnum">{i + 1}</span>
                     <b>{sp.roomNumber}</b>
-                    <span>{[c.primary ? "General Clean" : "", ...c.tasks.map((t) => rules.tasks.find((x) => x.id === t)?.label ?? t)].filter(Boolean).join(" + ")}</span>
+                    <span>{[c.primary ? "General Clean" : "", ...c.tasks.map((t) => rules.tasks.find((x) => x.id === t)?.label ?? t)].filter(Boolean).join(" + ") || "no tasks picked yet"}</span>
                     <em>{coverageMinutes(rules, sp, c)}m</em>
+                    <span className="ordmove">
+                      <button disabled={i === 0} title="Move earlier"
+                        onClick={() => commit((d) => moveInSchedule(d, s.id, sp.id, -1))}>↑</button>
+                      <button disabled={i === members.length - 1} title="Move later"
+                        onClick={() => commit((d) => moveInSchedule(d, s.id, sp.id, 1))}>↓</button>
+                    </span>
                   </div>
                 );
               })}
@@ -763,6 +860,76 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap }
   );
 }
 
+/**
+ * Per-schedule break control. The account's breaks are the starting point;
+ * this is where one crew's lunch moves without disturbing anyone else's.
+ */
+function BreakRow({ sched, rules, commit }: {
+  sched: ClassicSchedule;
+  rules: Rules;
+  commit: (mut: (d: ClassicData) => void) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const all = rules.breaks ?? [];
+  if (!all.length) return null;
+
+  const overrides = (sched.breaks ?? []) as SchedBreak[];
+  const setOv = (id: string, patch: Partial<SchedBreak>) => commit((d) => {
+    const target = (d.v7.schedules ?? []).find((x) => x.id === sched.id);
+    if (!target) return;
+    const list = [...((target.breaks ?? []) as SchedBreak[])];
+    const at = list.findIndex((o) => o.id === id);
+    if (at < 0) list.push({ id, ...patch });
+    else list[at] = { ...list[at], ...patch };
+    target.breaks = list;
+  });
+
+  const taken = all.filter((b) => !overrides.find((o) => o.id === b.id)?.off);
+  const summary = taken.length
+    ? taken.map((b) => `${b.label} ${overrides.find((o) => o.id === b.id)?.start ?? b.start}`).join(" · ")
+    : "no breaks on this schedule";
+
+  return (
+    <div className="schedbreaks">
+      <button className="plink" onClick={() => setOpen(!open)}>
+        {open ? "▾" : "▸"} Breaks — {summary}
+      </button>
+      {open && (
+        <div className="brklist">
+          {all.map((b) => {
+            const ov = overrides.find((o) => o.id === b.id);
+            const on = !ov?.off;
+            return (
+              <div key={b.id} className="brkrow">
+                <button className={"ptask" + (on ? " on" : "")}
+                  onClick={() => setOv(b.id, { off: on })}>{on ? "✓ " : ""}{b.label}</button>
+                <label>starts
+                  <input value={ov?.start ?? b.start} disabled={!on}
+                    onChange={(e) => setOv(b.id, { start: e.target.value })} />
+                </label>
+                <label>for
+                  <input type="number" min={0} value={Number(ov?.minutes ?? b.minutes)} disabled={!on}
+                    onChange={(e) => setOv(b.id, { minutes: Number(e.target.value) || 0 })} />
+                  min
+                </label>
+                {(ov?.start !== undefined || ov?.minutes !== undefined) && (
+                  <button className="plink" onClick={() => setOv(b.id, { start: undefined, minutes: undefined })}>
+                    reset to account time
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          <small>
+            Set the standard times in Admin Settings → Scope. Changes here affect only this schedule, and a break is
+            skipped when it falls outside the shift.
+          </small>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Scope tab: ultimate customization (room types, tasks, non-space) ────────
 
 function ScopeTab({ rules, onChange, data, commit, schedules }: {
@@ -775,6 +942,7 @@ function ScopeTab({ rules, onChange, data, commit, schedules }: {
   const [newType, setNewType] = useState({ label: "", freq: "7x / week", qual: "", tasks: [] as string[] });
   const [newTask, setNewTask] = useState({ label: "", per: "", flat: "" });
   const [newNS, setNewNS] = useState({ label: "", hours: "2" });
+  const [newBreak, setNewBreak] = useState({ label: "", start: "", minutes: "15" });
   const set = (mut: (r: Rules) => void) => {
     const next: Rules = JSON.parse(JSON.stringify(rules));
     mut(next);
@@ -875,6 +1043,40 @@ function ScopeTab({ rules, onChange, data, commit, schedules }: {
           setNewTask({ label: "", per: "", flat: "" });
         }}>Create space task</button>
       </div>
+
+      <h3>Break and lunch times — used by every printed schedule</h3>
+      {(rules.breaks ?? []).map((b) => (
+        <div key={b.id} className="prule">
+          <b>{b.label}</b>
+          <span>starts at <input value={b.start} style={{ width: 92 }}
+            onChange={(e) => set((r) => { r.breaks.find((x) => x.id === b.id)!.start = e.target.value; })} /></span>
+          <span>for <input type="number" min={0} value={b.minutes} style={{ width: 64 }}
+            onChange={(e) => set((r) => { r.breaks.find((x) => x.id === b.id)!.minutes = Number(e.target.value) || 0; })} /> min</span>
+          <em>{parseClock(b.start) === null ? "⚠ write the time like 12:30 PM" : "on schedules whose shift covers it"}</em>
+          <button className="pbtn small danger" onClick={() => set((r) => { r.breaks = r.breaks.filter((x) => x.id !== b.id); })}>✕</button>
+        </div>
+      ))}
+      <div className="prule add">
+        <input placeholder="New break name (e.g. Second Lunch)" value={newBreak.label}
+          onChange={(e) => setNewBreak({ ...newBreak, label: e.target.value })} />
+        <input placeholder="starts at, e.g. 6:00 PM" value={newBreak.start} style={{ width: 130 }}
+          onChange={(e) => setNewBreak({ ...newBreak, start: e.target.value })} />
+        <input type="number" placeholder="min" value={newBreak.minutes} style={{ width: 76 }}
+          onChange={(e) => setNewBreak({ ...newBreak, minutes: e.target.value })} />
+        <button className="pbtn small primary" onClick={() => {
+          if (!newBreak.label.trim() || parseClock(newBreak.start) === null) return;
+          set((r) => r.breaks.push({
+            id: uid("brk"), label: newBreak.label.trim(),
+            start: newBreak.start.trim(), minutes: Number(newBreak.minutes) || 0
+          }));
+          setNewBreak({ label: "", start: "", minutes: "15" });
+        }}>Add break</button>
+      </div>
+      <p className="pnote">
+        A schedule only takes the breaks that fall inside its own shift, so day-shift lunches never land on a night sheet.
+        Any single schedule can move, shorten or skip one on the Schedules tab. The clock on the printed schedule stops for
+        these, so the times a worker reads are real.
+      </p>
 
       <h3>Non-space tasks — discharges, sanitation routes, day porters</h3>
       {rules.nonSpaceDefs.map((ns) => {

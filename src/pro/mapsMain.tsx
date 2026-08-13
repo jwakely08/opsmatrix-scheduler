@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { MapsApp } from "./MapsApp";
 import { buildClassicDemo, demoStamp } from "../bridge/fusionEntry";
 import "./pro.css";
+import "./print.css";
 
 // Any entrance can restore the demo: ?demo=1 seeds when the saved data is a
 // stale/absent demo (stamped — never touches real imported work).

@@ -16,6 +16,10 @@ import {
   loadRules, type Rules
 } from "./rules";
 
+/** room urgency, decided by the manager during Max Space validation */
+export type Priority = "High" | "Medium" | "Low";
+export const PRIORITIES: Priority[] = ["High", "Medium", "Low"];
+
 export interface ClassicSpace {
   id: string;
   roomNumber?: string;
@@ -35,6 +39,8 @@ export interface ClassicSpace {
   spaceTasks?: string[];
   fusionTasks?: string[]; // legacy name
   vacuumDaysPerWeek?: number;
+  /** how urgent this room is — set during Max Space validation, prints on the schedule */
+  priority?: Priority;
   updatedAt?: string;
   [k: string]: unknown;
 }
@@ -267,6 +273,31 @@ export function deleteSchedule(data: ClassicData, scheduleId: string) {
 export function scheduleColor(schedules: ClassicSchedule[], id: string | undefined): string {
   const s = schedules.find((x) => x.id === id);
   return (s?.color as string) || "#64748b";
+}
+
+/**
+ * A room's priority. Unset reads as Medium so nothing is ever blank on a
+ * printed schedule and older rooms don't suddenly look unfinished.
+ */
+export function spacePriority(space: ClassicSpace): Priority {
+  return PRIORITIES.includes(space.priority as Priority) ? (space.priority as Priority) : "Medium";
+}
+
+/**
+ * Move a room earlier/later in a schedule's running order. spaceOrder IS the
+ * order the rooms were tapped in, and that order is what the printed schedule
+ * numbers 1, 2, 3… — so this is how a manager fixes a mis-tap.
+ */
+export function moveInSchedule(data: ClassicData, scheduleId: string, spaceId: string, dir: -1 | 1) {
+  const sched = (data.v7.schedules ?? []).find((s) => s.id === scheduleId);
+  if (!sched) return;
+  const order = [...(sched.spaceOrder ?? [])];
+  const i = order.indexOf(spaceId);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= order.length) return;
+  [order[i], order[j]] = [order[j], order[i]];
+  sched.spaceOrder = order;
+  sched.updatedAt = new Date().toISOString();
 }
 
 /** the three floor finishes (wax or no wax, plus carpet) */
