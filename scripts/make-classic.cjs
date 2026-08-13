@@ -35,8 +35,29 @@ const postInjection =
   "\n<!-- ══ FUSION BRIDGE UI ══ -->\n" +
   "<script>\n" + ui + "\n</script>\n";
 
+// Make Classic installable as a real app (its own icon on the taskbar/home
+// screen) and keep it self-updating. The service worker is network-first, so
+// an installed OpsMatrix always shows the newest deploy — see public/sw.js.
+const headInjection =
+  '\n<link rel="manifest" href="./opsmatrix.webmanifest"/>\n' +
+  '<link rel="apple-touch-icon" href="./apple-touch-icon.png"/>\n' +
+  '<meta name="apple-mobile-web-app-capable" content="yes"/>\n' +
+  '<meta name="apple-mobile-web-app-title" content="OpsMatrix"/>\n' +
+  "<script>\n" +
+  'if ("serviceWorker" in navigator) {\n' +
+  '  window.addEventListener("load", function () {\n' +
+  '    navigator.serviceWorker.register("./sw.js").then(function (reg) { reg.update(); })\n' +
+  '      .catch(function () { /* offline or unsupported — the app still works */ });\n' +
+  "  });\n" +
+  "}\n" +
+  "</script>\n";
+
+const headEnd = html.indexOf("</head>");
+if (headEnd === -1) throw new Error("classic app has no </head> — refusing to guess");
+
 const out =
-  html.slice(0, bodyOpenEnd) + preInjection +
+  html.slice(0, headEnd) + headInjection +
+  html.slice(headEnd, bodyOpenEnd) + preInjection +
   html.slice(bodyOpenEnd, endIdx) + postInjection +
   html.slice(endIdx);
 fs.mkdirSync(path.dirname(OUT), { recursive: true });

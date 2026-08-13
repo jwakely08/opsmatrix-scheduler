@@ -1,0 +1,162 @@
+// "Read a floor plan with Max" — pick a picture or PDF of any floor plan and
+// let Claude Fable 5 turn it into a real OpsMatrix plan: rooms traced, room
+// numbers and printed areas captured, and the whole thing redrawn in the app's
+// own style so it looks like every other plan in the system.
+import React, { useRef, useState } from "react";
+import { importPlanFromImage, AiPlanError } from "../bridge/aiPlanImport";
+import { planFileToImage, isPdf } from "./planFile";
+import { loadApiKey, saveApiKey } from "./classicStore";
+import type { ClassicData } from "./classicStore";
+
+type Phase = "idle" | "form" | "working" | "done" | "error";
+
+export function AiPlanImport({ commit, onImported }: {
+  commit: (mut: (d: ClassicData) => void) => void;
+  onImported: () => void;
+}) {
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [building, setBuilding] = useState("");
+  const [floor, setFloor] = useState("");
+  const [apiKey, setApiKey] = useState<string>(() => loadApiKey());
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<{ rooms: number; printed: number; scaled: boolean } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const close = () => { setPhase("idle"); setError(""); setStatus(""); setResult(null); };
+
+  async function handleFile(file: File) {
+    setPhase("working");
+    setError("");
+    try {
+      setStatus(isPdf(file) ? "Opening the PDF…" : "Opening the image…");
+      const picture = await planFileToImage(file);
+
+      const key = apiKey.trim();
+      if (key && key !== loadApiKey()) saveApiKey(key);
+
+      const imported = await importPlanFromImage({
+        apiKey: key,
+        imageDataUrl: picture.dataUrl,
+        aspect: picture.aspect,
+        building,
+        floor,
+        onProgress: setStatus
+      });
+
+      commit((d) => {
+        d.v7.spaces = [...(d.v7.spaces ?? []), ...(imported.spaces as never[])];
+        d.plans.push(imported.plan as never);
+        localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans));
+      });
+
+      const printed = imported.spaces.filter((s) => Number(s.squareFeet) > 0).length;
+      setResult({
+        rooms: imported.spaces.length,
+        printed,
+        scaled: Boolean((imported.plan as { ratio?: number }).ratio)
+      });
+      setPhase("done");
+    } catch (e) {
+      setError(e instanceof AiPlanError ? e.message : String((e as Error)?.message || e));
+      setPhase("error");
+    }
+  }
+
+  return (
+    <>
+      <button className="pbtn" onClick={() => setPhase("form")}>
+        ✨ Read a floor plan with Max
+      </button>
+
+      {phase !== "idle" && (
+        <div className="pro-modalback" onClick={(e) => {
+          if (e.target === e.currentTarget && phase !== "working") close();
+        }}>
+          <div className="pro-modal aiplan">
+            <div className="pshead">
+              <h2>✨ Read a floor plan with Max</h2>
+              {phase !== "working" && <button className="pbtn ghost" onClick={close}>✕</button>}
+            </div>
+
+            {(phase === "form" || phase === "error") && (
+              <>
+                <p className="pnote">
+                  Pick a picture or PDF of any floor plan. Max reads the rooms, their numbers and
+                  any square footage printed on it, then OpsMatrix redraws the plan in its own
+                  style — colours, furniture and title blocks from the original are ignored.
+                </p>
+
+                <div className="prow">
+                  <label className="pfield">Building <small>optional</small>
+                    <input value={building} placeholder="read from the plan if left blank"
+                      onChange={(e) => setBuilding(e.target.value)} />
+                  </label>
+                  <label className="pfield">Floor <small>optional</small>
+                    <input value={floor} placeholder="e.g. 4 East"
+                      onChange={(e) => setFloor(e.target.value)} />
+                  </label>
+                </div>
+
+                <label className="pfield">Anthropic API key
+                  <input type="password" value={apiKey} placeholder="sk-ant-api…"
+                    onChange={(e) => setApiKey(e.target.value)} />
+                  <small>
+                    Saved on this device only, and shared with Max AI in OpsMatrix — enter it once.
+                    It is never sent anywhere except Anthropic.
+                  </small>
+                </label>
+
+                {error && <p className="warntext">⚠ {error}</p>}
+
+                <button className="pbtn primary wide" disabled={!apiKey.trim()}
+                  onClick={() => fileRef.current?.click()}>
+                  Choose floor plan (image or PDF)
+                </button>
+                {!apiKey.trim() && <small className="pnote">Add the API key above to continue.</small>}
+
+                <input ref={fileRef} type="file" style={{ display: "none" }}
+                  accept="image/*,application/pdf,.pdf"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (f) handleFile(f);
+                  }} />
+              </>
+            )}
+
+            {phase === "working" && (
+              <div className="aiworking">
+                <div className="aispin" />
+                <b>{status || "Working…"}</b>
+                <small>
+                  Reading a plan carefully takes up to a couple of minutes. Leave this open.
+                </small>
+              </div>
+            )}
+
+            {phase === "done" && result && (
+              <>
+                <p className="pnote big">✓ {result.rooms} rooms read and drawn.</p>
+                <p className="pnote">
+                  {result.printed > 0
+                    ? `${result.printed} of them had a square footage printed on the plan, so those areas were used as-is`
+                    : "No square footage was printed on the plan, so the rooms were measured from the drawing"}
+                  {result.scaled
+                    ? " — the plan is already to scale, so there is nothing to measure by hand."
+                    : ". Set the scale once on the plan if you want exact areas."}
+                </p>
+                <p className="pnote">
+                  Check the room numbers and types on the map, then start tapping rooms onto schedules.
+                </p>
+                <button className="pbtn primary wide" onClick={() => { close(); onImported(); }}>
+                  Open the plan
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

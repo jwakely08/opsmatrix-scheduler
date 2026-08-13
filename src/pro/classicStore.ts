@@ -119,6 +119,26 @@ export function loadClassic(): ClassicData {
   return { v7, plans, nonSpace };
 }
 
+/**
+ * The Anthropic API key lives in ONE place — the classic app's own
+ * settings.maxApiKey — so entering it in either surface lights up both.
+ * It stays on this device; it is never committed, bundled or synced.
+ */
+export function loadApiKey(): string {
+  try {
+    const v7 = JSON.parse(localStorage.getItem(V7) ?? "{}") ?? {};
+    return String((v7.settings ?? {}).maxApiKey ?? "");
+  } catch { return ""; }
+}
+
+export function saveApiKey(key: string) {
+  try {
+    const v7 = JSON.parse(localStorage.getItem(V7) ?? "{}") ?? {};
+    v7.settings = { ...(v7.settings ?? {}), maxApiKey: key.trim() };
+    localStorage.setItem(V7, JSON.stringify(v7));
+  } catch { /* storage unavailable — the caller still has the key in memory */ }
+}
+
 export function saveClassic(data: ClassicData) {
   localStorage.setItem(V7, JSON.stringify(data.v7));
   localStorage.setItem(NONSPACE, JSON.stringify(data.nonSpace));

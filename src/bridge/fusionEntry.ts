@@ -47,14 +47,14 @@ const TYPE_GUESSES: [RegExp, string, number][] = [
   [/stor|closet/i, "Storage", 0]
 ];
 
-function guessType(name: string): { type: string; fixtures: number } {
+export function guessType(name: string): { type: string; fixtures: number } {
   for (const [re, type, fixtures] of TYPE_GUESSES) {
     if (re.test(name)) return { type, fixtures };
   }
   return { type: "Other", fixtures: 0 };
 }
 
-function estimateMinutes(type: string, sqft: number, fixtures: number): number {
+export function estimateMinutes(type: string, sqft: number, fixtures: number): number {
   const r = V5_RATES[type] ?? V5_RATES["Other"];
   return Math.max(2, Math.round(r.base + r.perSqft * (sqft || 0) + r.fixture * (fixtures || 0)));
 }

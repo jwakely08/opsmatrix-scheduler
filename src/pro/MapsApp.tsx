@@ -8,6 +8,7 @@ import {
   type ClassicData, type ClassicSpace, type ClassicSchedule, type NonSpaceTask
 } from "./classicStore";
 import { PrintSchedule } from "./PrintSchedule";
+import { AiPlanImport } from "./AiPlanImport";
 import { buildScheduleDoc, parseClock, type SchedBreak } from "./scheduleDoc";
 import { importScan } from "../bridge/fusionEntry";
 import {
@@ -136,10 +137,7 @@ export function MapsApp() {
         )}
         <span className="grow" />
         {spacesOnly && <>
-          <a className="pbtn" href="./classic.html?fp=1"
-            title="Upload a floor plan picture and let Max find the rooms">
-            ✨ AI Detect Rooms from an image
-          </a>
+          <AiPlanImport commit={commit} onImported={() => window.location.reload()} />
           <ImportButton commit={commit} rules={rules} />
         </>}
         {!scopeOnly && !spacesOnly && (
