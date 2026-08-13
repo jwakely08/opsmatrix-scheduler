@@ -250,7 +250,7 @@
   function fileToPlanImage(file) {
     if (isPdf(file)) {
       return pdfToCanvas(file).then(function (canvas) {
-        return { dataUrl: canvas.toDataURL("image/png"), aspect: canvas.width / canvas.height };
+        return { dataUrl: canvas.toDataURL("image/png"), width: canvas.width, height: canvas.height, aspect: canvas.width / canvas.height };
       });
     }
     return new Promise(function (resolve, reject) {
@@ -267,7 +267,7 @@
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         URL.revokeObjectURL(url);
-        resolve({ dataUrl: canvas.toDataURL("image/jpeg", 0.92), aspect: canvas.width / canvas.height });
+        resolve({ dataUrl: canvas.toDataURL("image/jpeg", 0.92), width: canvas.width, height: canvas.height, aspect: canvas.width / canvas.height });
       };
       img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("That image could not be opened.")); };
       img.src = url;
@@ -514,6 +514,8 @@
       return window.OpsMatrixFusion.importPlanFromImage({
         apiKey: key,
         imageDataUrl: picture.dataUrl,
+        imageWidth: picture.width,
+        imageHeight: picture.height,
         aspect: picture.aspect,
         building: building,
         floor: floor,

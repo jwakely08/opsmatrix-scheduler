@@ -39,6 +39,8 @@ export function AiPlanImport({ commit, onImported }: {
       const imported = await importPlanFromImage({
         apiKey: key,
         imageDataUrl: picture.dataUrl,
+        imageWidth: picture.width,
+        imageHeight: picture.height,
         aspect: picture.aspect,
         building,
         floor,

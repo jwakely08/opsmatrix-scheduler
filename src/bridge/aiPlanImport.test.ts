@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  sanitizeRooms, polygonArea, derivePxPerFt, buildPlanFromRooms, planSchema,
-  AI_ROOM_TYPES, type AiRoom
+  sanitizeRooms, normalizeCoordinateScale, polygonArea, derivePxPerFt,
+  buildPlanFromRooms, planSchema, AI_ROOM_TYPES, type AiRoom
 } from "./aiPlanImport";
 
 /** a 10x10 unit square room occupying a quarter of the image */
@@ -36,9 +36,16 @@ describe("sanitizeRooms", () => {
     expect(out[0].polygon).toHaveLength(4);
   });
 
-  it("falls back to the name when the plan printed no room number", () => {
+  it("leaves the room number BLANK when the plan printed none — the manager types it later", () => {
     const out = sanitizeRooms([room({ roomNumber: "  ", name: "Soiled Utility" })]);
-    expect(out[0].roomNumber).toBe("Soiled Utility");
+    expect(out[0].roomNumber).toBe("");
+    expect(out[0].name).toBe("Soiled Utility");
+  });
+
+  it("still keeps a room that has a type and size but no number at all", () => {
+    const out = sanitizeRooms([room({ roomNumber: "", name: "Patient Room", squareFeet: 240 })]);
+    expect(out).toHaveLength(1);
+    expect(out[0].squareFeet).toBe(240);
   });
 
   it("treats a missing or nonsense area as unmeasured, never as zero-size", () => {
@@ -49,6 +56,59 @@ describe("sanitizeRooms", () => {
 
   it("rejects a room type outside the rate table", () => {
     expect(sanitizeRooms([room({ roomType: "Helipad" })])[0].roomType).toBe("");
+  });
+});
+
+describe("coordinate scale rescue (the 'clear plan reads as no rooms' bug)", () => {
+  const px = (pts: number[][]) => [room({ polygon: pts })];
+
+  it("passes already-normalised answers through untouched", () => {
+    const rooms = px([[0.1, 0.1], [0.5, 0.1], [0.5, 0.5], [0.1, 0.5]]);
+    expect(normalizeCoordinateScale(rooms)).toEqual(rooms);
+  });
+
+  it("rescues a 0–1000 scale answer instead of clamping every room to a dot", () => {
+    const fixed = normalizeCoordinateScale(px([[100, 100], [500, 100], [500, 500], [100, 500]]));
+    expect(fixed[0].polygon).toEqual([[0.1, 0.1], [0.5, 0.1], [0.5, 0.5], [0.1, 0.5]]);
+    // and the whole pipeline keeps the room where it used to lose it
+    expect(sanitizeRooms(fixed)).toHaveLength(1);
+  });
+
+  it("rescues a percentage answer", () => {
+    const fixed = normalizeCoordinateScale(px([[10, 10], [50, 10], [50, 50], [10, 50]]));
+    expect(fixed[0].polygon).toEqual([[0.1, 0.1], [0.5, 0.1], [0.5, 0.5], [0.1, 0.5]]);
+  });
+
+  it("rescues pixel coordinates exactly when the picture size is known", () => {
+    const fixed = normalizeCoordinateScale(
+      px([[200, 150], [1600, 150], [1600, 1200], [200, 1200]]),
+      { width: 2000, height: 1500 }
+    );
+    expect(fixed[0].polygon).toEqual([[0.1, 0.1], [0.8, 0.1], [0.8, 0.8], [0.1, 0.8]]);
+  });
+
+  it("prefers permille over pixels when the answer tops out near 1000 — plans fill our pictures", () => {
+    const fixed = normalizeCoordinateScale(
+      px([[100, 100], [1000, 100], [1000, 900], [100, 900]]),
+      { width: 2000, height: 1500 }
+    );
+    expect(fixed[0].polygon[1]).toEqual([1, 0.1]);
+  });
+
+  it("keeps the shape even for an unknown pixel scale", () => {
+    const fixed = normalizeCoordinateScale(px([[300, 300], [3000, 300], [3000, 3000], [300, 3000]]));
+    const p = fixed[0].polygon;
+    expect(Math.max(...p.flat())).toBeLessThanOrEqual(1);
+    expect(sanitizeRooms(fixed)).toHaveLength(1); // survives, does not vanish
+  });
+
+  it("uses ONE divisor for the whole answer, so small rooms are not treated differently", () => {
+    const fixed = normalizeCoordinateScale([
+      room({ polygon: [[10, 10], [900, 10], [900, 900], [10, 900]] }),   // big
+      room({ polygon: [[0.5, 0.5], [80, 0.5], [80, 60], [0.5, 60]] })     // small, low coords
+    ]);
+    // both divided by 1000 — the small one must NOT be mistaken for normalised
+    expect(fixed[1].polygon[1][0]).toBeCloseTo(0.08, 6);
   });
 });
 

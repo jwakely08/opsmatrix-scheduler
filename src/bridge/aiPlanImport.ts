@@ -90,9 +90,12 @@ export const PLAN_PROMPT = [
   "  the bottom-right. Use as many points as the shape needs; follow L-shapes",
   "  and alcoves rather than approximating everything to a rectangle. Do not",
   "  let polygons overlap each other.",
+  "  Coordinates MUST be decimal fractions between 0.0 and 1.0 — for example",
+  "  [[0.12, 0.30], [0.35, 0.30], [0.35, 0.55], [0.12, 0.55]]. Never use pixel",
+  "  positions or 0–100 or 0–1000 scales.",
   "• roomNumber — the number or code printed in or beside the room (e.g.",
-  "  \"4E-102\", \"212\"). If the plan prints no number, use the room's printed",
-  "  name. Never invent a number that is not on the plan.",
+  "  \"4E-102\", \"212\"). If the plan prints no number, return an empty string —",
+  "  the manager fills numbers in later. Never invent one.",
   "• name — the printed room name (e.g. \"Patient Room\", \"Soiled Utility\").",
   "  If only a number is printed, repeat the number here.",
   "• squareFeet — ONLY if an area is printed for that room on the plan. Copy",
@@ -110,6 +113,9 @@ export interface ReadPlanOptions {
   apiKey: string;
   /** the plan picture, as a data URL (PNG/JPEG) */
   imageDataUrl: string;
+  /** pixel size of that picture — lets pixel-scale answers be undone exactly */
+  imageWidth?: number;
+  imageHeight?: number;
   building?: string;
   floor?: string;
   model?: string;
@@ -195,11 +201,15 @@ export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReadi
   } catch {
     throw new AiPlanError("Claude's answer was not readable. Try again.");
   }
-  const rooms = sanitizeRooms(parsed.rooms);
+  const rooms = sanitizeRooms(normalizeCoordinateScale(parsed.rooms, {
+    width: opts.imageWidth, height: opts.imageHeight
+  }));
   if (!rooms.length) {
-    throw new AiPlanError(
-      "No rooms could be found on that image. Make sure the whole plan is visible and the walls are legible."
-    );
+    // two very different situations — say which one happened
+    const reported = Array.isArray(parsed.rooms) ? parsed.rooms.length : 0;
+    throw new AiPlanError(reported > 0
+      ? `Claude found ${reported} rooms but their outlines were unusable. Try again — if it repeats, send a sharper export of the plan.`
+      : "No rooms could be found on that image. Make sure the whole plan is visible and the walls are legible.");
   }
   opts.onProgress?.(`Found ${rooms.length} rooms — drawing the plan…`);
   return {
@@ -219,6 +229,50 @@ function explainHttpError(status: number, body: string): string {
   return `Claude could not read the plan (error ${status}).`;
 }
 
+/**
+ * Models sometimes ignore the coordinate instruction and answer in pixels or
+ * a 0–100 / 0–1000 scale. Clamping those into 0..1 collapses every room to a
+ * corner dot and the whole reading dies as "no rooms found" — which is
+ * exactly what a perfectly readable plan looks like when this is skipped.
+ * The scale is a property of the whole answer, so it is detected across ALL
+ * rooms and undone with one divisor, never per-room.
+ */
+export function normalizeCoordinateScale(
+  rooms: AiRoom[] | undefined,
+  image?: { width?: number; height?: number }
+): AiRoom[] {
+  if (!Array.isArray(rooms)) return [];
+  let maxC = 0;
+  for (const r of rooms) {
+    if (!r || !Array.isArray(r.polygon)) continue;
+    for (const p of r.polygon) {
+      if (!Array.isArray(p)) continue;
+      if (Number.isFinite(p[0])) maxC = Math.max(maxC, Math.abs(p[0]));
+      if (Number.isFinite(p[1])) maxC = Math.max(maxC, Math.abs(p[1]));
+    }
+  }
+  if (maxC <= 1.5) return rooms; // already normalised (tiny overshoot is clamped later)
+
+  let dx: number, dy: number;
+  const imgLong = Math.max(image?.width ?? 0, image?.height ?? 0);
+  if (imgLong > 0 && maxC > imgLong * 0.5 && maxC <= imgLong * 1.2) {
+    // pixel coordinates on the picture we sent — divide each axis by its size
+    dx = image!.width || imgLong;
+    dy = image!.height || imgLong;
+  } else if (maxC <= 150) {
+    dx = dy = 100;         // percentages
+  } else if (maxC <= 1500) {
+    dx = dy = 1000;        // permille, a common habit
+  } else {
+    dx = dy = maxC;        // unknown pixel scale — same divisor keeps the shape
+  }
+  return rooms.map((r) => (!r || !Array.isArray(r.polygon)) ? r : {
+    ...r,
+    polygon: r.polygon.map((p) =>
+      Array.isArray(p) ? [Number(p[0]) / dx, Number(p[1]) / dy] : p)
+  });
+}
+
 /** drop anything unusable; clamp coordinates into the image */
 export function sanitizeRooms(rooms: AiRoom[] | undefined): AiRoom[] {
   if (!Array.isArray(rooms)) return [];
@@ -232,7 +286,9 @@ export function sanitizeRooms(rooms: AiRoom[] | undefined): AiRoom[] {
     if (poly.length < 3) continue;
     if (Math.abs(polygonArea(poly)) < 1e-6) continue; // degenerate sliver
     const name = String(r.name ?? "").trim();
-    const number = String(r.roomNumber ?? "").trim() || name;
+    // a plan with no printed numbers is normal: the number stays BLANK so the
+    // manager can type their own later — it is never faked from the name
+    const number = String(r.roomNumber ?? "").trim();
     if (!name && !number) continue;
     const sqft = Number(r.squareFeet);
     out.push({
