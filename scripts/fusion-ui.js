@@ -83,10 +83,90 @@
         mapBtn.addEventListener("click", function () { window.location.href = "./maps.html#spaces"; });
         anchor.parentNode.insertBefore(mapBtn, anchor.nextSibling);
       }
+      // ⬆ Upload: ONE front door for bringing space data in, so nobody has to
+      // know which tab owns which file type before they can start
+      if (!document.getElementById("fusion-upload-any") && anchor.parentNode) {
+        var upBtn = document.createElement("button");
+        upBtn.id = "fusion-upload-any";
+        upBtn.type = "button";
+        upBtn.className = anchor.className;
+        upBtn.textContent = "⬆ Upload";
+        upBtn.addEventListener("click", showUploadHub);
+        anchor.parentNode.insertBefore(upBtn, anchor.parentNode.firstChild);
+      }
       // undo the old hiding for anyone whose browser cached that build
       if (anchor.style.display === "none") anchor.style.display = "";
       openFloorPlansIfRequested(anchor);
     }
+  }
+
+  // ── ⬆ Upload: route by what the user has, not by which screen owns it ──────
+  var HUB_ID = "fusion-upload-hub";
+
+  function clickButtonByText(text) {
+    var btns = document.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) {
+      if ((btns[i].textContent || "").trim() === text && btns[i].offsetParent !== null) {
+        btns[i].click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** click "Add Floor Plan" once the Floor Plans screen has rendered it */
+  function goToAddFloorPlan() {
+    clickButtonByText("Floor Plans");
+    var tries = 0;
+    var t = setInterval(function () {
+      if (clickButtonByText("Add Floor Plan") || clickButtonByText("Upload First Plan") || ++tries > 25) {
+        clearInterval(t);
+      }
+    }, 120);
+  }
+
+  function showUploadHub() {
+    if (document.getElementById(HUB_ID)) return;
+    var wrap = document.createElement("div");
+    wrap.id = HUB_ID;
+    wrap.setAttribute("style",
+      "position:fixed;inset:0;z-index:99998;background:rgba(15,23,32,.55);" +
+      "display:flex;align-items:center;justify-content:center;padding:20px;");
+    var tile = function (title, sub) {
+      return "<button type='button' style='display:block;width:100%;text-align:left;margin-bottom:10px;" +
+        "padding:14px 16px;border:1px solid #d8e0e6;border-radius:10px;background:#fff;cursor:pointer'>" +
+        "<b style='font-size:14.5px;color:#1c2b33'>" + title + "</b>" +
+        "<span style='display:block;font-size:12.5px;color:#5b7083;margin-top:3px'>" + sub + "</span></button>";
+    };
+    var card = document.createElement("div");
+    card.setAttribute("style",
+      "background:#fff;border-radius:14px;max-width:480px;width:100%;padding:24px;" +
+      "font-family:'Segoe UI',sans-serif;color:#1c2b33;box-shadow:0 18px 60px rgba(0,0,0,.35);");
+    card.innerHTML =
+      "<h3 style='margin:0 0 4px;font-size:17px'>Upload space data</h3>" +
+      "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>Pick what you have — OpsMatrix knows what to do with each.</p>" +
+      "<div id='fusion-hub-plan'>" + tile("🗺 Floor plan — picture or PDF",
+        "Max reads the rooms, numbers and sizes, then redraws the plan in OpsMatrix's own style.") + "</div>" +
+      "<div id='fusion-hub-excel'>" + tile("📊 Room list — Excel or CSV",
+        "A spreadsheet of rooms and details, imported straight into Max Space.") + "</div>" +
+      "<div id='fusion-hub-magic'>" + tile("⚡ magicplan export — DXF + CSV",
+        "A laser-measured scan. Rooms are detected and drawn exactly.") + "</div>" +
+      "<div style='text-align:right'><button id='fusion-hub-cancel' type='button' " +
+      "style='padding:7px 14px;border:none;background:none;font-size:12.5px;color:#8fa3b0;cursor:pointer'>Cancel</button></div>";
+    wrap.appendChild(card);
+    document.body.appendChild(wrap);
+    function close() { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }
+    wrap.addEventListener("click", function (e) { if (e.target === wrap) close(); });
+    document.getElementById("fusion-hub-cancel").addEventListener("click", close);
+    document.getElementById("fusion-hub-plan").addEventListener("click", function () { close(); goToAddFloorPlan(); });
+    document.getElementById("fusion-hub-excel").addEventListener("click", function () {
+      close();
+      if (!clickButtonByText("Import")) {
+        var n = showNote("Open the Explorer or Table view first, then press Import.");
+        setTimeout(function () { n.remove(); }, 5000);
+      }
+    });
+    document.getElementById("fusion-hub-magic").addEventListener("click", function () { close(); openOverlay(); });
   }
 
   /**
@@ -134,8 +214,8 @@
     return pdfLibPromise;
   }
 
-  /** first page of a PDF → PNG File, rendered big enough for room detection */
-  function pdfToPngFile(file) {
+  /** first page of a PDF → canvas, rendered big enough for room detection */
+  function pdfToCanvas(file) {
     return loadPdfLib()
       .then(function (lib) { return file.arrayBuffer().then(function (buf) { return lib.getDocument({ data: buf }).promise; }); })
       .then(function (doc) { return doc.getPage(1); })
@@ -151,16 +231,66 @@
         ctx.fillStyle = "#ffffff"; // PDFs are transparent; walls need a white ground
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         return page.render({ canvasContext: ctx, viewport: viewport, canvas: canvas }).promise
-          .then(function () {
-            return new Promise(function (resolve) {
-              canvas.toBlob(function (blob) {
-                var name = (file.name || "floor-plan").replace(/\.pdf$/i, "") + ".png";
-                resolve(new File([blob], name, { type: "image/png" }));
-              }, "image/png");
-            });
-          });
+          .then(function () { return canvas; });
       });
   }
+
+  function pdfToPngFile(file) {
+    return pdfToCanvas(file).then(function (canvas) {
+      return new Promise(function (resolve) {
+        canvas.toBlob(function (blob) {
+          var name = (file.name || "floor-plan").replace(/\.pdf$/i, "") + ".png";
+          resolve(new File([blob], name, { type: "image/png" }));
+        }, "image/png");
+      });
+    });
+  }
+
+  /** any plan file → { dataUrl, aspect } for the AI reader */
+  function fileToPlanImage(file) {
+    if (isPdf(file)) {
+      return pdfToCanvas(file).then(function (canvas) {
+        return { dataUrl: canvas.toDataURL("image/png"), aspect: canvas.width / canvas.height };
+      });
+    }
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        var long = Math.max(img.width, img.height);
+        var scale = long > 2000 ? 2000 / long : 1;
+        var canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        var ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve({ dataUrl: canvas.toDataURL("image/jpeg", 0.92), aspect: canvas.width / canvas.height });
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("That image could not be opened.")); };
+      img.src = url;
+    });
+  }
+
+  // ── the Anthropic API key: one setting, saved on this device only ──────────
+  function getApiKey() {
+    try {
+      var v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") || "{}") || {};
+      return String((v7.settings || {}).maxApiKey || "");
+    } catch (e) { return ""; }
+  }
+  function setApiKey(key) {
+    try {
+      var v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") || "{}") || {};
+      v7.settings = v7.settings || {};
+      v7.settings.maxApiKey = String(key || "").trim();
+      localStorage.setItem("opsmatrix_v7", JSON.stringify(v7));
+      return true;
+    } catch (e) { return false; }
+  }
+  function keyTail(key) { return key.length > 4 ? "…" + key.slice(-4) : ""; }
 
   function isPdf(file) {
     return file && (file.type === "application/pdf" || /\.pdf$/i.test(file.name || ""));
@@ -226,6 +356,11 @@
 
   function onPlanFileChosen(e) {
     var input = e.target;
+    // a re-dispatch from "upload as picture only" — let the classic app have it
+    if (input.getAttribute("data-fusion-passthrough")) {
+      input.removeAttribute("data-fusion-passthrough");
+      return;
+    }
     var file = input.files && input.files[0];
     if (!file || input.getAttribute("data-fusion-converting")) return;
 
@@ -247,25 +382,174 @@
       return;
     }
 
-    if (!isPdf(file)) return; // images already work — let them straight through
-    // hold the PDF back; hand the app a PNG instead
+    // Every plan upload gets the choice, right here: read it with Max, or
+    // upload the raw picture and trace by hand. Nobody has to know a second
+    // screen exists to reach the smart path.
     e.stopImmediatePropagation();
     e.preventDefault();
-    input.setAttribute("data-fusion-converting", "1");
-    var note = showNote("Converting " + file.name + "…");
-    pdfToPngFile(file).then(function (png) {
-      var dt = new DataTransfer();
-      dt.items.add(png);
-      input.files = dt.files;
-      input.removeAttribute("data-fusion-converting");
-      note.remove();
+    showSmartChoice(input, file, f.building ? f.building.value.trim() : "", f.floor ? f.floor.value.trim() : "");
+  }
+
+  /** hand the picked file to the classic app's own handler, untouched */
+  function passThrough(input, file) {
+    input.setAttribute("data-fusion-passthrough", "1");
+    if (isPdf(file)) {
+      input.setAttribute("data-fusion-converting", "1");
+      var note = showNote("Converting " + file.name + "…");
+      pdfToPngFile(file).then(function (png) {
+        var dt = new DataTransfer();
+        dt.items.add(png);
+        input.files = dt.files;
+        input.removeAttribute("data-fusion-converting");
+        note.remove();
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }).catch(function (err) {
+        input.removeAttribute("data-fusion-converting");
+        input.removeAttribute("data-fusion-passthrough");
+        input.value = "";
+        note.textContent = "Could not read that PDF (" + err + "). Try exporting it as a PNG.";
+        note.style.background = "#b91c1c";
+        setTimeout(function () { note.remove(); }, 6000);
+      });
+    } else {
       input.dispatchEvent(new Event("change", { bubbles: true }));
-    }).catch(function (err) {
-      input.removeAttribute("data-fusion-converting");
+    }
+  }
+
+  // ── "How should this plan come in?" — the choice every upload now gets ─────
+  var SMART_ID = "fusion-smart";
+
+  function showSmartChoice(input, file, building, floor) {
+    if (document.getElementById(SMART_ID)) return;
+    var wrap = document.createElement("div");
+    wrap.id = SMART_ID;
+    wrap.setAttribute("style",
+      "position:fixed;inset:0;z-index:99999;background:rgba(15,23,32,.55);" +
+      "display:flex;align-items:center;justify-content:center;padding:20px;");
+    var savedKey = getApiKey();
+    var card = document.createElement("div");
+    card.setAttribute("style",
+      "background:#fff;border-radius:14px;max-width:520px;width:100%;padding:24px;" +
+      "font-family:'Segoe UI',sans-serif;color:#1c2b33;box-shadow:0 18px 60px rgba(0,0,0,.35);");
+    card.innerHTML =
+      "<h3 style='margin:0 0 6px;font-size:17px'>How should this floor plan come in?</h3>" +
+      "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>" + esc(file.name) + " → " +
+      esc(building || "?") + ", floor " + esc(floor || "?") + "</p>" +
+
+      "<div style='border:2px solid #0f6b62;border-radius:10px;padding:14px;margin-bottom:10px'>" +
+      "<b style='font-size:14.5px'>✨ Read it with Max <span style='font-weight:400;color:#5b7083'>(recommended)</span></b>" +
+      "<p style='margin:6px 0 10px;font-size:12.5px;color:#5b7083'>Max reads the rooms, their numbers and any square footage " +
+      "printed on the plan, then OpsMatrix redraws it in its own clean style. If the plan states its sizes, " +
+      "there is nothing to calibrate or measure.</p>" +
+      "<div id='fusion-keyrow'></div>" +
+      "<button id='fusion-smart-go' type='button' style='width:100%;padding:11px;border:none;background:#0f6b62;color:#fff;" +
+      "border-radius:8px;font-size:14px;font-weight:600;cursor:pointer'>✨ Read the plan</button>" +
+      "</div>" +
+
+      "<button id='fusion-smart-raw' type='button' style='width:100%;padding:10px;border:1px solid #d8e0e6;background:#fff;" +
+      "border-radius:8px;font-size:13px;cursor:pointer;color:#39505c'>Upload as a picture only — trace and calibrate by hand</button>" +
+      "<div id='fusion-smart-status' style='min-height:18px;font-size:12.5px;color:#0f6b62;margin-top:10px'></div>" +
+      "<div style='text-align:right;margin-top:4px'>" +
+      "<button id='fusion-smart-cancel' type='button' style='padding:7px 14px;border:none;background:none;" +
+      "font-size:12.5px;color:#8fa3b0;cursor:pointer'>Cancel</button></div>";
+    wrap.appendChild(card);
+    document.body.appendChild(wrap);
+
+    renderKeyRow(savedKey);
+
+    function renderKeyRow(key) {
+      var row = document.getElementById("fusion-keyrow");
+      if (!row) return;
+      if (key) {
+        row.innerHTML =
+          "<p style='margin:0 0 10px;font-size:12.5px;color:#0f6b62'>✓ API key saved on this device (" +
+          esc(keyTail(key)) + ") <button id='fusion-key-change' type='button' style='border:none;background:none;" +
+          "color:#5b7083;text-decoration:underline;cursor:pointer;font-size:12px'>change</button></p>";
+        var chg = document.getElementById("fusion-key-change");
+        if (chg) chg.addEventListener("click", function () { renderKeyRow(""); });
+      } else {
+        row.innerHTML =
+          "<div style='display:flex;gap:8px;margin-bottom:10px'>" +
+          "<input id='fusion-key-input' type='password' placeholder='Anthropic API key (sk-ant-api…)' " +
+          "style='flex:1;padding:9px 10px;border:1px solid #d8e0e6;border-radius:7px;font-size:13px'/>" +
+          "<button id='fusion-key-save' type='button' style='padding:9px 14px;border:none;background:#123c47;color:#fff;" +
+          "border-radius:7px;font-size:13px;cursor:pointer'>Save</button></div>";
+        var save = document.getElementById("fusion-key-save");
+        if (save) save.addEventListener("click", function () {
+          var v = (document.getElementById("fusion-key-input").value || "").trim();
+          if (!v) { setSmartStatus("Paste the API key first.", true); return; }
+          if (setApiKey(v)) { renderKeyRow(v); setSmartStatus("✓ Key saved on this device."); }
+          else setSmartStatus("Could not save the key (storage unavailable).", true);
+        });
+      }
+    }
+
+    function close() {
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
       input.value = "";
-      note.textContent = "Could not read that PDF (" + err + "). Try exporting it as a PNG.";
-      note.style.background = "#b91c1c";
-      setTimeout(function () { note.remove(); }, 6000);
+    }
+    wrap.addEventListener("click", function (ev) { if (ev.target === wrap) close(); });
+    document.getElementById("fusion-smart-cancel").addEventListener("click", close);
+    document.getElementById("fusion-smart-raw").addEventListener("click", function () {
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+      passThrough(input, file);
+    });
+    document.getElementById("fusion-smart-go").addEventListener("click", function () {
+      var key = getApiKey();
+      if (!key) { setSmartStatus("Save the API key above first — one time only.", true); return; }
+      runSmartImport(file, building, floor, key, close);
+    });
+  }
+
+  function setSmartStatus(msg, isErr) {
+    var el = document.getElementById("fusion-smart-status");
+    if (el) { el.textContent = msg; el.style.color = isErr ? "#c34444" : "#0f6b62"; }
+  }
+
+  function runSmartImport(file, building, floor, key, closeOverlay) {
+    var go = document.getElementById("fusion-smart-go");
+    if (go) { go.disabled = true; go.textContent = "Working…"; }
+    setSmartStatus("Opening " + file.name + "…");
+    fileToPlanImage(file).then(function (picture) {
+      return window.OpsMatrixFusion.importPlanFromImage({
+        apiKey: key,
+        imageDataUrl: picture.dataUrl,
+        aspect: picture.aspect,
+        building: building,
+        floor: floor,
+        onProgress: function (m) { setSmartStatus(m); }
+      });
+    }).then(function (result) {
+      persistImport(result);
+      var printed = 0;
+      for (var i = 0; i < result.spaces.length; i++) {
+        if (Number(result.spaces[i].squareFeet) > 0) printed++;
+      }
+      var scaled = result.plan && result.plan.ratio;
+      setSmartStatus("✓ " + result.spaces.length + " rooms read and drawn" +
+        (scaled ? " — already to scale, nothing to calibrate" : "") + ". Reloading…");
+      setTimeout(function () { window.location.reload(); }, 1400);
+    }).catch(function (err) {
+      if (go) { go.disabled = false; go.textContent = "✨ Read the plan"; }
+      setSmartStatus((err && err.message ? err.message : String(err)), true);
+    });
+  }
+
+  /** write an ImportResult into the classic stores (shared with magicplan) */
+  function persistImport(result) {
+    var v7 = {};
+    try { v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") || "{}") || {}; } catch (e) { v7 = {}; }
+    v7.spaces = (v7.spaces || []).concat(result.spaces);
+    localStorage.setItem("opsmatrix_v7", JSON.stringify(v7));
+    var plans = [];
+    try { plans = JSON.parse(localStorage.getItem("opsmatrix_v7_plans") || "[]") || []; } catch (e2) { plans = []; }
+    plans.push(result.plan);
+    localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(plans));
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
   }
 

@@ -321,3 +321,7 @@ function b64(s: string): string {
 
 // polygonBounds re-exported for the UI layer (zoom-to-plan previews)
 export { polygonBounds };
+
+// the AI plan reader, exposed on window.OpsMatrixFusion so the classic app's
+// own upload flow can offer "read it with Max" at the moment a file is picked
+export { importPlanFromImage, readPlanWithAI, buildPlanFromRooms, AiPlanError } from "./aiPlanImport";

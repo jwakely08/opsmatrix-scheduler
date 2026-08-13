@@ -18,6 +18,7 @@ export function AiPlanImport({ commit, onImported }: {
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [apiKey, setApiKey] = useState<string>(() => loadApiKey());
+  const [keySaved, setKeySaved] = useState<boolean>(() => Boolean(loadApiKey()));
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ rooms: number; printed: number; scaled: boolean } | null>(null);
@@ -98,22 +99,35 @@ export function AiPlanImport({ commit, onImported }: {
                   </label>
                 </div>
 
-                <label className="pfield">Anthropic API key
-                  <input type="password" value={apiKey} placeholder="sk-ant-api…"
-                    onChange={(e) => setApiKey(e.target.value)} />
-                  <small>
-                    Saved on this device only, and shared with Max AI in OpsMatrix — enter it once.
-                    It is never sent anywhere except Anthropic.
-                  </small>
-                </label>
+                {keySaved ? (
+                  <p className="pnote keysaved">
+                    ✓ API key saved on this device{apiKey.length > 4 ? ` (…${apiKey.slice(-4)})` : ""} ·{" "}
+                    <button className="plink" onClick={() => { setKeySaved(false); setApiKey(""); }}>change</button>
+                  </p>
+                ) : (
+                  <label className="pfield">Anthropic API key
+                    <span className="keyrow">
+                      <input type="password" value={apiKey} placeholder="sk-ant-api…"
+                        onChange={(e) => setApiKey(e.target.value)} />
+                      <button className="pbtn primary" disabled={!apiKey.trim()}
+                        onClick={() => { saveApiKey(apiKey); setKeySaved(true); }}>
+                        Save
+                      </button>
+                    </span>
+                    <small>
+                      Saved on this device only, and shared with Max AI in OpsMatrix — enter it once.
+                      It is never sent anywhere except Anthropic.
+                    </small>
+                  </label>
+                )}
 
                 {error && <p className="warntext">⚠ {error}</p>}
 
-                <button className="pbtn primary wide" disabled={!apiKey.trim()}
+                <button className="pbtn primary wide" disabled={!keySaved}
                   onClick={() => fileRef.current?.click()}>
                   Choose floor plan (image or PDF)
                 </button>
-                {!apiKey.trim() && <small className="pnote">Add the API key above to continue.</small>}
+                {!keySaved && <small className="pnote">Save the API key above first — one time only.</small>}
 
                 <input ref={fileRef} type="file" style={{ display: "none" }}
                   accept="image/*,application/pdf,.pdf"

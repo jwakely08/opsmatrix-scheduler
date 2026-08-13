@@ -235,6 +235,9 @@ body {
 .aiworking { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 34px 10px; text-align: center; }
 .aiworking b { font-size: 15px; color: #e2e8f0; }
 .aiworking small { color: #64748b; max-width: 380px; line-height: 1.5; }
+.keyrow { display: flex; gap: 8px; margin-top: 4px; }
+.keyrow input { flex: 1; }
+.pnote.keysaved { color: #34d399; font-size: 13px; }
 .aispin {
   width: 40px; height: 40px; border-radius: 50%;
   border: 3px solid rgba(148, 163, 184, .25); border-top-color: #2dd4bf;
