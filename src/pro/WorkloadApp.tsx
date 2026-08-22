@@ -22,7 +22,7 @@ import { fileToSheets, isSpreadsheet } from "./sheetFile";
 import { suggestRoomTypes } from "../bridge/roomTypeSuggest";
 import { loadApiKey } from "./classicStore";
 import type { ClassicData, ClassicSpace } from "./classicStore";
-import { syncSpaceMinutes, FLOOR_TYPES } from "./classicStore";
+import { syncSpaceMinutes, applyRoomType, FLOOR_TYPES } from "./classicStore";
 
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 
@@ -291,15 +291,15 @@ function ValidationTab({ spaces, rules, commit }: {
 
   const applyBulk = () => {
     if (sel.size === 0) return;
-    const typeLabel = bulkType ? rules.roomTypes.find((rt) => rt.id === bulkType)?.label ?? "" : "";
     commit((d) => {
       const aliases = loadAliases();
       let aliasesChanged = false;
       for (const sp of (d.v7.spaces ?? []) as ClassicSpace[]) {
         if (!sel.has(sp.id)) continue;
         const src = sp.source as SourceRecord | undefined;
-        if (typeLabel) {
-          sp.roomType = typeLabel;
+        if (bulkType) {
+          // the type arrives complete: label + Scope's automatic tasks + minutes
+          applyRoomType(sp, bulkType, rules);
           // remember the approval so the NEXT import maps this name itself
           const srcName = String(src?.roomName ?? sp.roomName ?? "").trim();
           if (srcName) { aliases.roomTypes[norm(srcName)] = bulkType; aliasesChanged = true; }
@@ -353,7 +353,8 @@ function ValidationTab({ spaces, rules, commit }: {
         const src = sp.source as SourceRecord | undefined;
         const nm = String(src?.roomName ?? sp.roomName ?? "").trim();
         const label = byName.get(nm);
-        if (label) { sp.roomType = label; syncSpaceMinutes(sp, rules); }
+        const id = label ? typeIdFromLabelStrict(rules, label) : null;
+        if (id) applyRoomType(sp, id, rules);
       }
     });
     setAi({ phase: "idle" });

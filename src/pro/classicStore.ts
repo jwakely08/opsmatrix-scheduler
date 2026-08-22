@@ -13,7 +13,7 @@
 //   • space.assignedScheduleId mirrors the PRIMARY schedule for Classic.
 import {
   computeMinutes, requiredTasks, toClassicRoomTasks, fromClassicRoomTasks,
-  loadRules, type Rules
+  loadRules, autoTasksFor, type Rules
 } from "./rules";
 
 /** room urgency, decided by the manager during Max Space validation */
@@ -149,6 +149,21 @@ export function syncSpaceMinutes(space: ClassicSpace, rules?: Rules) {
   const r = rules ?? loadRules();
   space.estimatedCleaningMinutes = computeMinutes(r, space).total;
   space.updatedAt = new Date().toISOString();
+}
+
+/**
+ * Give a space a (new) room type THE WHOLE WAY: the label, the tasks Scope
+ * says that type gets automatically (Auto Scrub + Dust Mop on a corridor…),
+ * and the recalculated minutes. Every screen that changes a room's type must
+ * come through here, so a bulk-classified room prices exactly like one
+ * classified in the sidebar — same Scope rulebook, same result.
+ */
+export function applyRoomType(space: ClassicSpace, typeId: string, rules: Rules) {
+  const rt = rules.roomTypes.find((x) => x.id === typeId);
+  if (!rt) return;
+  space.roomType = rt.label;
+  space.spaceTasks = autoTasksFor(rules, typeId);
+  syncSpaceMinutes(space, rules);
 }
 
 // ── coverage: which schedules cover which tasks in which rooms ──────────────

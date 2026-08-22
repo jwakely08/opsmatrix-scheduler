@@ -189,6 +189,29 @@ describe("Scope determines classification (Josh's rule)", () => {
   });
 });
 
+describe("classifying a room brings the WHOLE Scope rulebook with it", () => {
+  it("applyRoomType attaches the type's automatic tasks, so workload includes them", async () => {
+    const { applyRoomType } = await import("./classicStore");
+    const { weeklyMinutes, computeMinutes } = await import("./rules");
+    // an unclassified imported room: no type, no tasks
+    const sp = { id: "x", roomType: "", spaceTasks: [] as string[], squareFeet: 1000, floorType: "Hard floor — finished" };
+    applyRoomType(sp as never, "corridor", rules);
+    expect(sp.roomType).toBe("Corridor");
+    expect(sp.spaceTasks).toEqual(["auto-scrub", "dust-mop"]); // Scope's autoFor corridors
+    // per-visit: base 1000/33=30.3 + auto scrub 1000/200=5 + dust mop 1000/150=6.7 → 42
+    const perVisit = computeMinutes(rules, sp as never).total;
+    expect(perVisit).toBe(42);
+    expect(weeklyMinutes(rules, sp as never)).toBe(42 * 7);
+  });
+  it("resolvePendingRoomTypes gives retroactively-claimed rooms their auto tasks too", () => {
+    const blank: SpaceRecord[] = [{ id: "b", roomType: "", spaceTasks: [], squareFeet: 500,
+      source: { roomName: "CORR.", spaceDefinition: "" } as never }];
+    resolvePendingRoomTypes(blank, rules, noAliases);
+    expect(blank[0].roomType).toBe("Corridor");
+    expect(blank[0].spaceTasks).toEqual(["auto-scrub", "dust-mop"]);
+  });
+});
+
 describe("floor type normalization (§56)", () => {
   it("maps known finishes and leaves the rest blank", () => {
     expect(normalizeFloorType(noAliases, "CARPET")).toBe("Carpet");
