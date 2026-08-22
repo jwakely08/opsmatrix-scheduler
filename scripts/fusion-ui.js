@@ -1020,6 +1020,45 @@
             tasks: { type: "array", items: { type: "string" } }
           }
         }
+      },
+      // ── the universal fallback: EVERYTHING is readable and editable, even
+      //    fields added to the app after these tools were written ──
+      {
+        name: "read_data",
+        description: "Universal reader: see the REAL records and field names in any area of the app — rooms (every field they carry, including new ones), schedules, employees, the cleaning rulebook, recurring services, floor plans. Use it when no purpose-built tool covers what the user is asking about, then edit with edit_records.",
+        input_schema: {
+          type: "object",
+          required: ["area"],
+          properties: {
+            area: { type: "string", enum: ["rooms", "schedules", "employees", "cleaning_rules", "recurring_services", "floor_plans"] },
+            query: { type: "string", description: "filter text matched against the records (room number, name, department, building...)" },
+            limit: { type: "number", description: "max records to return (default 25)" },
+            offset: { type: "number" }
+          }
+        }
+      },
+      {
+        name: "edit_records",
+        description: "Universal editor: set ANY field on rooms, schedules, employees or recurring services — including fields no purpose-built tool mentions. Match records by exact number/name or by query text. Guardrails apply automatically: floor types resolve to the three real ones, room types must exist in Scope, and every touched room is repriced by the cleaning-rules engine. Prefer the purpose-built tools when one fits; this is the safety net so nothing in the app is ever out of reach.",
+        input_schema: {
+          type: "object",
+          required: ["area", "match", "set"],
+          properties: {
+            area: { type: "string", enum: ["rooms", "schedules", "employees", "recurring_services"] },
+            match: {
+              type: "object",
+              properties: {
+                room_number: { type: "string" },
+                schedule_number: { type: "string" },
+                employee_name: { type: "string" },
+                service: { type: "string" },
+                query: { type: "string", description: "match by text across the record's fields instead of an exact id" }
+              }
+            },
+            set: { type: "object", description: "field → new value. Use the exact field names read_data shows." },
+            allow_many: { type: "boolean", description: "required when the match hits more than 50 records" }
+          }
+        }
       }
     ];
 
@@ -1033,7 +1072,8 @@
         "- Recurring work that is not one room (trash pickup runs, discharges, sanitation routes, day porters) is a recurring SERVICE on a schedule: use add_recurring_service. \"A second trash pickup on second shift\" = add_recurring_service onto a 2nd Shift schedule (create_schedule first if none exists on that shift).\n" +
         "- Cleaning frequencies read like \"7x / week\", \"5x / week\", \"Every other week\", \"Monthly\".\n" +
         "- The Scope rulebook (rates, room types, tasks, staffing) is edited with get_cleaning_rules / update_cleaning_rules / set_room_type_rule / set_task_rule; every change reprices all rooms and the Workload Intelligence FTE instantly.\n" +
-        "- Room cleanability (whether a room counts toward EVS workload) is set with set_room_cleanability.";
+        "- Room cleanability (whether a room counts toward EVS workload) is set with set_room_cleanability.\n" +
+        "- NOTHING IS OUT OF REACH: if no purpose-built tool covers a request, call read_data to see the real records and field names (rooms carry every field, including newly added ones), then edit_records to change any field — its guardrails resolve floor types to the only three (Carpet, Hard floor — finished, Hard floor — unfinished), require room types that exist in Scope, and reprice every touched room. Prefer purpose-built tools when one fits.";
     }
 
     var FUSION_IMPL = {
@@ -1225,6 +1265,186 @@
         return { success: true, message: "Room " + t.roomNumber + " now requires: " + (inp.tasks.join(", ") || "just the general clean") + " (" + u.estimatedCleaningMinutes + " min per clean)." };
       },
 
+      read_data: function (inp, cx) {
+        var limit = Math.max(1, Math.min(100, parseInt(inp.limit) || 25));
+        var offset = Math.max(0, parseInt(inp.offset) || 0);
+        var q = String(inp.query || "").toLowerCase();
+        var hits = function (obj) {
+          if (!q) return true;
+          return JSON.stringify(obj).toLowerCase().indexOf(q) >= 0;
+        };
+        var page = function (arr) {
+          return { total: arr.length, showing: arr.slice(offset, offset + limit) };
+        };
+        if (inp.area === "rooms") {
+          var rules = F.loadRules();
+          var rows = (cx.spaces || []).filter(hits).map(function (s) {
+            var out = {};
+            // every primitive field the record carries — future fields included
+            Object.keys(s).forEach(function (k) {
+              var v = s[k];
+              if (k === "visualPts" || k === "source" || k === "id") return;
+              if (v === null || ["string", "number", "boolean"].indexOf(typeof v) >= 0) out[k] = v;
+              if (k === "spaceTasks" && Array.isArray(v)) {
+                out.spaceTasks = v.map(function (id) {
+                  var t = rules.tasks.find(function (x) { return x.id === id; });
+                  return t ? t.label : id;
+                });
+              }
+            });
+            out.cleanability = F.spaceCleanability(rules, s);
+            if (s.source && s.source.costCenter) {
+              out.costCenter = s.source.costCenter + (s.source.costCenterDescription ? " · " + s.source.costCenterDescription : "");
+            }
+            return out;
+          });
+          return page(rows);
+        }
+        if (inp.area === "schedules") {
+          var services = readServices();
+          return page((cx.schedules || []).filter(hits).map(function (s) {
+            return {
+              num: s.num, name: s.name, shift: s.shift, employee: s.employee,
+              targetHours: s.targetHours, rooms: (s.spaceOrder || []).length,
+              recurring_services: services.filter(function (t) { return t.scheduleId === s.id; })
+                .map(function (t) { return t.name + " (" + t.hours + "h)"; })
+            };
+          }));
+        }
+        if (inp.area === "employees") {
+          return page((cx.employees || []).filter(hits).map(function (e) {
+            var out = {};
+            Object.keys(e).forEach(function (k) {
+              if (k === "id") return;
+              var v = e[k];
+              if (v === null || ["string", "number", "boolean"].indexOf(typeof v) >= 0) out[k] = v;
+            });
+            return out;
+          }));
+        }
+        if (inp.area === "cleaning_rules") return FUSION_IMPL.get_cleaning_rules({}, cx);
+        if (inp.area === "recurring_services") {
+          return page(readServices().filter(hits).map(function (t) {
+            var sched = (cx.schedules || []).find(function (s) { return s.id === t.scheduleId; });
+            return { service: t.name, hours: t.hours, schedule: sched ? sched.num + " — " + (sched.name || "") : "(unattached)" };
+          }));
+        }
+        if (inp.area === "floor_plans") {
+          var plans = [];
+          try { plans = JSON.parse(localStorage.getItem("opsmatrix_v7_plans") || "[]") || []; } catch (e) { plans = []; }
+          return page(plans.map(function (p) {
+            return { building: p.building, floor: p.floor, rooms_drawn: (p.rooms || []).length };
+          }));
+        }
+        return { success: false, error: "Unknown area. Use: rooms, schedules, employees, cleaning_rules, recurring_services, floor_plans." };
+      },
+
+      edit_records: function (inp, cx) {
+        var match = inp.match || {};
+        var set = inp.set || {};
+        if (!Object.keys(set).length) return { success: false, error: "Nothing to set." };
+        var PROTECTED = ["id", "source", "visualPts", "visualPlanId", "visualW", "visualH", "importSource", "createdAt"];
+        var q = String(match.query || "").toLowerCase();
+        var textMatch = function (obj) { return q && JSON.stringify(obj).toLowerCase().indexOf(q) >= 0; };
+
+        if (inp.area === "rooms") {
+          var targets = match.room_number ? [findRoom(cx, match.room_number)].filter(Boolean)
+            : (cx.spaces || []).filter(textMatch);
+          if (!targets.length) return { success: false, error: "No rooms matched." };
+          if (targets.length > 50 && !inp.allow_many) {
+            return { success: false, error: "That matches " + targets.length + " rooms. Repeat with allow_many: true if that is intended." };
+          }
+          var rules = F.loadRules();
+          // one guardrail layer for every field, known or future
+          var prepared = {};
+          for (var k in set) {
+            if (PROTECTED.indexOf(k) >= 0) return { success: false, error: "The field \"" + k + "\" is protected and cannot be edited." };
+            var v = set[k];
+            if (k === "floorType") {
+              var ft = fusionFloor(v);
+              if (!ft) return { success: false, error: "\"" + v + "\" is not a floor type. The only three are: " + (F.FLOOR_TYPES || []).join(", ") + "." };
+              prepared[k] = ft;
+            } else if (k === "roomType") {
+              var hit2 = typeLabelFor(rules, v);
+              if (!hit2) return { success: false, error: "\"" + v + "\" is not a room type in Scope. Existing: " + rules.roomTypes.map(function (rt) { return rt.label; }).join(", ") + ". Create it first with set_room_type_rule." };
+              prepared[k] = hit2.label;
+              prepared.spaceTasks = F.autoTasksFor(rules, hit2.id);
+            } else if (k === "cleanability") {
+              if (CLEANABILITIES.indexOf(v) < 0) return { success: false, error: "Cleanability must be one of: " + CLEANABILITIES.join(", ") };
+              prepared[k] = v;
+            } else if (k === "spaceTasks" || k === "tasks") {
+              var mapped2 = taskIdsFor(rules, Array.isArray(v) ? v : [v]);
+              if (mapped2.unknown.length) return { success: false, error: "Unknown task(s): " + mapped2.unknown.join(", ") };
+              prepared.spaceTasks = mapped2.ids;
+            } else if (k === "squareFeet" || k === "fixtureCount") {
+              prepared[k] = Math.round(parseFloat(v) || 0);
+            } else if (v === null || ["string", "number", "boolean"].indexOf(typeof v) >= 0) {
+              prepared[k] = v; // any other field, present or future, passes through
+            } else {
+              return { success: false, error: "The field \"" + k + "\" needs a plain value (text, number, or yes/no)." };
+            }
+          }
+          targets.forEach(function (t) {
+            commitSpace(cx, Object.assign({}, t, prepared), rules);
+          });
+          return { success: true, message: "Updated " + targets.length + " room" + (targets.length > 1 ? "s" : "") + " (" + Object.keys(set).join(", ") + "), repriced by the rules engine." };
+        }
+
+        if (inp.area === "schedules") {
+          var scheds = match.schedule_number ? [findSchedule(cx, match.schedule_number)].filter(Boolean)
+            : (cx.schedules || []).filter(textMatch);
+          if (!scheds.length) return { success: false, error: "No schedules matched. Schedules: " + scheduleList(cx) };
+          scheds.forEach(function (s) {
+            var u = Object.assign({}, s, set, { updatedAt: new Date().toISOString() });
+            u.id = s.id;
+            if (set.targetHours !== undefined) u.targetHours = parseFloat(set.targetHours) || s.targetHours;
+            cx.addSchedule(u); // the classic setter upserts by id
+          });
+          return { success: true, message: "Updated " + scheds.length + " schedule(s)." };
+        }
+
+        if (inp.area === "employees") {
+          var emps = match.employee_name
+            ? (cx.employees || []).filter(function (e) {
+              var n = ((e.displayName || "") + " " + (e.firstName || "") + " " + (e.lastName || "")).toLowerCase();
+              return n.indexOf(String(match.employee_name).toLowerCase()) >= 0;
+            })
+            : (cx.employees || []).filter(textMatch);
+          if (!emps.length) return { success: false, error: "No employees matched." };
+          emps.forEach(function (e) {
+            var u = Object.assign({}, e, set, { updatedAt: new Date().toISOString() });
+            u.id = e.id;
+            cx.updateEmployee(u);
+          });
+          return { success: true, message: "Updated " + emps.length + " employee(s)." };
+        }
+
+        if (inp.area === "recurring_services") {
+          var services2 = readServices();
+          var picked = services2.filter(function (t) {
+            if (match.service && norm(t.name) !== norm(match.service)) return false;
+            if (match.schedule_number) {
+              var sc = findSchedule(cx, match.schedule_number);
+              if (!sc || t.scheduleId !== sc.id) return false;
+            }
+            return match.service || match.schedule_number || textMatch(t);
+          });
+          if (!picked.length) return { success: false, error: "No recurring services matched." };
+          picked.forEach(function (t) {
+            if (set.hours !== undefined) t.hours = parseFloat(set.hours) || t.hours;
+            if (set.name !== undefined || set.service !== undefined) t.name = String(set.name || set.service);
+            if (set.schedule_number !== undefined) {
+              var to = findSchedule(cx, set.schedule_number);
+              if (to) t.scheduleId = to.id;
+            }
+          });
+          writeServices(services2);
+          return { success: true, message: "Updated " + picked.length + " service(s)." };
+        }
+
+        return { success: false, error: "Unknown area. Use: rooms, schedules, employees, recurring_services." };
+      },
+
       // ── overrides of the archive's own space writers: fusion floor labels,
       //    Scope-engine minutes, and auto tasks on a type change ──
       update_space: function (inp, cx) {
@@ -1315,19 +1535,28 @@
 
     // The archive also has a LOCAL fast path (runDirectMaxCommand) that
     // catches phrases like "change room 102 floor type…" and drives the old
-    // form — bypassing the Scope engine entirely. Anything touching pricing
-    // or fusion concepts now falls through to the tool path instead, so the
-    // change actually HAPPENS (hands-free) and is priced by the rulebook.
-    // Navigation and Rover phrases keep their instant local handling.
+    // form — bypassing the Scope engine entirely. Only its two SAFE intents
+    // keep their instant local handling (opening Rover, plain navigation);
+    // every data-touching request falls through to the reasoning + tools
+    // path, where the model interprets the words and the guardrails price
+    // everything with the rulebook. Whitelisting by what the fast path DID
+    // (not by keywords) means no phrase list to maintain — ever.
     if (typeof runDirectMaxCommand === "function" && !window.__fusionDirectWrapped) {
       window.__fusionDirectWrapped = true;
       var origDirect = runDirectMaxCommand;
       window.runDirectMaxCommand = function (cx, text) {
-        var t = String(text || "");
-        if (/floor\s*type|room\s*type|square\s*(feet|footage)|sq\.?\s*ft|cleanab|frequenc|task|scope\b|rule\b|rate\b|pickup|pick\s*up|porter|discharge|sanitation|service|workload|fte|staffing|shift/i.test(t)) {
-          return null;
+        // disarm only the data-editing shortcuts for the duration of the
+        // call; Rover and navigation run exactly as the archive wrote them
+        var f1 = window.maxFillSpaceFormFromCommand, f2 = window.maxWantsSpaceForm, f3 = window.maxParseSpaceCommand;
+        window.maxFillSpaceFormFromCommand = function () { return null; };
+        window.maxWantsSpaceForm = function () { return false; };
+        window.maxParseSpaceCommand = function () { return null; };
+        try { return origDirect(cx, text); }
+        finally {
+          window.maxFillSpaceFormFromCommand = f1;
+          window.maxWantsSpaceForm = f2;
+          window.maxParseSpaceCommand = f3;
         }
-        return origDirect(cx, text);
       };
     }
   }
