@@ -13,7 +13,7 @@
 //   • space.assignedScheduleId mirrors the PRIMARY schedule for Classic.
 import {
   computeMinutes, requiredTasks, toClassicRoomTasks, fromClassicRoomTasks,
-  loadRules, autoTasksFor, type Rules
+  loadRules, autoTasksFor, typeIdFromLabel, type Rules
 } from "./rules";
 
 /** room urgency, decided by the manager during Max Space validation */
@@ -164,6 +164,33 @@ export function applyRoomType(space: ClassicSpace, typeId: string, rules: Rules)
   space.roomType = rt.label;
   space.spaceTasks = autoTasksFor(rules, typeId);
   syncSpaceMinutes(space, rules);
+}
+
+/**
+ * Scope changed AFTER rooms existed: rooms whose task list still exactly
+ * matches what the OLD rulebook assigned them are following the rulebook,
+ * so they follow it to its new state (add Burnishing to corridors in Scope
+ * and every untouched corridor gains it — and its minutes — instantly).
+ * A room whose list a manager customized by hand keeps the custom list:
+ * the same manual-edit-wins rule the importer lives by.
+ */
+export function refreshAutoTasks(spaces: ClassicSpace[], prev: Rules, next: Rules): number {
+  const sameSet = (a: string[], b: string[]) =>
+    a.length === b.length && a.every((x) => b.includes(x));
+  let changed = 0;
+  for (const sp of spaces) {
+    if (!Array.isArray(sp.spaceTasks)) continue; // legacy rooms follow autoFor live already
+    const label = String(sp.roomType ?? "");
+    if (!label.trim()) continue;
+    const prevAuto = autoTasksFor(prev, typeIdFromLabel(prev, label));
+    if (!sameSet(sp.spaceTasks, prevAuto)) continue; // hand-customized — keep it
+    const nextAuto = autoTasksFor(next, typeIdFromLabel(next, label));
+    if (!sameSet(sp.spaceTasks, nextAuto)) {
+      sp.spaceTasks = nextAuto;
+      changed++;
+    }
+  }
+  return changed;
 }
 
 // ── coverage: which schedules cover which tasks in which rooms ──────────────

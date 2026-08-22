@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  loadClassic, saveClassic, syncSpaceMinutes, coverageForSpace, uncovered, setCoverage,
+  loadClassic, saveClassic, syncSpaceMinutes, refreshAutoTasks, coverageForSpace, uncovered, setCoverage,
   coverageMinutes, scheduleMinutes, createSchedule, deleteSchedule, scheduleColor,
   spaceIncomplete, FLOOR_TYPES, rectifyForDisplay, pathFrom, centroidOf, boundsOf, pointIn,
   moveInSchedule, spacePriority, PRIORITIES,
@@ -63,12 +63,16 @@ export function MapsApp() {
   }, []);
 
   const commitRules = useCallback((next: Rules) => {
+    const prev = loadRules(); // the rulebook as it stood before this change
     setRules(next);
     saveRules(next);
     commit((d) => {
-      // Scope determines everything: a type added/changed in Scope instantly
-      // re-tests every room still waiting in Needs Review
+      // Scope determines everything, after the fact too: re-test rooms still
+      // in Needs Review, move rulebook-following rooms to the new automatic
+      // task lists (hand-customized rooms keep their custom lists), and
+      // recalculate every room's minutes under the new rules
       resolvePendingRoomTypes((d.v7.spaces ?? []) as never, next, loadAliases());
+      refreshAutoTasks(d.v7.spaces ?? [], prev, next);
       for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, next);
     });
   }, [commit]);

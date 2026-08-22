@@ -212,6 +212,42 @@ describe("classifying a room brings the WHOLE Scope rulebook with it", () => {
   });
 });
 
+describe("Scope changed AFTER the account was set up (Josh's scenario)", () => {
+  it("a rate change reprices every existing room instantly", async () => {
+    const { computeMinutes } = await import("./rules");
+    const room = { roomType: "Office", squareFeet: 330, floorType: "Hard floor — finished", spaceTasks: [] };
+    expect(computeMinutes(rules, room as never).total).toBe(10); // 330/33
+    const slower = defaultRules();
+    slower.general.hardSqftPerMin = 22; // manager tightens the rate in Scope
+    expect(computeMinutes(slower, room as never).total).toBe(15); // 330/22 — same room, new time
+  });
+  it("adding an automatic task to a type updates rooms that follow the rulebook, not hand-customized ones", async () => {
+    const { refreshAutoTasks, syncSpaceMinutes } = await import("./classicStore");
+    const prev = defaultRules();
+    const corridorA = { id: "a", roomType: "Corridor", floorType: "Hard floor — finished",
+      squareFeet: 1000, spaceTasks: ["auto-scrub", "dust-mop"] };       // exactly what Scope assigned
+    const corridorB = { id: "b", roomType: "Corridor", floorType: "Hard floor — finished",
+      squareFeet: 1000, spaceTasks: ["auto-scrub"] };                    // manager removed dust mop
+    const next = defaultRules();
+    next.tasks.find((t) => t.id === "burnish")!.autoFor = ["corridor", "hallway"]; // Scope change
+    const changed = refreshAutoTasks([corridorA, corridorB] as never, prev, next);
+    expect(changed).toBe(1);
+    expect(corridorA.spaceTasks).toContain("burnish");                   // follows the rulebook
+    expect(corridorB.spaceTasks).toEqual(["auto-scrub"]);                // custom list respected
+    syncSpaceMinutes(corridorA as never, next);
+    // base 1000/33=30.3 + scrub 5 + dust mop 6.7 + burnish 1000/100=10 → 52
+    expect(corridorA.spaceTasks && (corridorA as { estimatedCleaningMinutes?: number }).estimatedCleaningMinutes).toBe(52);
+  });
+  it("a frequency change moves the weekly workload and FTE", async () => {
+    const { weeklyMinutes } = await import("./rules");
+    const office = { roomType: "Office", squareFeet: 330, floorType: "Hard floor — finished", spaceTasks: [] };
+    expect(weeklyMinutes(rules, office as never)).toBe(50);              // 10 min × 5x/week
+    const daily = defaultRules();
+    daily.roomTypes.find((rt) => rt.id === "office")!.frequency = "7x / week";
+    expect(weeklyMinutes(daily, office as never)).toBe(70);              // same room, new week
+  });
+});
+
 describe("floor type normalization (§56)", () => {
   it("maps known finishes and leaves the rest blank", () => {
     expect(normalizeFloorType(noAliases, "CARPET")).toBe("Carpet");
