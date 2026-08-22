@@ -95,7 +95,7 @@ The user's Anthropic API key lives at `opsmatrix_v7 → settings.maxApiKey` (dev
 4. Face↔room assignment: one-to-one, by contained label text (fuzzy `matchLabel`) ranked by CSV-area agreement — survives duplicate names (real scan has 3 rooms named "Bedroom"). Unique-area rescue for missing labels; `hullClosureStrips` (inward-biased) for open scan sides.
 - Real-scan results (locked in tests): Bedroom 420.25→421.41 (0.28%), Bedroom 141.53→141.46, Bedroom 71.84→71.96, Other 20.60→18.11 (magicplan counts doorway-threshold floor; tolerance = 5% OR 3 sq ft absolute, documented).
 - `mergeShapes` unions rooms through their doorways (door patches as bridges; refuses if no connecting door); walls between merged rooms survive as holes.
-- **Ground truth fixtures**: `test-fixtures/Test_project_-_1st_Floor.dxf` + `Test_project_Statistics.csv` are **Josh's REAL magicplan exports (READ-ONLY — never regenerate/substitute)**. History note: earlier fixtures were synthetic stand-ins I generated (fully disclosed + audited on 2026-08-05); Josh then provided the real files and everything was rebuilt/validated against them. **156 vitest tests green (`npm test`)**: parsers, geometry (incl. damaged-scan robustness), compute engine of the old React app, schedule-doc generation (§10), the AI plan reader (§11), and the CAD room-list importer + workload engine (§12a).
+- **Ground truth fixtures**: `test-fixtures/Test_project_-_1st_Floor.dxf` + `Test_project_Statistics.csv` are **Josh's REAL magicplan exports (READ-ONLY — never regenerate/substitute)**. History note: earlier fixtures were synthetic stand-ins I generated (fully disclosed + audited on 2026-08-05); Josh then provided the real files and everything was rebuilt/validated against them. **157 vitest tests green (`npm test`)**: parsers, geometry (incl. damaged-scan robustness), compute engine of the old React app, schedule-doc generation (§10), the AI plan reader (§11), and the CAD room-list importer + workload engine (§12a).
 
 ## 9. DEMO SEED (critical for Josh's client demos)
 
@@ -146,10 +146,21 @@ A hospital CAD/location spreadsheet (Excel/CSV — e.g. a "Comprehensive Locatio
 - **Plans attach, never duplicate** (`attachPlanToRooms`, all three plan paths — magicplan, AI-read in hub, AI-read in Classic): imported plan rooms match existing spaces by Building+Floor+Room# (or unambiguous Room# alone), geometry moves onto the existing room, plan.rooms remapped to its id, blanks filled, values kept.
 - **SheetJS vendored**: `scripts/copy-xlsx.cjs` → `public/vendor/xlsx.full.min.js` (gitignored, built by all build/dev scripts); make-classic.cjs REWRITES the archive's cdnjs xlsx tag to the vendored copy in the generated classic.html (archive untouched). NOTE: the archive still loads React 18.2 + Tailwind 2 from cdnjs — pre-existing, flagged in §15.
 
+## 12b. HEY MAX × THE FUSION LAYER (added 2026-08-22, evening 2)
+
+Max (the archive's AI assistant, chat + 🎤 voice via Web Speech) can now edit EVERYTHING, fusion layer included. The archive keeps `MAX_TOOLS`, `makeExecuteTool`, `MAX_PLATFORM_GUIDE` and `runDirectMaxCommand` as page globals, so fusion-ui.js EXTENDS them at load (`wireMaxFusionTools`) — the archive stays untouched.
+
+- **9 new tools**: get_cleaning_rules, update_cleaning_rules, set_room_type_rule, set_task_rule, add/update/remove_recurring_service (non-space work on schedules — "a second trash pickup on second shift"), set_room_cleanability, set_room_tasks. Rules changes save to `opsmatrix_fusion_rules` then `retuneAllSpaces` (classicStore: resolve pending types + refresh auto tasks + migrate archive floor labels + reprice) pushes changed rooms back through `cx.updateSpace` so Classic's React state and save effect stay authoritative.
+- **3 archive tools overridden** (update_space, add_space, bulk_update_spaces): they now write the fusion floor trio (vinyl/tile → "Hard floor — finished") and price with the Scope engine instead of the retired V5 estimator; a room-type change brings the type's automatic tasks.
+- **Fast-path rerouted**: the archive's local `runDirectMaxCommand` used to catch "change room X floor type…" and drive the old form (V5 pricing). Phrases touching pricing/fusion concepts now fall through to the tool path; Rover/navigation phrases stay instant-local.
+- `fusionFloorLabel` (classicStore) migrates the archive's "Finished/Unfinished Floors" labels to the fusion trio on every `loadClassic` read.
+- **Universal fallback (nothing is ever out of reach)**: `read_data(area)` shows the REAL records and field names in any area — rooms return every primitive field they carry, INCLUDING fields added by future features — and `edit_records(area, match, set)` sets any field with ONE guardrail layer (floor types resolve to the only three or are refused naming them; room types must exist in Scope; cleanability enum; protected fields like id/source/geometry; >50 matches needs allow_many; every touched room repriced by the engine). New features are voice-editable with ZERO new plumbing; purpose-built tools remain preferred (the guide says so). The archive's local command fast-path is disarmed for data edits by stubbing its three shortcut fns during the call (no keyword lists) — Rover + navigation stay instant-local.
+- **Verified end to end** (Playwright + scripted Claude stub, `stop_reason:"tool_use"` — the panel ignores tool blocks without it): "change room E1-1003 floor type to vinyl" → persisted "Hard floor — finished" + engine minutes; "second trash pickup service on second shift" → Trash Pickup 2h on the 2nd-shift schedule in `opsmatrix_fusion_nonspace`; generic edit of a never-tooled field (ahu) persisted; "marble" floor refused with the trio named; navigation stays local. 43 tools on the wire.
+
 ## 13. BUILD & DEPLOY WORKFLOW
 
 ```
-npm test                                      # 156 tests must stay green
+npm test                                      # 157 tests must stay green
 npm run build:classic                         # rebuild public/classic.html (after fusion/bridge/rules changes!)
 npm run build                                 # MPA: index.html + maps.html
 git add -A && git commit && git push          # Pages deploys automatically (~35s)

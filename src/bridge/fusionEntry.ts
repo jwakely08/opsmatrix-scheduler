@@ -331,3 +331,12 @@ export { importPlanFromImage, readPlanWithAI, buildPlanFromRooms, AiPlanError } 
 export {
   importRoomListIntoStorage, importRoomList, detectImportMode, attachPlanToRooms
 } from "../pro/roomListImport";
+
+// the rules engine + retuning helpers, so Hey Max's fusion tools (injected
+// by fusion-ui.js) speak the SAME Scope rulebook as every other screen
+export {
+  loadRules, saveRules, computeMinutes, autoTasksFor, typeIdFromLabelStrict,
+  spaceCleanability, freqPerWeek, FREQUENCIES
+} from "../pro/rules";
+export { retuneAllSpaces, fusionFloorLabel, FLOOR_TYPES } from "../pro/classicStore";
+export { loadAliases, normalizeFloorType as normalizeFloorFinish } from "../pro/roomListImport";

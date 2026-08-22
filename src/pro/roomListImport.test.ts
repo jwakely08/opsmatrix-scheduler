@@ -248,6 +248,30 @@ describe("Scope changed AFTER the account was set up (Josh's scenario)", () => {
   });
 });
 
+describe("retuneAllSpaces — one call retunes the whole account (Hey Max uses this)", () => {
+  it("resolves pending types, migrates archive floor labels, reprices; returns only changed rooms", async () => {
+    const { retuneAllSpaces, fusionFloorLabel } = await import("./classicStore");
+    expect(fusionFloorLabel("Finished Floors")).toBe("Hard floor — finished");
+    expect(fusionFloorLabel("Unfinished Floors")).toBe("Hard floor — unfinished");
+    expect(fusionFloorLabel("Carpet")).toBe("Carpet");
+    const spaces = [
+      // archive floor label + stale minutes → changes
+      { id: "a", roomType: "Office", floorType: "Finished Floors", squareFeet: 330, spaceTasks: [], estimatedCleaningMinutes: 99 },
+      // pending type resolvable from source → changes
+      { id: "b", roomType: "", spaceTasks: [], squareFeet: 500,
+        source: { roomName: "CORR.", spaceDefinition: "" }, floorType: "" },
+      // already perfect → untouched
+      { id: "c", roomType: "Office", floorType: "Hard floor — finished", squareFeet: 330, spaceTasks: [], estimatedCleaningMinutes: 10 }
+    ];
+    const changed = retuneAllSpaces(spaces as never, rules);
+    expect(changed.map((s) => s.id).sort()).toEqual(["a", "b"]);
+    expect(spaces[0].floorType).toBe("Hard floor — finished");
+    expect(spaces[0].estimatedCleaningMinutes).toBe(10);
+    expect(spaces[1].roomType).toBe("Corridor");
+    expect(spaces[1].spaceTasks).toEqual(["auto-scrub", "dust-mop"]);
+  });
+});
+
 describe("floor type normalization (§56)", () => {
   it("maps known finishes and leaves the rest blank", () => {
     expect(normalizeFloorType(noAliases, "CARPET")).toBe("Carpet");
