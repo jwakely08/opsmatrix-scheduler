@@ -172,34 +172,42 @@ describe("department identity vs name (§12–§18)", () => {
     // stable across a "refresh" (recompute)
     expect(blankDeptLabels([...spaces].reverse()).get("D-100")).toBe("Blank Department 1");
   });
-  it("cost center description is NEVER promoted to department name (§55)", () => {
-    const spaces: SpaceRecord[] = [];
-    importRoomList(spaces, cadSheet([row()]), rules, noAliases);
-    expect(spaces[0].department).toBe(""); // name stays blank — placeholder shows instead
-    const src = spaces[0].source as { costCenterDescription: string };
-    expect(src.costCenterDescription).toBe("SCI-CARDIOLOGY PREP & RECOVERY");
-  });
-
-  it("with no department columns, cost center is the department IDENTITY (grouping only)", () => {
+  it("with no department columns, cost center IS the department: code = identity, description = name (Josh's rule)", () => {
     const spaces: SpaceRecord[] = [];
     importRoomList(spaces, cadSheet([
-      row({ 11: "H1.dwg" }),                                     // CC 73240
+      row({ 11: "H1.dwg" }),                                     // CC 73240 + description
       row({ 3: "E1-2000", 7: "60080", 8: "ONCOLOGY (7 EAST)", 11: "H2.dwg" }),
-      row({ 3: "E1-3000", 7: "-", 8: "-", 11: "H3.dwg" })        // junk CC → no evidence
+      row({ 3: "E1-3000", 7: "61910", 8: "", 11: "H3.dwg" }),    // code, no description
+      row({ 3: "E1-4000", 7: "-", 8: "-", 11: "H4.dwg" })        // junk CC → no evidence
     ]), rules, noAliases);
     expect(spaces[0].departmentKey).toBe("cc:73240");
-    expect(spaces[1].departmentKey).toBe("cc:60080");
-    expect(spaces[2].departmentKey ?? "").toBe("");              // stays unassigned
-    // separate, stable placeholders — never the cost center description
+    expect(spaces[0].department).toBe("Sci-Cardiology Prep & Recovery"); // tidied from ALL-CAPS
+    expect(spaces[1].department).toBe("Oncology (7 East)");
+    expect(spaces[2].departmentKey).toBe("cc:61910");
+    expect(spaces[2].department ?? "").toBe("");                 // no description → placeholder fallback
+    expect(spaces[3].departmentKey ?? "").toBe("");              // stays unassigned
     type DeptLike = { departmentKey?: string; department?: string };
     const labels = blankDeptLabels(spaces as DeptLike[]);
-    expect(departmentDisplay(spaces[0] as DeptLike, labels)).toBe("Blank Department 2");
-    expect(departmentDisplay(spaces[1] as DeptLike, labels)).toBe("Blank Department 1");
-    expect(departmentDisplay(spaces[2] as DeptLike, labels)).toBe("No department assigned");
+    expect(departmentDisplay(spaces[2] as DeptLike, labels)).toBe("Blank Department 1");
+    expect(departmentDisplay(spaces[3] as DeptLike, labels)).toBe("No department assigned");
+    // the verbatim source value is preserved alongside the tidied name
+    const src = spaces[0].source as { costCenterDescription: string };
+    expect(src.costCenterDescription).toBe("SCI-CARDIOLOGY PREP & RECOVERY");
     // a real department column still outranks cost center
     const withDept: SpaceRecord[] = [];
     importRoomList(withDept, cadSheet([row({ 9: "D-77", 11: "H9.dwg" })]), rules, noAliases);
     expect(withDept[0].departmentKey).toBe("D-77");
+  });
+
+  it("a rename during validation survives re-import (identity keeps the grouping)", () => {
+    const spaces: SpaceRecord[] = [];
+    importRoomList(spaces, cadSheet([row({ 7: "60080", 8: "ONCOLOGY (7 EAST)" })]), rules, noAliases);
+    expect(spaces[0].department).toBe("Oncology (7 East)");
+    spaces[0].department = "Oncology";                            // manager tidies the name
+    const again = importRoomList(spaces, cadSheet([row({ 7: "60080", 8: "ONCOLOGY (7 EAST)" })]), rules, noAliases);
+    expect(spaces[0].department).toBe("Oncology");               // manual edit wins
+    expect(spaces[0].departmentKey).toBe("cc:60080");            // grouping intact
+    expect(again.summary.keptManualEdits).toBeGreaterThan(0);
   });
 });
 
@@ -215,7 +223,7 @@ describe("import, upsert and lineage (§10, §21–§23)", () => {
     expect(pat.roomType).toBe("Patient Room");
     expect(pat.squareFeet).toBe(227);
     expect(pat.system).toBe("AKRON");
-    expect(pat.department).toBe("");
+    expect(pat.department).toBe("Sci-Cardiology Prep & Recovery"); // from cost center (Josh's rule)
     expect(pat.importSource).toBe("room-list");
     expect(Number(pat.estimatedCleaningMinutes)).toBeGreaterThan(0);
     const src = pat.source as { key: string; floorType: string; file: string };

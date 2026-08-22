@@ -54,6 +54,13 @@ export interface SourceRecord {
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 const txt = (s: unknown) => String(s ?? "").trim();
 
+/** deterministic tidy for CAD ALL-CAPS text: "ONCOLOGY (7 EAST)" → "Oncology (7 East)" */
+export function titleCase(s: string): string {
+  const raw = txt(s);
+  if (raw === "-" || /^[-–—.]+$/.test(raw)) return "";
+  return raw.toLowerCase().replace(/(^|[\s\-–—/(&])([a-z])/g, (_, pre, ch) => pre + ch.toUpperCase());
+}
+
 // ── header vocabulary (superset of the classic app's importer) ──────────────
 type FieldId =
   | "system" | "building" | "floor" | "roomNumber" | "roomName" | "roomType"
@@ -470,14 +477,21 @@ export function importRoomList(
     const sqft = area ? parseNum(raw[area.column]) : null;
     let dept = departmentIdentity(cell(ri, "department"), cell(ri, "departmentName"));
     // No department columns at all? A populated Cost Center is the file's own
-    // unit grouping, so it becomes the department IDENTITY — rooms billed
-    // together stay grouped together, shown as "Blank Department N" until a
-    // manager names them. The Cost Center DESCRIPTION is still never used as
-    // the name (a cost center is not a department), and a placeholder cost
-    // center like "-" is no evidence, so those rooms stay unassigned.
+    // unit grouping, so it becomes the department: the code is the IDENTITY
+    // (rooms billed together stay grouped together) and — Josh's call, made
+    // looking at his real E-building export where the descriptions ARE the
+    // units ("5 EAST", "ONCOLOGY (7 EAST)") — the description becomes the
+    // department NAME, tidied out of CAD ALL-CAPS. Managers rename freely in
+    // Space Validation; the identity keeps the grouping through any rename.
+    // A code with no description falls back to the stable "Blank Department N"
+    // placeholder; a placeholder cost center like "-" is no evidence at all,
+    // so those rooms stay honestly unassigned. Real department columns, when
+    // present, still outrank the cost center.
     if (!dept.key) {
       const cc = cell(ri, "costCenter");
-      if (cc && !/^[-–—.0]+$/.test(cc)) dept = { key: "cc:" + cc, name: "" };
+      if (cc && !/^[-–—.0]+$/.test(cc)) {
+        dept = { key: "cc:" + cc, name: titleCase(cell(ri, "costCenterDescription")) };
+      }
     }
     const srcFloorType = cell(ri, "floorType");
     const floorType = normalizeFloorType(aliases, srcFloorType);
