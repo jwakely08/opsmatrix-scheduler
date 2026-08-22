@@ -4,6 +4,7 @@
 // own style so it looks like every other plan in the system.
 import React, { useRef, useState } from "react";
 import { importPlanFromImage, AiPlanError } from "../bridge/aiPlanImport";
+import { attachPlanToRooms } from "./roomListImport";
 import { planFileToImage, isPdf } from "./planFile";
 import { loadApiKey, saveApiKey } from "./classicStore";
 import type { ClassicData } from "./classicStore";
@@ -49,7 +50,10 @@ export function AiPlanImport({ commit, onImported }: {
       });
 
       commit((d) => {
-        d.v7.spaces = [...(d.v7.spaces ?? []), ...(imported.spaces as never[])];
+        // rooms already imported from a room list get the GEOMETRY attached
+        // to them — a later floor plan never duplicates existing rooms
+        d.v7.spaces = d.v7.spaces ?? [];
+        attachPlanToRooms(d.v7.spaces as never, imported as never);
         d.plans.push(imported.plan as never);
         localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans));
       });

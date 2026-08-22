@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-08-22. Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-08-22 (evening: CAD room import + Workload Intelligence). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -35,6 +35,7 @@ OpsMatrix is Josh Wakely's hospital EVS (Environmental Services) operations plat
   - no hash = **Max Schedules** (tabs: Map, Schedules) — Classic's "Max Schedules" nav button is rewired to navigate here
   - `#spaces` = **Max Space — Map View** (standalone; Classic's Floor Plans tab is hidden and replaced by an injected "🗺 Map View" button)
   - `#scope` = **Admin Settings — Scope** (standalone; Classic's Admin Settings → "scope" sub-tab is rewired here)
+  - `#workload` = **Workload Intelligence** (standalone; injected "workload intelligence" sub-tab in Classic's Admin Settings — see §12a)
   It is a SEPARATE DOCUMENT from Classic on purpose: no in-memory state races — it reads/writes localStorage directly, Classic reloads fresh when you navigate back.
 
 **C. Old React scheduler** (`index.html` → `src/App.tsx` etc.) — the earlier map-first app with its own storage (`opsmatrix_sched_v1`), Supabase schema (`supabase/migrations/0001_init.sql`, multi-tenant RLS, never activated — Josh never made the Supabase account), PWA manifest. Superseded by A+B but still deployed and tested.
@@ -48,6 +49,7 @@ OpsMatrix is Josh Wakely's hospital EVS (Environmental Services) operations plat
 | `opsmatrix_v7_demo_stamp` | fusion seed | current: `classic-demo-v3:<dxflen>:<csvlen>` |
 | `opsmatrix_fusion_rules` | Scope manager | the Rules object (see §6) |
 | `opsmatrix_fusion_nonspace` | hub | `[{id, name, hours, scheduleId, roomIds[]}]` non-space task instances |
+| `opsmatrix_fusion_aliases` | importer + WI | approved source-name → room/floor type mappings (`{roomTypes:{}, floorTypes:{}}`) |
 | `opsmatrix_sched_v1` | old React app | its own AppState (irrelevant to Classic) |
 
 The user's Anthropic API key lives at `opsmatrix_v7 → settings.maxApiKey` (device-only; shared by Classic's Max AI and the AI plan reader — `loadApiKey`/`saveApiKey` in `classicStore.ts`, `getApiKey`/`setApiKey` in `fusion-ui.js`). **Never commit, bundle, or default a key anywhere in this repo**, and never load third-party scripts from a CDN into pages that can see it (pdf.js is vendored for exactly this reason).
@@ -93,7 +95,7 @@ The user's Anthropic API key lives at `opsmatrix_v7 → settings.maxApiKey` (dev
 4. Face↔room assignment: one-to-one, by contained label text (fuzzy `matchLabel`) ranked by CSV-area agreement — survives duplicate names (real scan has 3 rooms named "Bedroom"). Unique-area rescue for missing labels; `hullClosureStrips` (inward-biased) for open scan sides.
 - Real-scan results (locked in tests): Bedroom 420.25→421.41 (0.28%), Bedroom 141.53→141.46, Bedroom 71.84→71.96, Other 20.60→18.11 (magicplan counts doorway-threshold floor; tolerance = 5% OR 3 sq ft absolute, documented).
 - `mergeShapes` unions rooms through their doorways (door patches as bridges; refuses if no connecting door); walls between merged rooms survive as holes.
-- **Ground truth fixtures**: `test-fixtures/Test_project_-_1st_Floor.dxf` + `Test_project_Statistics.csv` are **Josh's REAL magicplan exports (READ-ONLY — never regenerate/substitute)**. History note: earlier fixtures were synthetic stand-ins I generated (fully disclosed + audited on 2026-08-05); Josh then provided the real files and everything was rebuilt/validated against them. **116 vitest tests green (`npm test`)**: parsers, geometry (incl. damaged-scan robustness), compute engine of the old React app, schedule-doc generation (§10), and the AI plan reader (§11).
+- **Ground truth fixtures**: `test-fixtures/Test_project_-_1st_Floor.dxf` + `Test_project_Statistics.csv` are **Josh's REAL magicplan exports (READ-ONLY — never regenerate/substitute)**. History note: earlier fixtures were synthetic stand-ins I generated (fully disclosed + audited on 2026-08-05); Josh then provided the real files and everything was rebuilt/validated against them. **146 vitest tests green (`npm test`)**: parsers, geometry (incl. damaged-scan robustness), compute engine of the old React app, schedule-doc generation (§10), the AI plan reader (§11), and the CAD room-list importer + workload engine (§12a).
 
 ## 9. DEMO SEED (critical for Josh's client demos)
 
@@ -132,10 +134,22 @@ Claude Fable 5 vision reads any floor-plan **picture or PDF** into real OpsMatri
 - **PWA**: `public/opsmatrix.webmanifest` + icons + `public/sw.js` — Classic installs to taskbar/home screen. The service worker is deliberately **NETWORK-FIRST** (cache is offline fallback only; cache-first is the classic stale-build bug this avoids). Only same-origin GETs are touched; API calls never cached.
 - The room sidebar has separate Room number / Room name fields, and incomplete rooms are flagged for missing number and name alongside floor type.
 
+## 12a. CAD ROOM-LIST IMPORT + WORKLOAD INTELLIGENCE (added 2026-08-22)
+
+A hospital CAD/location spreadsheet (Excel/CSV — e.g. a "Comprehensive Location Report") becomes normal OpsMatrix rooms in the ONE canonical dataset (`opsmatrix_v7.spaces`) — no floor plan required. List View, Max Schedule and Workload Intelligence work immediately; Map View stays honestly empty until a plan arrives and ATTACHES to those same rooms. Verified end-to-end in the browser against Josh's real 510-room export (NOT committed — see §15 privacy).
+
+- **Importer** `src/pro/roomListImport.ts` (pure, heavily tested): weighted header-row detection (superset of Classic's own vocabulary + Gross/Net S.F., Cost Center, Department code vs description, Internal Handle, AHU, Space Definition, Floor Finish/Type); square-footage column SELECTION (picks the populated candidate — Gross when Net is all zeros — and records the choice); deterministic CAD-abbreviation room-type rules (PAT. RM. → Patient Room etc.); floor-finish mapping to Classic's three floor types; blanks stay blank, nothing invented. **Upsert**: rooms matched by CAD Internal Handle, then System|Building|Floor|Room#|Name composite; re-imports update instead of duplicate, and a manager's hand-edit is never clobbered (`source.applied` snapshot). Full source row preserved under `space.source`.
+- **Department identity ≠ name** (critical): identity from dept code (or name); a numeric code is never displayed as a name; blank-named-but-coded departments stay SEPARATE with stable display labels "Blank Department N" (`blankDeptLabels`) that are never saved as names; Cost Center is preserved for analytics but NEVER promoted to department. No code and no name → room stays unassigned.
+- **Cleanability** (rules engine): `RoomTypeRule.cleanability` ("non-cleanable" on new built-in infrastructure types: Mechanical/Electrical/Data-Telecom/Shaft/Shell/Roof; new cleanable types: Stairwell, Elevator, Storage, Utility Room, Locker Room); per-space override; unknown type → "Needs review", never silently counted. `spaceCleanability`/`weeklyMinutes` (per-visit `computeMinutes` × room-type frequency; null = cannot calculate yet)/`estimatedFte` (weekly minutes ÷ productiveMinutes×shiftsPerWeekPerFte — the ORIGINAL surface-C staffing algorithm, defaults 420 & 5, editable) in `rules.ts`.
+- **Workload Intelligence** `maps.html#workload` (`src/pro/WorkloadApp.tsx`, aggregation in `src/pro/workload.ts`): Overview (Estimated FTE Requirement hero, Model Coverage = objective % of sqft classifiable, Total/Cleanable/Non-cleanable/Unresolved areas, FTE-by-department + hours-by-floor bars — all values printed, no hover), Space Validation (summary chips incl. "Blank department name — structure exists" vs "No department assigned", search/filter/pagination, multi-select bulk room-type/floor-type/cleanability/department, approvals saved as aliases in `opsmatrix_fusion_aliases` so future imports self-classify, "✨ Ask Max about unclassified names" = user-triggered Fable suggestions via `src/bridge/roomTypeSuggest.ts` — never automatic, approvals become aliases), Workload Breakdown (System → Building → Floor → Department → Room drill-down, room click = full plain-English calculation explanation + source lineage), Assumptions (the engine's real numbers only). Classic Admin Settings gains a "workload intelligence" sub-tab (fusion-ui injection).
+- **Upload flow**: Classic's ⬆ Upload → "Room list — Excel or CSV" now runs OUR importer in place (fusion-ui overlay → `OpsMatrixFusion.importRoomListIntoStorage`), with a §-style result screen (List View available / Map View: no floor plan provided / …) and a record in Classic's own importHistory. Hub: "📊 Import room list" button in #spaces and #workload headers (`RoomListImportButton`, SheetJS lazy-loaded from `public/vendor/`).
+- **Plans attach, never duplicate** (`attachPlanToRooms`, all three plan paths — magicplan, AI-read in hub, AI-read in Classic): imported plan rooms match existing spaces by Building+Floor+Room# (or unambiguous Room# alone), geometry moves onto the existing room, plan.rooms remapped to its id, blanks filled, values kept.
+- **SheetJS vendored**: `scripts/copy-xlsx.cjs` → `public/vendor/xlsx.full.min.js` (gitignored, built by all build/dev scripts); make-classic.cjs REWRITES the archive's cdnjs xlsx tag to the vendored copy in the generated classic.html (archive untouched). NOTE: the archive still loads React 18.2 + Tailwind 2 from cdnjs — pre-existing, flagged in §15.
+
 ## 13. BUILD & DEPLOY WORKFLOW
 
 ```
-npm test                                      # 116 tests must stay green
+npm test                                      # 146 tests must stay green
 npm run build:classic                         # rebuild public/classic.html (after fusion/bridge/rules changes!)
 npm run build                                 # MPA: index.html + maps.html
 git add -A && git commit && git push          # Pages deploys automatically (~35s)
@@ -158,6 +172,12 @@ git add -A && git commit && git push          # Pages deploys automatically (~35
 ├── src/pro/MapsApp.tsx             ← the hub (Map/Schedules tabs, #spaces, #scope, sidebars, report, two-tone)
 ├── src/pro/AiPlanImport.tsx        ← hub UI for "Read it with Max" (§11)
 ├── src/pro/planFile.ts             ← plan file → image; PDF rasterising via vendored pdf.js
+├── src/pro/roomListImport.ts       ← CAD room-list importer: header detect, dept identity, upsert, attach (§12a)
+├── src/pro/workload.ts             ← WI aggregation: totals, hierarchy tree, room explanation (§12a)
+├── src/pro/WorkloadApp.tsx         ← Workload Intelligence UI, 4 tabs + import button (§12a)
+├── src/pro/sheetFile.ts            ← spreadsheet file → raw sheets (lazy same-origin SheetJS)
+├── src/bridge/roomTypeSuggest.ts   ← user-triggered Fable room-type suggestions (§12a)
+├── scripts/copy-xlsx.cjs           ← vendors SheetJS to public/vendor/ (auto-runs in builds)
 ├── src/pro/scheduleDoc.ts          ← printed-schedule document builder (§10)
 ├── src/pro/PrintSchedule.tsx + print.css ← printed-schedule rendering (§10)
 ├── src/pro/classicStore.ts         ← v7 access, coverage model, setCoverage, CRUD, FLOOR_TYPES, API key, display rectify
@@ -185,7 +205,8 @@ git add -A && git commit && git push          # Pages deploys automatically (~35
 - The AI plan reader (§11) has been verified on Josh's real architect's sheet, but more real-world plans will shake out edge cases; the coordinate-scale rescue and zone-wrapper pruning exist because real model answers needed them.
 - The 20.6 sq ft closet reads 18.1 from geometry (threshold convention) — explained, accepted.
 - Old React app (surface C) still deployed at `/` with its own demo; candidate for retirement to avoid confusion.
-- Privacy note (flagged to Josh): the repo is public and contains his real home scan + it's visible in the public demo.
+- Privacy note (flagged to Josh): the repo is public and contains his real home scan + it's visible in the public demo. The Akron hospital CAD workbook used to build/verify the room-list importer was deliberately NOT committed (real hospital data, public repo) — keep it out.
+- The ARCHIVE loads React 18.2 + Tailwind 2 from cdnjs into classic.html (pre-existing; the xlsx CDN tag is now rewritten to a vendored copy at build time). Vendoring React/Tailwind the same way would complete hard rule 7 — safe, mechanical, not yet done.
 - Supabase/multi-user path exists only in surface C; if Classic needs multi-user, that's a big future project.
 
 ## 16. HARD RULES (violate none of these)
