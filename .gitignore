@@ -11,3 +11,5 @@ scripts/out/
 
 # vendored at build time by scripts/copy-pdfjs.cjs
 public/pdfjs/
+# vendored at build time by scripts/copy-xlsx.cjs
+public/vendor/

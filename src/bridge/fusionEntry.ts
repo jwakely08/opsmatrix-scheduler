@@ -325,3 +325,9 @@ export { polygonBounds };
 // the AI plan reader, exposed on window.OpsMatrixFusion so the classic app's
 // own upload flow can offer "read it with Max" at the moment a file is picked
 export { importPlanFromImage, readPlanWithAI, buildPlanFromRooms, AiPlanError } from "./aiPlanImport";
+
+// the room-list importer (CAD/location spreadsheets → canonical rooms) and
+// the attach-a-later-floor-plan matcher, for both the hub and classic.html
+export {
+  importRoomListIntoStorage, importRoomList, detectImportMode, attachPlanToRooms
+} from "../pro/roomListImport";

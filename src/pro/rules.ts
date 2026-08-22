@@ -24,6 +24,13 @@ export interface RoomTypeRule {
   qualifierMin: number;
   /** how often this type is cleaned, e.g. "7x / week" — editable per account */
   frequency: string;
+  /**
+   * Whether rooms of this type normally count toward EVS cleaning workload.
+   * A mechanical room is real hospital square footage — it stays in Max Space
+   * and in Total Facility Area — it just doesn't drive standard EVS staffing.
+   * Absent = cleanable (every pre-existing type keeps its old behavior).
+   */
+  cleanability?: "cleanable" | "non-cleanable";
   builtIn?: boolean;
 }
 
@@ -55,6 +62,14 @@ export interface Rules {
     hardSqftPerMin: number;    // includes damp mop on hard floor
     carpetSqftPerMin: number;  // includes vacuuming pass
     minMinutes: number;
+    /**
+     * Productive cleaning minutes in one shift, breaks and setup excluded.
+     * Same idea (and same 420-minute starting value) as the original
+     * OpsMatrix staffing engine: FTE = workload minutes ÷ productive minutes.
+     */
+    productiveMinutes: number;
+    /** shifts one full-time employee works per week */
+    shiftsPerWeekPerFte: number;
   };
   tasks: TaskRule[];
   roomTypes: RoomTypeRule[];
@@ -71,7 +86,7 @@ export const RULES_KEY = "opsmatrix_fusion_rules";
 export function defaultRules(): Rules {
   return {
     version: 1,
-    general: { hardSqftPerMin: 33, carpetSqftPerMin: 40, minMinutes: 3 },
+    general: { hardSqftPerMin: 33, carpetSqftPerMin: 40, minMinutes: 3, productiveMinutes: 420, shiftsPerWeekPerFte: 5 },
     tasks: [
       { id: "auto-scrub", label: "Auto Scrub", sqftPerMin: 200, flatMin: 0, autoFor: ["corridor", "hallway"], addable: true, builtIn: true },
       { id: "dust-mop", label: "Dust Mop", sqftPerMin: 150, flatMin: 0, autoFor: ["corridor", "hallway"], addable: true, builtIn: true },
@@ -91,7 +106,20 @@ export function defaultRules(): Rules {
       { id: "restroom", label: "Restroom", qualifierMin: 8, frequency: "7x / week", builtIn: true },
       { id: "operating-room", label: "Operating Room", qualifierMin: 25, frequency: "7x / week", builtIn: true },
       { id: "corridor", label: "Corridor", qualifierMin: 0, frequency: "7x / week", builtIn: true },
-      { id: "hallway", label: "Hallway", qualifierMin: 0, frequency: "7x / week", builtIn: true }
+      { id: "hallway", label: "Hallway", qualifierMin: 0, frequency: "7x / week", builtIn: true },
+      // spaces a hospital CAD export names that EVS still cleans
+      { id: "stairwell", label: "Stairwell", qualifierMin: 0, frequency: "2x / week", builtIn: true },
+      { id: "elevator", label: "Elevator", qualifierMin: 2, frequency: "7x / week", builtIn: true },
+      { id: "storage", label: "Storage", qualifierMin: 0, frequency: "1x / week", builtIn: true },
+      { id: "utility-room", label: "Utility Room", qualifierMin: 2, frequency: "7x / week", builtIn: true },
+      { id: "locker-room", label: "Locker Room", qualifierMin: 4, frequency: "7x / week", builtIn: true },
+      // infrastructure: real square footage, but not normal EVS workload
+      { id: "mechanical-room", label: "Mechanical Room", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true },
+      { id: "electrical-room", label: "Electrical Room", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true },
+      { id: "data-telecom", label: "Data / Telecom Room", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true },
+      { id: "shaft", label: "Shaft", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true },
+      { id: "shell-space", label: "Shell Space", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true },
+      { id: "roof", label: "Roof", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true }
     ],
     nonSpaceDefs: [
       { id: "discharge", label: "Discharges", defaultHours: 2, builtIn: true },
@@ -151,8 +179,8 @@ export function typeIdFromLabel(rules: Rules, label: string): string {
   if (hit) return hit.id;
   // legacy classic labels → our ids
   const m: Record<string, string> = {
-    orroom: "operating-room", nursesstation: "office", utilityroom: "office",
-    breakroom: "lounge", conferenceroom: "office", storage: "office", other: "office",
+    orroom: "operating-room", nursesstation: "office", utilityroom: "utility-room",
+    breakroom: "lounge", conferenceroom: "office", storage: "storage", other: "office",
     erroom: "emergency-room"
   };
   return m[norm(label)] ?? "office";
@@ -160,6 +188,88 @@ export function typeIdFromLabel(rules: Rules, label: string): string {
 
 export function isCarpet(floorType: string | undefined): boolean {
   return /carpet/i.test(floorType ?? "");
+}
+
+/**
+ * Like typeIdFromLabel, but honest about failure: null when the label maps to
+ * nothing, instead of quietly falling back to Office. Validation and
+ * cleanability decisions need the truth; pricing keeps the forgiving version.
+ */
+export function typeIdFromLabelStrict(rules: Rules, label: string | undefined): string | null {
+  const raw = String(label ?? "").trim();
+  if (!raw) return null;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]+/g, "");
+  const hit = rules.roomTypes.find((rt) => norm(rt.label) === norm(raw) || norm(rt.id) === norm(raw));
+  if (hit) return hit.id;
+  const m: Record<string, string> = {
+    orroom: "operating-room", nursesstation: "office", utilityroom: "utility-room",
+    breakroom: "lounge", conferenceroom: "office", storage: "storage",
+    erroom: "emergency-room", isolationroom: "patient-room"
+  };
+  return m[norm(raw)] ?? null;
+}
+
+/** "7x / week" → 7, "Every other week" → 0.5, "Monthly" → 12/52. */
+export function freqPerWeek(frequency: string | undefined): number {
+  const f = String(frequency ?? "").trim().toLowerCase();
+  const m = f.match(/^(\d+(?:\.\d+)?)\s*x/);
+  if (m) return Number(m[1]);
+  if (/every other week/.test(f)) return 0.5;
+  if (/month/.test(f)) return 12 / 52;
+  return 7; // unset frequency reads as daily, matching the built-in defaults
+}
+
+export type Cleanability = "Cleanable" | "Non-cleanable" | "Needs review";
+
+export interface CleanableSpaceLike extends SpaceLike {
+  /** manual override set in Space Validation; wins over the room type */
+  cleanability?: string;
+}
+
+/**
+ * Does this room count toward normal EVS workload?
+ * Manual override → room type's cleanability → "Needs review" when the room
+ * type is missing or maps to nothing we know. Unresolved rooms are NEVER
+ * silently counted as cleanable.
+ */
+export function spaceCleanability(rules: Rules, space: CleanableSpaceLike): Cleanability {
+  const o = String(space.cleanability ?? "").toLowerCase();
+  if (o === "cleanable") return "Cleanable";
+  if (o === "non-cleanable" || o === "noncleanable") return "Non-cleanable";
+  if (o === "needs review" || o === "review") return "Needs review";
+  const tid = typeIdFromLabelStrict(rules, space.roomType);
+  if (!tid) return "Needs review";
+  const rt = rules.roomTypes.find((x) => x.id === tid);
+  if (!rt) return "Needs review";
+  return rt.cleanability === "non-cleanable" ? "Non-cleanable" : "Cleanable";
+}
+
+/**
+ * One room's weekly EVS workload minutes: the SAME per-visit formula every
+ * other screen uses (computeMinutes) × the room type's cleaning frequency.
+ * null = cannot be calculated yet (no usable square footage, or the room
+ * still needs classification) — callers must report that, not hide it.
+ * Non-cleanable rooms are a real 0, not an unknown.
+ */
+export function weeklyMinutes(rules: Rules, space: CleanableSpaceLike): number | null {
+  const clean = spaceCleanability(rules, space);
+  if (clean === "Non-cleanable") return 0;
+  if (clean === "Needs review") return null;
+  if (!(Number(space.squareFeet) > 0)) return null;
+  const per = computeMinutes(rules, space).total;
+  const tid = typeIdFromLabelStrict(rules, space.roomType);
+  const rt = rules.roomTypes.find((x) => x.id === tid);
+  return per * freqPerWeek(rt?.frequency);
+}
+
+/**
+ * Estimated FTE for a weekly workload. The original OpsMatrix staffing
+ * engine's algorithm — workload minutes ÷ productive minutes — carried to a
+ * week: one FTE supplies (productive minutes per shift × shifts per week).
+ */
+export function estimatedFte(weeklyMin: number, rules: Rules): number {
+  const perWeek = Math.max(1, rules.general.productiveMinutes * rules.general.shiftsPerWeekPerFte);
+  return weeklyMin / perWeek;
 }
 
 export interface MinuteLine { label: string; minutes: number; }

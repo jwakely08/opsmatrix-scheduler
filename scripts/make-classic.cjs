@@ -12,7 +12,18 @@ const CORE_ALT = path.join(ROOT, "scripts", "out", "fusion-core.js");
 const UI = path.join(ROOT, "scripts", "fusion-ui.js");
 const OUT = path.join(ROOT, "public", "classic.html");
 
-const html = fs.readFileSync(SRC, "utf8");
+let html = fs.readFileSync(SRC, "utf8");
+
+// The archive loads SheetJS from a CDN. classic.html keeps the user's
+// Anthropic API key in localStorage, and the hard rule is that no
+// third-party script may run on a page that can read it — so the GENERATED
+// page points at our vendored copy instead (scripts/copy-xlsx.cjs). This is
+// a build-time rewrite of the output only; the archive file is untouched.
+const CDN_XLSX = /<script src="https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/xlsx\/[^"]+"><\/script>/;
+if (!CDN_XLSX.test(html)) {
+  throw new Error("make-classic: expected the archive's CDN xlsx tag — archive changed, refusing to guess");
+}
+html = html.replace(CDN_XLSX, '<script src="./vendor/xlsx.full.min.js"></script>');
 const corePath = fs.existsSync(CORE) ? CORE : CORE_ALT;
 const core = fs.readFileSync(corePath, "utf8");
 const seed = fs.readFileSync(path.join(ROOT, "scripts", "fusion-seed.js"), "utf8");

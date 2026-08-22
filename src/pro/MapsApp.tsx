@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  loadClassic, saveClassic, syncSpaceMinutes, coverageForSpace, uncovered, setCoverage,
+  loadClassic, saveClassic, syncSpaceMinutes, refreshAutoTasks, coverageForSpace, uncovered, setCoverage,
   coverageMinutes, scheduleMinutes, createSchedule, deleteSchedule, scheduleColor,
   spaceIncomplete, FLOOR_TYPES, rectifyForDisplay, pathFrom, centroidOf, boundsOf, pointIn,
   moveInSchedule, spacePriority, PRIORITIES,
@@ -9,8 +9,10 @@ import {
 } from "./classicStore";
 import { PrintSchedule } from "./PrintSchedule";
 import { AiPlanImport } from "./AiPlanImport";
+import { WorkloadApp, RoomListImportButton } from "./WorkloadApp";
 import { buildScheduleDoc, parseClock, type SchedBreak } from "./scheduleDoc";
 import { importScan } from "../bridge/fusionEntry";
+import { attachPlanToRooms, resolvePendingRoomTypes, loadAliases } from "./roomListImport";
 import {
   loadRules, saveRules, defaultRules, computeMinutes, requiredTasks, autoTasksFor,
   typeIdFromLabel, isCarpet, FREQUENCIES, type Rules
@@ -22,17 +24,19 @@ const RED = "#dc2626";
 
 function uid(p: string) { return p + "-" + Math.random().toString(36).slice(2, 9); }
 
-type Tab = "map" | "schedules" | "spaces" | "scope";
+type Tab = "map" | "schedules" | "spaces" | "scope" | "workload";
 
 export function MapsApp() {
   const [data, setData] = useState<ClassicData>(() => loadClassic());
   const [rules, setRules] = useState<Rules>(() => loadRules());
   // #scope = the Admin Settings → Scope manager; #spaces = Max Space's own
-  // Map View. Neither is a Max Schedules tab — the hub is Map + Schedules.
+  // Map View; #workload = Admin Settings → Workload Intelligence. None is a
+  // Max Schedules tab — the hub itself is Map + Schedules.
   const scopeOnly = window.location.hash === "#scope";
   const spacesOnly = window.location.hash === "#spaces";
+  const workloadOnly = window.location.hash === "#workload";
   const [tab, setTab] = useState<Tab>(() =>
-    scopeOnly ? "scope" : spacesOnly ? "spaces" : "map");
+    scopeOnly ? "scope" : spacesOnly ? "spaces" : workloadOnly ? "workload" : "map");
   const [roomSel, setRoomSel] = useState<string | null>(null);
   const [schedSel, setSchedSel] = useState<string | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -59,10 +63,30 @@ export function MapsApp() {
   }, []);
 
   const commitRules = useCallback((next: Rules) => {
+    const prev = loadRules(); // the rulebook as it stood before this change
     setRules(next);
     saveRules(next);
-    commit((d) => { for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, next); });
+    commit((d) => {
+      // Scope determines everything, after the fact too: re-test rooms still
+      // in Needs Review, move rulebook-following rooms to the new automatic
+      // task lists (hand-customized rooms keep their custom lists), and
+      // recalculate every room's minutes under the new rules
+      resolvePendingRoomTypes((d.v7.spaces ?? []) as never, next, loadAliases());
+      refreshAutoTasks(d.v7.spaces ?? [], prev, next);
+      for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, next);
+    });
   }, [commit]);
+
+  // fresh page load: rooms left unclassified by an earlier import get another
+  // chance against whatever Scope holds NOW (types added since, new aliases)
+  useEffect(() => {
+    const spacesAll = (data.v7.spaces ?? []);
+    if (!spacesAll.some((sp) => !String(sp.roomType ?? "").trim())) return;
+    commit((d) => {
+      const n = resolvePendingRoomTypes((d.v7.spaces ?? []) as never, rules, loadAliases());
+      if (n) for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, rules);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // first-run: guarantee spaceTasks + minutes; ensure existing assignments read as primary coverage
   useEffect(() => {
@@ -121,6 +145,8 @@ export function MapsApp() {
         <a className="pbtn ghost" href="./classic.html">← OpsMatrix</a>
         {scopeOnly ? (
           <h1>Admin Settings — <span>Scope</span></h1>
+        ) : workloadOnly ? (
+          <h1>Workload <span>Intelligence</span></h1>
         ) : spacesOnly ? (
           <h1>Max <span>Space</span> — Map View</h1>
         ) : (
@@ -137,10 +163,12 @@ export function MapsApp() {
         )}
         <span className="grow" />
         {spacesOnly && <>
+          <RoomListImportButton />
           <AiPlanImport commit={commit} onImported={() => window.location.reload()} />
           <ImportButton commit={commit} rules={rules} />
         </>}
-        {!scopeOnly && !spacesOnly && (
+        {workloadOnly && <RoomListImportButton label="📊 Import room list (Excel/CSV)" />}
+        {!scopeOnly && !spacesOnly && !workloadOnly && (
           <button className="pbtn" onClick={() => setReport(true)}>⚠ Unassigned Tasks</button>
         )}
       </header>
@@ -242,8 +270,17 @@ export function MapsApp() {
 
         {(tab === "map" || tab === "spaces") && !plan && (
           <div className="pro-empty">
-            <h2>No floor plan yet</h2>
-            <p>Import a magicplan scan in OpsMatrix first (Max Space → Floor Plans → ⚡ Import magicplan Scan).</p>
+            <h2>No floor plan has been added{spaces.length ? " for these rooms" : " yet"}</h2>
+            {spaces.length > 0 ? (
+              <p>
+                Your {spaces.length} imported room{spaces.length === 1 ? "" : "s"} are already
+                working — in Max Space's list, on schedules, and in Workload Intelligence.
+                A floor plan is optional: add one any time (a picture, PDF, or magicplan scan)
+                and it attaches to these same rooms.
+              </p>
+            ) : (
+              <p>Add a floor plan (picture, PDF or magicplan scan), or import a room list — either one gets you started.</p>
+            )}
             <a className="pbtn primary" href="./classic.html">← Back to OpsMatrix</a>
           </div>
         )}
@@ -282,6 +319,10 @@ export function MapsApp() {
 
         {tab === "scope" && (
           <ScopeTab rules={rules} onChange={commitRules} data={data} commit={commit} schedules={schedules} />
+        )}
+
+        {tab === "workload" && (
+          <WorkloadApp data={data} rules={rules} commit={commit} commitRules={commitRules} />
         )}
       </div>
 
@@ -374,13 +415,17 @@ function ImportButton({ commit, rules }: {
           const [dxfT, csvT] = await Promise.all([dxfF.text(), csvF.text()]);
           try {
             const result = importScan(dxfT, csvT, {});
+            let outcome = { attached: 0, added: 0 };
             commit((d) => {
-              d.v7.spaces = [...(d.v7.spaces ?? []), ...(result.spaces as unknown as ClassicSpace[])];
+              // a scan of rooms already imported from a list ATTACHES to them
+              d.v7.spaces = d.v7.spaces ?? [];
+              outcome = attachPlanToRooms(d.v7.spaces as never, result as never);
               d.plans.push(result.plan as unknown as ClassicData["plans"][0]);
               localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans));
               for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, rules);
             });
-            alert(`✓ ${result.summary.rooms} rooms imported, ${result.summary.autoDetected} drawn automatically`);
+            alert(`✓ ${result.summary.rooms} rooms imported, ${result.summary.autoDetected} drawn automatically` +
+              (outcome.attached ? `, ${outcome.attached} matched to rooms you already had` : ""));
             window.location.reload();
           } catch (err) {
             alert("Could not read that scan: " + err);

@@ -63,6 +63,16 @@
           e.stopPropagation();
           window.location.href = "./maps.html#scope";
         }, true);
+        // Admin Settings gains Workload Intelligence right next to Scope
+        if (!document.getElementById("fusion-admin-wi") && b.parentNode) {
+          var wiBtn = document.createElement("button");
+          wiBtn.id = "fusion-admin-wi";
+          wiBtn.type = "button";
+          wiBtn.className = b.className;
+          wiBtn.textContent = "workload intelligence";
+          wiBtn.addEventListener("click", function () { window.location.href = "./maps.html#workload"; });
+          b.parentNode.insertBefore(wiBtn, b.nextSibling);
+        }
       }
     }
     // Max Space gains a Map View tab, but Floor Plans STAYS: it owns uploading
@@ -161,10 +171,7 @@
     document.getElementById("fusion-hub-plan").addEventListener("click", function () { close(); goToAddFloorPlan(); });
     document.getElementById("fusion-hub-excel").addEventListener("click", function () {
       close();
-      if (!clickButtonByText("Import")) {
-        var n = showNote("Open the Explorer or Table view first, then press Import.");
-        setTimeout(function () { n.remove(); }, 5000);
-      }
+      openRoomListPicker();
     });
     document.getElementById("fusion-hub-magic").addEventListener("click", function () { close(); openOverlay(); });
   }
@@ -598,16 +605,121 @@
     });
   }
 
-  /** write an ImportResult into the classic stores (shared with magicplan) */
+  /** write an ImportResult into the classic stores (shared with magicplan).
+   *  Rooms that already exist (a room-list import) get the geometry ATTACHED
+   *  to them instead of being duplicated. */
   function persistImport(result) {
     var v7 = {};
     try { v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") || "{}") || {}; } catch (e) { v7 = {}; }
-    v7.spaces = (v7.spaces || []).concat(result.spaces);
+    v7.spaces = v7.spaces || [];
+    try {
+      window.OpsMatrixFusion.attachPlanToRooms(v7.spaces, result);
+    } catch (eAttach) {
+      v7.spaces = v7.spaces.concat(result.spaces); // never lose an import over matching
+    }
     localStorage.setItem("opsmatrix_v7", JSON.stringify(v7));
     var plans = [];
     try { plans = JSON.parse(localStorage.getItem("opsmatrix_v7_plans") || "[]") || []; } catch (e2) { plans = []; }
     plans.push(result.plan);
     localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(plans));
+  }
+
+  // ── 📊 Room list (Excel/CSV) → canonical rooms, right here in Classic ──────
+  function openRoomListPicker() {
+    var input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".xlsx,.xlsm,.xls,.csv,.tsv";
+    input.style.display = "none";
+    document.body.appendChild(input);
+    input.addEventListener("change", function () {
+      var file = input.files && input.files[0];
+      document.body.removeChild(input);
+      if (!file) return;
+      var note = showNote("Reading " + file.name + "…");
+      readSheets(file).then(function (sheets) {
+        var summary = window.OpsMatrixFusion.importRoomListIntoStorage(sheets, { fileName: file.name });
+        note.remove();
+        showRoomListResult(summary);
+      }).catch(function (err) {
+        note.remove();
+        var n = showNote("⚠ " + (err && err.message ? err.message : String(err)));
+        setTimeout(function () { n.remove(); }, 8000);
+      });
+    });
+    input.click();
+  }
+
+  /** file → [{name, rows}] via the same-origin SheetJS the page already has */
+  function readSheets(file) {
+    return new Promise(function (resolve, reject) {
+      var isCsv = /\.(csv|tsv)$/i.test(file.name);
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error("That file could not be opened.")); };
+      reader.onload = function () {
+        try {
+          var wb = isCsv
+            ? XLSX.read(String(reader.result), { type: "string" })
+            : XLSX.read(new Uint8Array(reader.result), { type: "array" });
+          var sheets = wb.SheetNames.map(function (name) {
+            return {
+              name: name,
+              rows: XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: "", raw: true })
+            };
+          });
+          resolve(sheets);
+        } catch (e) {
+          reject(new Error("That spreadsheet could not be read. Save it as .xlsx or .csv and try again."));
+        }
+      };
+      if (isCsv) reader.readAsText(file); else reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function showRoomListResult(s) {
+    var wrap = document.createElement("div");
+    wrap.setAttribute("style",
+      "position:fixed;inset:0;z-index:99998;background:rgba(15,23,32,.55);" +
+      "display:flex;align-items:center;justify-content:center;padding:20px;");
+    var line = function (k, v) {
+      return "<div style='display:flex;justify-content:space-between;gap:14px;padding:3px 0;font-size:13px'>" +
+        "<span style='color:#5b7083'>" + esc(k) + "</span><b style='color:#1c2b33;text-align:right'>" + esc(v) + "</b></div>";
+    };
+    var lines =
+      line("New rooms created", String(s.created)) +
+      (s.updated ? line("Existing rooms updated", String(s.updated)) : "") +
+      (s.unchanged ? line("Already up to date", String(s.unchanged)) : "") +
+      (s.keptManualEdits ? line("Your manual edits kept", String(s.keptManualEdits)) : "") +
+      line("List View", "Available now") +
+      line("Max Schedule", "Rooms available") +
+      line("Workload Intelligence", "Analysis available") +
+      line("Map View", "No floor plan provided — add one any time") +
+      (s.sqftSource ? line("Square footage source", s.sqftSource) : "") +
+      line("Floors detected", String(s.floors.length)) +
+      (s.deptNamesMissing ? line("Department names", "missing where not supplied") : "") +
+      line("Floor type coverage", s.rows ? Math.round((s.floorTypeMapped / s.rows) * 100) + "%" : "—") +
+      (s.needsReview ? line("Rooms needing review", String(s.needsReview)) : "");
+    var warns = (s.warnings || []).map(function (w) {
+      return "<p style='color:#b45309;font-size:12px;margin:6px 0 0'>⚠ " + esc(w) + "</p>";
+    }).join("");
+    var card = document.createElement("div");
+    card.setAttribute("style",
+      "background:#fff;border-radius:14px;max-width:460px;width:100%;padding:24px;" +
+      "font-family:'Segoe UI',sans-serif;color:#1c2b33;box-shadow:0 18px 60px rgba(0,0,0,.35);");
+    card.innerHTML =
+      "<h3 style='margin:0 0 2px;font-size:17px'>✓ Room list imported</h3>" +
+      "<p style='margin:0 0 12px;font-size:13px;color:#5b7083'>" + s.rows + " rooms/spaces processed.</p>" +
+      lines + warns +
+      "<div style='display:flex;gap:10px;justify-content:flex-end;margin-top:16px'>" +
+      "<button id='fusion-rl-wi' type='button' style='padding:9px 14px;border:1px solid #d8e0e6;background:#fff;" +
+      "border-radius:8px;font-size:13px;cursor:pointer;color:#39505c'>Open Workload Intelligence</button>" +
+      "<button id='fusion-rl-ok' type='button' style='padding:9px 16px;border:none;background:#0d9488;color:#fff;" +
+      "border-radius:8px;font-size:13px;font-weight:600;cursor:pointer'>Open the rooms</button></div>";
+    wrap.appendChild(card);
+    document.body.appendChild(wrap);
+    document.getElementById("fusion-rl-ok").addEventListener("click", function () { window.location.reload(); });
+    document.getElementById("fusion-rl-wi").addEventListener("click", function () {
+      window.location.href = "./maps.html#workload";
+    });
   }
 
   function esc(s) {
