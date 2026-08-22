@@ -468,7 +468,17 @@ export function importRoomList(
     const floor = cell(ri, "floor");
     const key = cell(ri, "sourceKey");
     const sqft = area ? parseNum(raw[area.column]) : null;
-    const dept = departmentIdentity(cell(ri, "department"), cell(ri, "departmentName"));
+    let dept = departmentIdentity(cell(ri, "department"), cell(ri, "departmentName"));
+    // No department columns at all? A populated Cost Center is the file's own
+    // unit grouping, so it becomes the department IDENTITY — rooms billed
+    // together stay grouped together, shown as "Blank Department N" until a
+    // manager names them. The Cost Center DESCRIPTION is still never used as
+    // the name (a cost center is not a department), and a placeholder cost
+    // center like "-" is no evidence, so those rooms stay unassigned.
+    if (!dept.key) {
+      const cc = cell(ri, "costCenter");
+      if (cc && !/^[-–—.0]+$/.test(cc)) dept = { key: "cc:" + cc, name: "" };
+    }
     const srcFloorType = cell(ri, "floorType");
     const floorType = normalizeFloorType(aliases, srcFloorType);
     const srcTypeName = cell(ri, "roomType") || roomName;
