@@ -828,6 +828,511 @@
     });
   }
 
+  // ── Hey Max × the fusion layer ─────────────────────────────────────────────
+  // Everything the fusion layer added (recurring services, the Scope rules
+  // engine, cleanability, per-room task lists) becomes editable by voice or
+  // chat through Max. The archive keeps MAX_TOOLS and makeExecuteTool as
+  // page globals, so we EXTEND them here — the archive itself is untouched.
+  // Three of the archive's own space tools are overridden so a Max edit
+  // writes fusion floor labels and prices rooms with the Scope engine
+  // instead of the retired V5 estimator.
+  function wireMaxFusionTools() {
+    if (window.__fusionMaxWired) return;
+    if (typeof MAX_TOOLS === "undefined" || typeof makeExecuteTool !== "function") return;
+    if (!window.OpsMatrixFusion || !window.OpsMatrixFusion.retuneAllSpaces) return;
+    window.__fusionMaxWired = true;
+    var F = window.OpsMatrixFusion;
+    var NONSPACE_KEY = "opsmatrix_fusion_nonspace";
+    var CLEANABILITIES = ["Cleanable", "Non-cleanable", "Needs review"];
+
+    function readServices() {
+      try { return JSON.parse(localStorage.getItem(NONSPACE_KEY) || "[]") || []; } catch (e) { return []; }
+    }
+    function writeServices(list) { localStorage.setItem(NONSPACE_KEY, JSON.stringify(list)); }
+    function slug(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""); }
+    function uid2(p) { return p + "-" + Math.random().toString(36).slice(2, 9); }
+    function norm(s) { return String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, ""); }
+
+    function findSchedule(cx, ref) {
+      var q = String(ref || "").trim().toLowerCase();
+      if (!q) return null;
+      return (cx.schedules || []).find(function (s) { return String(s.num || "").toLowerCase() === q; }) ||
+        (cx.schedules || []).find(function (s) { return String(s.name || "").toLowerCase().indexOf(q) >= 0; }) || null;
+    }
+    function scheduleList(cx) {
+      return (cx.schedules || []).map(function (s) {
+        return s.num + " — " + (s.name || "") + " (" + (s.shift || "") + ")";
+      }).join("; ") || "none yet";
+    }
+    function findRoom(cx, roomNumber) {
+      var rn = String(roomNumber || "").trim().toLowerCase();
+      return (cx.spaces || []).find(function (s) {
+        return String(s.roomNumber || "").trim().toLowerCase() === rn;
+      }) || null;
+    }
+    /** any floor wording → the fusion trio; "" when it can't be told */
+    function fusionFloor(value) {
+      var v = String(value || "").trim();
+      if (!v) return "";
+      var trio = F.FLOOR_TYPES || [];
+      for (var i = 0; i < trio.length; i++) if (norm(trio[i]) === norm(v)) return trio[i];
+      var byArchive = F.fusionFloorLabel(v);
+      if (byArchive !== v) return byArchive;
+      return F.normalizeFloorFinish(F.loadAliases(), v);
+    }
+    function typeLabelFor(rules, input) {
+      var id = F.typeIdFromLabelStrict(rules, input);
+      if (!id) return null;
+      var rt = rules.roomTypes.find(function (x) { return x.id === id; });
+      return rt ? { id: id, label: rt.label } : null;
+    }
+    function taskIdsFor(rules, labels) {
+      var out = [], unknown = [];
+      (labels || []).forEach(function (l) {
+        var t = rules.tasks.find(function (x) { return norm(x.label) === norm(l) || norm(x.id) === norm(l); });
+        if (t) { if (out.indexOf(t.id) < 0) out.push(t.id); } else unknown.push(l);
+      });
+      return { ids: out, unknown: unknown };
+    }
+    /** finish a space write: engine minutes + fusion floor label, via React */
+    function commitSpace(cx, space, rules) {
+      space.floorType = fusionFloor(space.floorType) || String(space.floorType || "");
+      space.estimatedCleaningMinutes = Math.round(F.computeMinutes(rules, space).total);
+      space.updatedAt = new Date().toISOString();
+      cx.updateSpace(space);
+    }
+    /** after a Scope change: re-test, re-task and reprice every room */
+    function retune(cx, nextRules, prevRules) {
+      var copies = (cx.spaces || []).map(function (s) { return Object.assign({}, s); });
+      var changed = F.retuneAllSpaces(copies, nextRules, prevRules);
+      changed.forEach(function (s) { cx.updateSpace(s); });
+      return changed.length;
+    }
+
+    var FUSION_TOOL_DEFS = [
+      {
+        name: "get_cleaning_rules",
+        description: "Read the Scope rulebook that prices every room: general cleaning rates, staffing assumptions, every room type (frequency, extra minutes, cleanability, automatic tasks), every task rate, and the recurring services (discharges, routes, porters, pickups) attached to schedules. Call this before changing rules if unsure of exact names.",
+        input_schema: { type: "object", properties: {} }
+      },
+      {
+        name: "update_cleaning_rules",
+        description: "Change the account-wide cleaning rates or staffing assumptions. Every room, schedule and the Workload Intelligence FTE recalculate instantly.",
+        input_schema: {
+          type: "object",
+          properties: {
+            hard_floor_sqft_per_minute: { type: "number", description: "general clean covers this many sq ft of hard floor per minute (default 33)" },
+            carpet_sqft_per_minute: { type: "number", description: "sq ft of carpet per minute (default 40)" },
+            minimum_minutes_per_room: { type: "number" },
+            productive_minutes_per_shift: { type: "number", description: "productive cleaning minutes in one shift (default 420)" },
+            shifts_per_week_per_fte: { type: "number", description: "shifts one full-time employee works weekly (default 5)" }
+          }
+        }
+      },
+      {
+        name: "set_room_type_rule",
+        description: "Create a room type or change how one is priced: cleaning frequency, extra minutes per clean, whether it counts toward EVS workload, and which tasks it gets automatically. Existing rooms of that type update immediately.",
+        input_schema: {
+          type: "object",
+          required: ["room_type"],
+          properties: {
+            room_type: { type: "string", description: "e.g. Patient Room, Telemetry Room" },
+            frequency: { type: "string", description: "one of: 7x / week, 6x / week, 5x / week, 3x / week, 2x / week, 1x / week, Every other week, Monthly" },
+            extra_minutes: { type: "number", description: "flat minutes added on top of the general clean" },
+            counts_toward_evs_workload: { type: "boolean", description: "false for infrastructure like mechanical rooms" },
+            automatic_tasks: { type: "array", items: { type: "string" }, description: "task names this type gets automatically, e.g. [\"Auto Scrub\",\"Dust Mop\"]" }
+          }
+        }
+      },
+      {
+        name: "set_task_rule",
+        description: "Create a cleaning task or change its rate (sq ft per minute, or flat minutes) and which room types get it automatically.",
+        input_schema: {
+          type: "object",
+          required: ["task"],
+          properties: {
+            task: { type: "string", description: "e.g. Trash Pull, Burnishing" },
+            sqft_per_minute: { type: "number", description: "1 minute covers this many sq ft (omit for flat-time tasks)" },
+            flat_minutes: { type: "number", description: "flat minutes per room (for tasks not based on size)" },
+            automatic_for_room_types: { type: "array", items: { type: "string" } }
+          }
+        }
+      },
+      {
+        name: "add_recurring_service",
+        description: "Attach a recurring non-room service to a schedule — a trash pickup run, discharge cleaning, a sanitation route, a day porter. The hours count toward that schedule's workload. Use create_schedule first if no suitable schedule exists on the wanted shift.",
+        input_schema: {
+          type: "object",
+          required: ["service", "schedule_number"],
+          properties: {
+            service: { type: "string", description: "e.g. Trash Pickup, Discharges, Day Porter" },
+            schedule_number: { type: "string", description: "the schedule's number, e.g. 102 (or its name)" },
+            hours: { type: "number", description: "hours per day this service takes (default 2)" }
+          }
+        }
+      },
+      {
+        name: "update_recurring_service",
+        description: "Change a recurring service's hours or move it to another schedule.",
+        input_schema: {
+          type: "object",
+          required: ["service"],
+          properties: {
+            service: { type: "string" },
+            schedule_number: { type: "string", description: "which schedule it is on now (needed only if the same service exists on several)" },
+            hours: { type: "number" },
+            move_to_schedule_number: { type: "string" }
+          }
+        }
+      },
+      {
+        name: "remove_recurring_service",
+        description: "Remove a recurring service from a schedule.",
+        input_schema: {
+          type: "object",
+          required: ["service"],
+          properties: {
+            service: { type: "string" },
+            schedule_number: { type: "string" }
+          }
+        }
+      },
+      {
+        name: "set_room_cleanability",
+        description: "Mark one room Cleanable, Non-cleanable (real space excluded from EVS workload, like a mechanical room), or Needs review.",
+        input_schema: {
+          type: "object",
+          required: ["room_number", "cleanability"],
+          properties: {
+            room_number: { type: "string" },
+            cleanability: { type: "string", enum: CLEANABILITIES }
+          }
+        }
+      },
+      {
+        name: "set_room_tasks",
+        description: "Set the exact task list one room requires (beyond its implicit general clean), e.g. [\"Trash Pull\",\"High Dusting\"]. Overrides the room type's automatic list for this room only.",
+        input_schema: {
+          type: "object",
+          required: ["room_number", "tasks"],
+          properties: {
+            room_number: { type: "string" },
+            tasks: { type: "array", items: { type: "string" } }
+          }
+        }
+      }
+    ];
+
+    FUSION_TOOL_DEFS.forEach(function (t) {
+      if (!MAX_TOOLS.some(function (x) { return x.name === t.name; })) MAX_TOOLS.push(t);
+    });
+    if (typeof MAX_PLATFORM_GUIDE === "string" && MAX_PLATFORM_GUIDE.indexOf("FUSION LAYER") < 0) {
+      window.MAX_PLATFORM_GUIDE = MAX_PLATFORM_GUIDE +
+        "\n\nFUSION LAYER (newer capabilities — prefer these):\n" +
+        "- Floor types are exactly: Carpet, \"Hard floor — finished\" (vinyl, tile, LVT, terrazzo), \"Hard floor — unfinished\" (bare concrete). Words like vinyl or tile mean Hard floor — finished.\n" +
+        "- Recurring work that is not one room (trash pickup runs, discharges, sanitation routes, day porters) is a recurring SERVICE on a schedule: use add_recurring_service. \"A second trash pickup on second shift\" = add_recurring_service onto a 2nd Shift schedule (create_schedule first if none exists on that shift).\n" +
+        "- Cleaning frequencies read like \"7x / week\", \"5x / week\", \"Every other week\", \"Monthly\".\n" +
+        "- The Scope rulebook (rates, room types, tasks, staffing) is edited with get_cleaning_rules / update_cleaning_rules / set_room_type_rule / set_task_rule; every change reprices all rooms and the Workload Intelligence FTE instantly.\n" +
+        "- Room cleanability (whether a room counts toward EVS workload) is set with set_room_cleanability.";
+    }
+
+    var FUSION_IMPL = {
+      get_cleaning_rules: function (inp, cx) {
+        var r = F.loadRules();
+        var services = readServices().map(function (t) {
+          var sched = (cx.schedules || []).find(function (s) { return s.id === t.scheduleId; });
+          return { service: t.name, hours: t.hours, schedule: sched ? sched.num + " — " + (sched.name || "") : "(unattached)" };
+        });
+        return {
+          general: {
+            hard_floor_sqft_per_minute: r.general.hardSqftPerMin,
+            carpet_sqft_per_minute: r.general.carpetSqftPerMin,
+            minimum_minutes_per_room: r.general.minMinutes,
+            productive_minutes_per_shift: r.general.productiveMinutes,
+            shifts_per_week_per_fte: r.general.shiftsPerWeekPerFte
+          },
+          room_types: r.roomTypes.map(function (rt) {
+            return {
+              room_type: rt.label, frequency: rt.frequency, extra_minutes: rt.qualifierMin,
+              counts_toward_evs_workload: rt.cleanability !== "non-cleanable",
+              automatic_tasks: r.tasks.filter(function (t) { return (t.autoFor || []).indexOf(rt.id) >= 0; })
+                .map(function (t) { return t.label; })
+            };
+          }),
+          tasks: r.tasks.map(function (t) {
+            return { task: t.label, sqft_per_minute: t.sqftPerMin, flat_minutes: t.flatMin };
+          }),
+          recurring_services: services,
+          schedules: scheduleList(cx)
+        };
+      },
+
+      update_cleaning_rules: function (inp, cx) {
+        var prev = F.loadRules();
+        var next = JSON.parse(JSON.stringify(prev));
+        var changed = [];
+        function setNum(field, target) {
+          var v = parseFloat(inp[field]);
+          if (Number.isFinite(v) && v > 0) { next.general[target] = v; changed.push(field.replace(/_/g, " ") + " → " + v); }
+        }
+        setNum("hard_floor_sqft_per_minute", "hardSqftPerMin");
+        setNum("carpet_sqft_per_minute", "carpetSqftPerMin");
+        setNum("minimum_minutes_per_room", "minMinutes");
+        setNum("productive_minutes_per_shift", "productiveMinutes");
+        setNum("shifts_per_week_per_fte", "shiftsPerWeekPerFte");
+        if (!changed.length) return { success: false, error: "No valid values given." };
+        F.saveRules(next);
+        var n = retune(cx, next, prev);
+        return { success: true, message: "Updated " + changed.join(", ") + ". Repriced " + n + " rooms." };
+      },
+
+      set_room_type_rule: function (inp, cx) {
+        var prev = F.loadRules();
+        var next = JSON.parse(JSON.stringify(prev));
+        var hit = typeLabelFor(next, inp.room_type);
+        var rt;
+        if (hit) {
+          rt = next.roomTypes.find(function (x) { return x.id === hit.id; });
+        } else {
+          rt = { id: slug(inp.room_type) || uid2("rt"), label: String(inp.room_type).trim(), qualifierMin: 0, frequency: "7x / week" };
+          next.roomTypes.push(rt);
+        }
+        if (inp.frequency !== undefined) rt.frequency = String(inp.frequency);
+        if (inp.extra_minutes !== undefined && Number.isFinite(parseFloat(inp.extra_minutes))) rt.qualifierMin = parseFloat(inp.extra_minutes);
+        if (inp.counts_toward_evs_workload === false) rt.cleanability = "non-cleanable";
+        if (inp.counts_toward_evs_workload === true) delete rt.cleanability;
+        if (Array.isArray(inp.automatic_tasks)) {
+          var mapped = taskIdsFor(next, inp.automatic_tasks);
+          if (mapped.unknown.length) {
+            return { success: false, error: "Unknown task(s): " + mapped.unknown.join(", ") + ". Existing tasks: " + next.tasks.map(function (t) { return t.label; }).join(", ") + ". Create new ones with set_task_rule first." };
+          }
+          next.tasks.forEach(function (t) {
+            t.autoFor = (t.autoFor || []).filter(function (id) { return id !== rt.id; });
+            if (mapped.ids.indexOf(t.id) >= 0) t.autoFor.push(rt.id);
+          });
+        }
+        F.saveRules(next);
+        var n = retune(cx, next, prev);
+        return { success: true, message: (hit ? "Updated" : "Created") + " room type " + rt.label + ". " + n + " rooms updated." };
+      },
+
+      set_task_rule: function (inp, cx) {
+        var prev = F.loadRules();
+        var next = JSON.parse(JSON.stringify(prev));
+        var t = next.tasks.find(function (x) { return norm(x.label) === norm(inp.task) || norm(x.id) === norm(inp.task); });
+        var created = false;
+        if (!t) {
+          t = { id: slug(inp.task) || uid2("task"), label: String(inp.task).trim(), sqftPerMin: null, flatMin: 0, autoFor: [], addable: true };
+          next.tasks.push(t);
+          created = true;
+        }
+        if (inp.sqft_per_minute !== undefined && Number.isFinite(parseFloat(inp.sqft_per_minute))) {
+          t.sqftPerMin = parseFloat(inp.sqft_per_minute); t.flatMin = 0;
+        }
+        if (inp.flat_minutes !== undefined && Number.isFinite(parseFloat(inp.flat_minutes))) {
+          t.flatMin = parseFloat(inp.flat_minutes); t.sqftPerMin = null;
+        }
+        if (Array.isArray(inp.automatic_for_room_types)) {
+          var ids = [];
+          for (var i = 0; i < inp.automatic_for_room_types.length; i++) {
+            var hit = typeLabelFor(next, inp.automatic_for_room_types[i]);
+            if (!hit) return { success: false, error: "Unknown room type: " + inp.automatic_for_room_types[i] };
+            ids.push(hit.id);
+          }
+          t.autoFor = ids;
+        }
+        F.saveRules(next);
+        var n = retune(cx, next, prev);
+        return { success: true, message: (created ? "Created" : "Updated") + " task " + t.label + ". " + n + " rooms updated." };
+      },
+
+      add_recurring_service: function (inp, cx) {
+        var sched = findSchedule(cx, inp.schedule_number);
+        if (!sched) return { success: false, error: "No schedule matches \"" + inp.schedule_number + "\". Schedules: " + scheduleList(cx) + ". Create one with create_schedule first." };
+        var name = String(inp.service || "").trim();
+        if (!name) return { success: false, error: "The service needs a name." };
+        var rules = F.loadRules();
+        var def = rules.nonSpaceDefs.find(function (d) { return norm(d.label) === norm(name); });
+        var hours = Number.isFinite(parseFloat(inp.hours)) ? parseFloat(inp.hours) : (def ? def.defaultHours : 2);
+        if (!def) {
+          var prev = JSON.parse(JSON.stringify(rules));
+          rules.nonSpaceDefs.push({ id: slug(name) || uid2("ns"), label: name, defaultHours: hours });
+          F.saveRules(rules);
+          void prev;
+        }
+        var services = readServices();
+        services.push({ id: uid2("nst"), name: def ? def.label : name, hours: hours, scheduleId: sched.id, roomIds: [] });
+        writeServices(services);
+        return { success: true, message: "Added " + name + " (" + hours + "h) to schedule " + sched.num + " — " + (sched.name || "") + " (" + (sched.shift || "") + "). It now counts toward that schedule's workload." };
+      },
+
+      update_recurring_service: function (inp, cx) {
+        var services = readServices();
+        var matches = services.filter(function (t) { return norm(t.name) === norm(inp.service); });
+        if (inp.schedule_number) {
+          var onSched = findSchedule(cx, inp.schedule_number);
+          matches = matches.filter(function (t) { return onSched && t.scheduleId === onSched.id; });
+        }
+        if (!matches.length) return { success: false, error: "No service named \"" + inp.service + "\" found." };
+        if (matches.length > 1) return { success: false, error: "\"" + inp.service + "\" exists on several schedules — say which schedule_number." };
+        var t = matches[0];
+        var msg = [];
+        if (Number.isFinite(parseFloat(inp.hours))) { t.hours = parseFloat(inp.hours); msg.push("hours → " + t.hours); }
+        if (inp.move_to_schedule_number) {
+          var to = findSchedule(cx, inp.move_to_schedule_number);
+          if (!to) return { success: false, error: "No schedule matches \"" + inp.move_to_schedule_number + "\". Schedules: " + scheduleList(cx) };
+          t.scheduleId = to.id; msg.push("moved to " + to.num);
+        }
+        if (!msg.length) return { success: false, error: "Nothing to change — give hours or move_to_schedule_number." };
+        writeServices(services);
+        return { success: true, message: "Updated " + t.name + ": " + msg.join(", ") };
+      },
+
+      remove_recurring_service: function (inp, cx) {
+        var services = readServices();
+        var onSched = inp.schedule_number ? findSchedule(cx, inp.schedule_number) : null;
+        var keep = [], removed = 0;
+        services.forEach(function (t) {
+          var hit = norm(t.name) === norm(inp.service) && (!onSched || t.scheduleId === onSched.id);
+          if (hit) removed++; else keep.push(t);
+        });
+        if (!removed) return { success: false, error: "No service named \"" + inp.service + "\" found." };
+        writeServices(keep);
+        return { success: true, message: "Removed " + removed + " " + inp.service + " service" + (removed > 1 ? "s" : "") + "." };
+      },
+
+      set_room_cleanability: function (inp, cx) {
+        var t = findRoom(cx, inp.room_number);
+        if (!t) return { success: false, error: "Space " + inp.room_number + " not found" };
+        if (CLEANABILITIES.indexOf(inp.cleanability) < 0) {
+          return { success: false, error: "Cleanability must be one of: " + CLEANABILITIES.join(", ") };
+        }
+        var u = Object.assign({}, t, { cleanability: inp.cleanability });
+        commitSpace(cx, u, F.loadRules());
+        return { success: true, message: "Room " + t.roomNumber + " is now " + inp.cleanability + "." };
+      },
+
+      set_room_tasks: function (inp, cx) {
+        var t = findRoom(cx, inp.room_number);
+        if (!t) return { success: false, error: "Space " + inp.room_number + " not found" };
+        var rules = F.loadRules();
+        var mapped = taskIdsFor(rules, inp.tasks);
+        if (mapped.unknown.length) {
+          return { success: false, error: "Unknown task(s): " + mapped.unknown.join(", ") + ". Existing tasks: " + rules.tasks.map(function (x) { return x.label; }).join(", ") };
+        }
+        var u = Object.assign({}, t, { spaceTasks: mapped.ids });
+        commitSpace(cx, u, rules);
+        return { success: true, message: "Room " + t.roomNumber + " now requires: " + (inp.tasks.join(", ") || "just the general clean") + " (" + u.estimatedCleaningMinutes + " min per clean)." };
+      },
+
+      // ── overrides of the archive's own space writers: fusion floor labels,
+      //    Scope-engine minutes, and auto tasks on a type change ──
+      update_space: function (inp, cx) {
+        var t = findRoom(cx, inp.room_number);
+        if (!t) return { success: false, error: "Space " + inp.room_number + " not found" };
+        var rules = F.loadRules();
+        var u = Object.assign({}, t, inp);
+        delete u.room_number;
+        if (inp.roomType !== undefined) {
+          var hit = typeLabelFor(rules, inp.roomType);
+          u.roomType = hit ? hit.label : String(inp.roomType || "").trim();
+          u.spaceTasks = hit ? F.autoTasksFor(rules, hit.id) : [];
+        }
+        if (inp.floorType !== undefined) {
+          var ft = fusionFloor(inp.floorType);
+          if (!ft) return { success: false, error: "\"" + inp.floorType + "\" is not a floor type I know. Use Carpet, Hard floor — finished (vinyl/tile/LVT), or Hard floor — unfinished (bare concrete)." };
+          u.floorType = ft;
+        }
+        u.squareFeet = Math.round(parseFloat(u.squareFeet) || 0);
+        u.fixtureCount = Math.round(parseFloat(u.fixtureCount) || 0);
+        commitSpace(cx, u, rules);
+        return { success: true, message: "Updated space " + t.roomNumber + " (" + u.estimatedCleaningMinutes + " min per clean)." };
+      },
+
+      add_space: function (inp, cx) {
+        if (!String(inp.roomNumber || "").trim()) return { success: false, error: "Room number is required" };
+        var rules = F.loadRules();
+        var hit = inp.roomType ? typeLabelFor(rules, inp.roomType) : null;
+        var ns = Object.assign({
+          building: "", floor: "", department: "", roomName: "",
+          squareFeet: 0, fixtureCount: 0, priorityLevel: "medium",
+          floorType: "", cleaningFrequency: "Daily"
+        }, inp, {
+          id: uid2("sp-max"),
+          roomNumber: String(inp.roomNumber).trim(),
+          roomType: hit ? hit.label : String(inp.roomType || "").trim(),
+          floorType: inp.floorType !== undefined ? fusionFloor(inp.floorType) : "",
+          spaceTasks: hit ? F.autoTasksFor(rules, hit.id) : [],
+          updatedAt: new Date().toISOString()
+        });
+        ns.squareFeet = Math.round(parseFloat(ns.squareFeet) || 0);
+        ns.estimatedCleaningMinutes = Math.round(F.computeMinutes(rules, ns).total);
+        if (cx.addSpaces) cx.addSpaces([ns]); else cx.updateSpace(ns);
+        return { success: true, message: "Added space " + ns.roomNumber + " (" + ns.estimatedCleaningMinutes + " min per clean)." };
+      },
+
+      bulk_update_spaces: function (inp, cx) {
+        var f = inp.filter || {};
+        var q = String(f.query || "").toLowerCase();
+        var rules = F.loadRules();
+        var matched = (cx.spaces || []).filter(function (s) {
+          if (q && ((s.roomNumber || "") + " " + (s.roomName || "") + " " + (s.department || "")).toLowerCase().indexOf(q) < 0) return false;
+          if (f.building && s.building !== f.building) return false;
+          if (f.floor && s.floor !== f.floor) return false;
+          if (f.department && s.department !== f.department) return false;
+          if (f.room_type && s.roomType !== f.room_type) return false;
+          if (f.unscheduled_only && s.assignedScheduleId) return false;
+          return true;
+        });
+        var updates = inp.updates || {};
+        var hit = updates.roomType !== undefined ? typeLabelFor(rules, updates.roomType) : null;
+        var ft = updates.floorType !== undefined ? fusionFloor(updates.floorType) : undefined;
+        if (updates.floorType !== undefined && !ft) {
+          return { success: false, error: "\"" + updates.floorType + "\" is not a floor type I know. Use Carpet, Hard floor — finished, or Hard floor — unfinished." };
+        }
+        matched.forEach(function (s) {
+          var u = Object.assign({}, s, updates);
+          if (hit) { u.roomType = hit.label; u.spaceTasks = F.autoTasksFor(rules, hit.id); }
+          if (ft !== undefined) u.floorType = ft;
+          commitSpace(cx, u, rules);
+        });
+        return { success: true, message: "Updated " + matched.length + " spaces", count: matched.length };
+      }
+    };
+
+    var origMakeExecuteTool = makeExecuteTool;
+    window.makeExecuteTool = function (cx) {
+      var base = origMakeExecuteTool(cx);
+      return function (name, inp) {
+        var impl = FUSION_IMPL[name];
+        if (impl) {
+          try { return impl(inp || {}, cx); }
+          catch (e) { return { success: false, error: String(e && e.message || e) }; }
+        }
+        return base(name, inp);
+      };
+    };
+
+    // The archive also has a LOCAL fast path (runDirectMaxCommand) that
+    // catches phrases like "change room 102 floor type…" and drives the old
+    // form — bypassing the Scope engine entirely. Anything touching pricing
+    // or fusion concepts now falls through to the tool path instead, so the
+    // change actually HAPPENS (hands-free) and is priced by the rulebook.
+    // Navigation and Rover phrases keep their instant local handling.
+    if (typeof runDirectMaxCommand === "function" && !window.__fusionDirectWrapped) {
+      window.__fusionDirectWrapped = true;
+      var origDirect = runDirectMaxCommand;
+      window.runDirectMaxCommand = function (cx, text) {
+        var t = String(text || "");
+        if (/floor\s*type|room\s*type|square\s*(feet|footage)|sq\.?\s*ft|cleanab|frequenc|task|scope\b|rule\b|rate\b|pickup|pick\s*up|porter|discharge|sanitation|service|workload|fte|staffing|shift/i.test(t)) {
+          return null;
+        }
+        return origDirect(cx, text);
+      };
+    }
+  }
+  wireMaxFusionTools();
+
   // the classic app re-renders constantly; keep our button present cheaply
   // (demo seeding lives in fusion-seed.js, injected BEFORE the app's script)
   var mo = new MutationObserver(function () { ensureSpaceScreen(); ensureButton(); });

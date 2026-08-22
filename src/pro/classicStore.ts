@@ -15,6 +15,7 @@ import {
   computeMinutes, requiredTasks, toClassicRoomTasks, fromClassicRoomTasks,
   loadRules, autoTasksFor, typeIdFromLabel, type Rules
 } from "./rules";
+import { resolvePendingRoomTypes, loadAliases } from "./roomListImport";
 
 /** room urgency, decided by the manager during Max Space validation */
 export type Priority = "High" | "Medium" | "Low";
@@ -115,8 +116,21 @@ export function loadClassic(): ClassicData {
     if (!Array.isArray(sp.spaceTasks) && Array.isArray(sp.fusionTasks)) {
       sp.spaceTasks = sp.fusionTasks;
     }
+    sp.floorType = fusionFloorLabel(sp.floorType);
   }
   return { v7, plans, nonSpace };
+}
+
+/**
+ * The archive's own floor vocabulary ("Finished Floors"/"Unfinished Floors")
+ * reads as the fusion trio, so a room Max or an old screen touched still
+ * agrees with every fusion screen and with the rules engine.
+ */
+export function fusionFloorLabel(v: unknown): string {
+  const s = String(v ?? "").trim();
+  if (/^finished floors$/i.test(s)) return "Hard floor — finished";
+  if (/^unfinished floors$/i.test(s)) return "Hard floor — unfinished";
+  return s;
 }
 
 /**
@@ -174,6 +188,30 @@ export function applyRoomType(space: ClassicSpace, typeId: string, rules: Rules)
  * A room whose list a manager customized by hand keeps the custom list:
  * the same manual-edit-wins rule the importer lives by.
  */
+/**
+ * The whole-account response to a rules change, in one call: rooms waiting
+ * in Needs Review get re-tested against the new Scope, rulebook-following
+ * rooms pick up new automatic task lists, archive floor labels normalize,
+ * and every room is repriced by the engine. Mutates the passed objects and
+ * returns the ones that actually changed — the classic page hands in COPIES
+ * of its React state and commits only the changed ones back.
+ */
+export function retuneAllSpaces(spaces: ClassicSpace[], next: Rules, prev?: Rules): ClassicSpace[] {
+  const snap = (sp: ClassicSpace) =>
+    JSON.stringify([sp.roomType, sp.spaceTasks, sp.estimatedCleaningMinutes, sp.floorType]);
+  const before = spaces.map(snap);
+  resolvePendingRoomTypes(spaces as never, next, loadAliases());
+  refreshAutoTasks(spaces, prev ?? next, next);
+  for (const sp of spaces) {
+    sp.floorType = fusionFloorLabel(sp.floorType);
+    sp.estimatedCleaningMinutes = computeMinutes(next, sp).total;
+  }
+  const changed = spaces.filter((sp, i) => snap(sp) !== before[i]);
+  const now = new Date().toISOString();
+  for (const sp of changed) sp.updatedAt = now;
+  return changed;
+}
+
 export function refreshAutoTasks(spaces: ClassicSpace[], prev: Rules, next: Rules): number {
   const sameSet = (a: string[], b: string[]) =>
     a.length === b.length && a.every((x) => b.includes(x));
