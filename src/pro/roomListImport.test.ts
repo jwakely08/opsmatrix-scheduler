@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   detectHeader, detectImportMode, pickAreaColumn, normalizeRoomType,
   normalizeFloorType, departmentIdentity, blankDeptLabels, departmentDisplay,
-  importRoomList, attachPlanToRooms, type RawSheet, type AliasStore, type SpaceRecord
+  importRoomList, attachPlanToRooms, scopeTypeMatch, resolvePendingRoomTypes,
+  type RawSheet, type AliasStore, type SpaceRecord
 } from "./roomListImport";
 import {
   defaultRules, spaceCleanability, weeklyMinutes, estimatedFte, freqPerWeek
@@ -132,6 +133,59 @@ describe("room type normalization (§24–25)", () => {
   it("an approved alias wins over the deterministic rules", () => {
     const aliases: AliasStore = { roomTypes: { fluoroscopycontrol: "procedure-room" }, floorTypes: {} };
     expect(normalizeRoomType(rules, aliases, "FLUOROSCOPY CONTROL")).toBe("Procedure Room");
+  });
+});
+
+describe("Scope determines classification (Josh's rule)", () => {
+  it("a room type ADDED in Scope is recognized automatically, abbreviations included", () => {
+    const withTele = defaultRules();
+    withTele.roomTypes.push({ id: "telemetry-room", label: "Telemetry Room", qualifierMin: 4, frequency: "7x / week" });
+    expect(normalizeRoomType(withTele, noAliases, "TELE. RM.")).toBe("Telemetry Room");
+    expect(normalizeRoomType(withTele, noAliases, "TELEMETRY ROOM")).toBe("Telemetry Room");
+    // without that Scope entry the same name stays honestly unclassified
+    expect(normalizeRoomType(rules, noAliases, "TELE. RM.")).toBeNull();
+  });
+  it("an abbreviation that could fit two Scope types matches neither", () => {
+    const r = defaultRules();
+    r.roomTypes.push({ id: "st-a", label: "Simulation Room", qualifierMin: 0, frequency: "5x / week" });
+    r.roomTypes.push({ id: "st-b", label: "Sterilizer Room", qualifierMin: 0, frequency: "5x / week" });
+    expect(scopeTypeMatch(r, "S. RM.")).toBeNull();
+  });
+  it("adding a Scope type retroactively resolves waiting Needs-Review rooms", () => {
+    const spaces: SpaceRecord[] = [];
+    importRoomList(spaces, cadSheet([row({ 4: "TELE. RM." })]), rules, noAliases);
+    expect(spaces[0].roomType).toBe("");
+    const withTele = defaultRules();
+    withTele.roomTypes.push({ id: "telemetry-room", label: "Telemetry Room", qualifierMin: 4, frequency: "7x / week" });
+    const n = resolvePendingRoomTypes(spaces, withTele, noAliases);
+    expect(n).toBe(1);
+    expect(spaces[0].roomType).toBe("Telemetry Room");
+    expect(Number(spaces[0].estimatedCleaningMinutes)).toBeGreaterThan(0);
+    // a second pass has nothing left to do, and set types are never overridden
+    expect(resolvePendingRoomTypes(spaces, withTele, noAliases)).toBe(0);
+  });
+  it("knows the shorthand for types Scope already has", () => {
+    const n = (name: string) => normalizeRoomType(rules, noAliases, name);
+    expect(n("VEST.")).toBe("Lobby");
+    expect(n("RECEP.")).toBe("Office");
+    expect(n("LKRS.")).toBe("Locker Room");
+    expect(n("I.T.")).toBe("Data / Telecom Room");
+    expect(n("SOILED HOLDING")).toBe("Utility Room");
+    expect(n("MEDS.")).toBe("Utility Room");
+    expect(n("DECONTAM.")).toBe("Utility Room");
+    expect(n("VENTS")).toBe("Mechanical Room");
+    expect(n("WATER TREATMENT")).toBe("Mechanical Room");
+    expect(n("EQUIP. RM.")).toBe("Utility Room");
+    expect(n("EQUIP. ALCOVE")).toBe("Utility Room");
+    expect(n("KITCHEN")).toBe("Lounge");
+    expect(n("VENDING")).toBe("Lounge");
+    expect(n("CLASSROOM")).toBe("Office");
+    expect(n("GROUP RM.")).toBe("Office");
+    expect(n("ANTE")).toBe("Utility Room");
+    // the genuinely ambiguous still ask a human (or Max)
+    expect(n("P/R #4")).toBeNull();
+    expect(n("TEE")).toBeNull();
+    expect(n("DIR.")).toBeNull();
   });
 });
 

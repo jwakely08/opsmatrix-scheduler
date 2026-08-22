@@ -12,7 +12,7 @@ import { AiPlanImport } from "./AiPlanImport";
 import { WorkloadApp, RoomListImportButton } from "./WorkloadApp";
 import { buildScheduleDoc, parseClock, type SchedBreak } from "./scheduleDoc";
 import { importScan } from "../bridge/fusionEntry";
-import { attachPlanToRooms } from "./roomListImport";
+import { attachPlanToRooms, resolvePendingRoomTypes, loadAliases } from "./roomListImport";
 import {
   loadRules, saveRules, defaultRules, computeMinutes, requiredTasks, autoTasksFor,
   typeIdFromLabel, isCarpet, FREQUENCIES, type Rules
@@ -65,8 +65,24 @@ export function MapsApp() {
   const commitRules = useCallback((next: Rules) => {
     setRules(next);
     saveRules(next);
-    commit((d) => { for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, next); });
+    commit((d) => {
+      // Scope determines everything: a type added/changed in Scope instantly
+      // re-tests every room still waiting in Needs Review
+      resolvePendingRoomTypes((d.v7.spaces ?? []) as never, next, loadAliases());
+      for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, next);
+    });
   }, [commit]);
+
+  // fresh page load: rooms left unclassified by an earlier import get another
+  // chance against whatever Scope holds NOW (types added since, new aliases)
+  useEffect(() => {
+    const spacesAll = (data.v7.spaces ?? []);
+    if (!spacesAll.some((sp) => !String(sp.roomType ?? "").trim())) return;
+    commit((d) => {
+      const n = resolvePendingRoomTypes((d.v7.spaces ?? []) as never, rules, loadAliases());
+      if (n) for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, rules);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // first-run: guarantee spaceTasks + minutes; ensure existing assignments read as primary coverage
   useEffect(() => {

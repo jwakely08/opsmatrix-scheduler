@@ -216,8 +216,42 @@ export function pickAreaColumn(
 }
 
 // ── room-type normalization ────────────────────────────────────────────────
-// Order matters and every rule is deterministic. Anything unmatched is left
+// SCOPE DETERMINES EVERYTHING: the room types the account keeps in Admin
+// Settings → Scope are the rulebook. Classification tries, in order:
+// approved alias → exact Scope match → Scope ABBREVIATION match (below) →
+// the deterministic CAD-shorthand table. Anything still unmatched is left
 // BLANK and lands in Needs Review — the importer never guesses.
+
+/**
+ * Match a CAD-abbreviated source name against the Scope room-type library
+ * itself, so a type the manager ADDS to Scope is recognized automatically —
+ * "TELE. RM." finds a "Telemetry Room" type the moment one exists.
+ * A source token matches a label token when it equals it, prefixes it
+ * (RESPIR. → Respiratory), or is a same-first-letter subsequence of it
+ * (RM → Room, STN → Station). Every token on BOTH sides must pair up, in
+ * order, and a name that fits two different types matches neither.
+ */
+export function scopeTypeMatch(rules: Rules, sourceName: string): string | null {
+  const tokens = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const tokMatch = (a: string, b: string): boolean => {
+    if (a === b) return true;
+    if (a.length >= 2 && b.startsWith(a)) return true;
+    if (a[0] !== b[0]) return false;
+    let i = 0;
+    for (const ch of b) if (ch === a[i]) i++;
+    return i === a.length && a.length >= 2;
+  };
+  const src = tokens(sourceName);
+  if (!src.length) return null;
+  const hits: string[] = [];
+  for (const rt of rules.roomTypes) {
+    const lab = tokens(rt.label);
+    if (lab.length !== src.length) continue;
+    if (src.every((t, i) => tokMatch(t, lab[i]))) hits.push(rt.id);
+  }
+  return hits.length === 1 ? hits[0] : null;
+}
+
 const TYPE_RULES: [RegExp, string][] = [
   [/\b(pat|patient)\b.*\b(tlt|toilet|bath)|^pat\.?\s*tlt/i, "restroom"],
   [/tlt|toilet|restroom|bathroom|lavat|shwr|shower|\bwc\b/i, "restroom"],
@@ -229,19 +263,19 @@ const TYPE_RULES: [RegExp, string][] = [
   [/emergency|\ber\b(?!\w)/i, "emergency-room"],
   [/corr(idor)?\.?$|^corr/i, "corridor"],
   [/hallway|\bhall\b/i, "hallway"],
-  [/nurses?\s*stn|nurses?\s*station|nourish|\bdictation\b|work\s*(area|rm|room)|\bcopy\b|\breception\b/i, "office"],
-  [/office|\bofc\b|dietitian|social\s*work|admin|conf(erence)?|consult|interview|registrar/i, "office"],
+  [/nurses?\s*stn|nurses?\s*station|nourish|\bdictation\b|work\s*(area|rm|room)|\bcopy\b|recep(tion)?\b/i, "office"],
+  [/office|\bofc\b|dietitian|social\s*work|admin|conf(erence)?|consult|interview|registrar|classroom|class\s*rm|group\s*rm|training/i, "office"],
   [/waiting|\bwait\b/i, "waiting-room"],
-  [/lobby|vestibule|entry|entrance/i, "lobby"],
-  [/lounge|break\s*(rm|room)|staff\s*rm|on.?call|sleep|respite|family\s*rm/i, "lounge"],
-  [/soiled\s*util|clean\s*util|\butil(ity)?\b|hskpg|housekeeping|\bevs\b|janitor|med\.?\s*(rm|room)|medication|\blinen\b|equip(ment)?\s*(rm|room|stor)/i, "utility-room"],
-  [/locker/i, "locker-room"],
+  [/lobby|vest(ibule)?\.?\b|entry|entrance/i, "lobby"],
+  [/lounge|break\s*(rm|room)|staff\s*rm|on.?call|sleep|respite|family\s*rm|kitchen|vending/i, "lounge"],
+  [/soiled|clean\s*util|\butil(ity)?\b|hskpg|housekeeping|\bevs\b|janitor|med\.?\s*(rm|room)|meds\.?\b|medication|decontam|^ante\b|\blinen\b|equip\.?(ment)?\s*(rm|room|stor|alcove)/i, "utility-room"],
+  [/locker|lkrs?\.?\b/i, "locker-room"],
   [/stor(age)?\.?$|^stor|closet|\bsupply\b/i, "storage"],
   [/stair/i, "stairwell"],
   [/elev(ator)?\.?/i, "elevator"],
-  [/mech(anical)?\b/i, "mechanical-room"],
+  [/mech(anical)?\b|vents?\.?$|water\s*treatment/i, "mechanical-room"],
   [/elec(trical)?\b|\bemr\b/i, "electrical-room"],
-  [/\bdata\b|telecom|\bidf\b|\bmdf\b|\bit\s*(rm|room|closet)\b|server/i, "data-telecom"],
+  [/\bdata\b|telecom|\bidf\b|\bmdf\b|\bit\s*(rm|room|closet)\b|^i\.?t\.?$|server/i, "data-telecom"],
   [/shaft|chase/i, "shaft"],
   [/shell/i, "shell-space"],
   [/roof/i, "roof"]
@@ -294,10 +328,45 @@ export function normalizeRoomType(
   }
   const exact = typeIdFromLabelStrict(rules, raw);
   if (exact) return labelFor(rules, exact);
+  // the Scope library itself: a type the manager added is recognized here
+  const scoped = scopeTypeMatch(rules, raw);
+  if (scoped) return labelFor(rules, scoped);
   for (const [re, id] of TYPE_RULES) {
     if (re.test(raw)) return labelFor(rules, id);
   }
   return null;
+}
+
+/**
+ * SCOPE DETERMINES EVERYTHING, retroactively too: re-test every room still
+ * waiting in Needs Review against the CURRENT Scope room types and saved
+ * aliases. Called whenever Scope changes (and when Workload Intelligence
+ * loads), so adding a "Telemetry Room" type instantly claims every
+ * "TELE. RM." the earlier import could not place. Only ever fills BLANK
+ * room types — a classification someone already made is never overridden.
+ * Returns how many rooms it resolved.
+ */
+export function resolvePendingRoomTypes(
+  spaces: SpaceRecord[], rules: Rules, aliases: AliasStore
+): number {
+  let resolved = 0;
+  for (const sp of spaces) {
+    if (String(sp.roomType ?? "").trim()) continue;
+    const src = sp.source as SourceRecord | undefined;
+    const name = txt(src?.roomName ?? sp.roomName);
+    const def = txt(src?.spaceDefinition);
+    if (!name && !def) continue;
+    const label = normalizeRoomType(rules, aliases, name, def);
+    if (!label) continue;
+    sp.roomType = label;
+    if (!Array.isArray(sp.spaceTasks) || (sp.spaceTasks as unknown[]).length === 0) {
+      sp.spaceTasks = autoTasksFor(rules, typeIdFromLabelStrict(rules, label) ?? "");
+    }
+    sp.estimatedCleaningMinutes = computeMinutes(rules, sp as never).total;
+    sp.updatedAt = new Date().toISOString();
+    resolved++;
+  }
+  return resolved;
 }
 
 function labelFor(rules: Rules, id: string): string {
