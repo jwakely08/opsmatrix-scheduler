@@ -14,6 +14,8 @@ export interface TaskRule {
   autoFor: string[];
   /** shown in the picker for manual adds */
   addable: boolean;
+  /** floor-tech work: scheduled in Max Floor Care, not in Max Schedules */
+  floorCare?: boolean;
   builtIn?: boolean;
 }
 
@@ -88,9 +90,13 @@ export function defaultRules(): Rules {
     version: 1,
     general: { hardSqftPerMin: 33, carpetSqftPerMin: 40, minMinutes: 3, productiveMinutes: 420, shiftsPerWeekPerFte: 5 },
     tasks: [
-      { id: "auto-scrub", label: "Auto Scrub", sqftPerMin: 200, flatMin: 0, autoFor: ["corridor", "hallway"], addable: true, builtIn: true },
-      { id: "dust-mop", label: "Dust Mop", sqftPerMin: 150, flatMin: 0, autoFor: ["corridor", "hallway"], addable: true, builtIn: true },
-      { id: "burnish", label: "Burnishing", sqftPerMin: 100, flatMin: 0, autoFor: [], addable: true, builtIn: true },
+      // floor-tech work (Max Floor Care owns scheduling these)
+      { id: "auto-scrub", label: "Machine Scrubbing", sqftPerMin: 200, flatMin: 0, autoFor: ["corridor", "hallway"], addable: true, floorCare: true, builtIn: true },
+      { id: "dust-mop", label: "Dust Mopping", sqftPerMin: 150, flatMin: 0, autoFor: ["corridor", "hallway"], addable: true, floorCare: true, builtIn: true },
+      { id: "burnish", label: "Burnishing", sqftPerMin: 100, flatMin: 0, autoFor: [], addable: true, floorCare: true, builtIn: true },
+      { id: "machine-sweep", label: "Machine Sweeping", sqftPerMin: 300, flatMin: 0, autoFor: [], addable: true, floorCare: true, builtIn: true },
+      { id: "machine-carpet", label: "Machine Carpet Cleaning", sqftPerMin: 180, flatMin: 0, autoFor: [], addable: true, floorCare: true, builtIn: true },
+      // everyone-else tasks
       { id: "high-dusting", label: "High Dusting", sqftPerMin: 120, flatMin: 0, autoFor: [], addable: true, builtIn: true },
       { id: "trash-pull", label: "Trash Pull", sqftPerMin: null, flatMin: 2, autoFor: [], addable: true, builtIn: true }
     ],
@@ -151,8 +157,15 @@ export function loadRules(): Rules {
       breaks: Array.isArray(parsed.breaks) ? parsed.breaks : def.breaks
     };
     rules.nonSpaceDefs = Array.isArray(parsed.nonSpaceDefs) ? parsed.nonSpaceDefs : def.nonSpaceDefs;
+    const OLD_TASK_LABELS: Record<string, string> = { "auto-scrub": "Auto Scrub", "dust-mop": "Dust Mop" };
     for (const t of def.tasks) {
-      if (!rules.tasks.some((x: TaskRule) => x.id === t.id)) rules.tasks.push(t);
+      const saved = rules.tasks.find((x: TaskRule) => x.id === t.id);
+      if (!saved) { rules.tasks.push(t); continue; }
+      // floor-care membership is structural, not a per-account edit
+      if (t.floorCare) saved.floorCare = true;
+      // accounts saved before the rename keep custom labels, but the old
+      // DEFAULT labels move to the new defaults ("Dust Mop" → "Dust Mopping")
+      if (saved.label === OLD_TASK_LABELS[t.id]) saved.label = t.label;
     }
     for (const rt of def.roomTypes) {
       if (!rules.roomTypes.some((x: RoomTypeRule) => x.id === rt.id)) rules.roomTypes.push(rt);

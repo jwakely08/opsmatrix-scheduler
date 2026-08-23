@@ -10,6 +10,7 @@ import {
 import { PrintSchedule } from "./PrintSchedule";
 import { AiPlanImport } from "./AiPlanImport";
 import { WorkloadApp, RoomListImportButton } from "./WorkloadApp";
+import { FloorCareApp, HoursBar } from "./FloorCareApp";
 import { buildScheduleDoc, parseClock, type SchedBreak } from "./scheduleDoc";
 import { importScan } from "../bridge/fusionEntry";
 import { attachPlanToRooms, resolvePendingRoomTypes, loadAliases } from "./roomListImport";
@@ -24,7 +25,7 @@ const RED = "#dc2626";
 
 function uid(p: string) { return p + "-" + Math.random().toString(36).slice(2, 9); }
 
-type Tab = "map" | "schedules" | "spaces" | "scope" | "workload";
+type Tab = "map" | "schedules" | "spaces" | "scope" | "workload" | "floorcare";
 
 export function MapsApp() {
   const [data, setData] = useState<ClassicData>(() => loadClassic());
@@ -35,8 +36,9 @@ export function MapsApp() {
   const scopeOnly = window.location.hash === "#scope";
   const spacesOnly = window.location.hash === "#spaces";
   const workloadOnly = window.location.hash === "#workload";
+  const floorcareOnly = window.location.hash.indexOf("#floorcare") === 0;
   const [tab, setTab] = useState<Tab>(() =>
-    scopeOnly ? "scope" : spacesOnly ? "spaces" : workloadOnly ? "workload" : "map");
+    scopeOnly ? "scope" : spacesOnly ? "spaces" : workloadOnly ? "workload" : floorcareOnly ? "floorcare" : "map");
   const [roomSel, setRoomSel] = useState<string | null>(null);
   const [schedSel, setSchedSel] = useState<string | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -147,6 +149,8 @@ export function MapsApp() {
           <h1>Admin Settings — <span>Scope</span></h1>
         ) : workloadOnly ? (
           <h1>Workload <span>Intelligence</span></h1>
+        ) : floorcareOnly ? (
+          <h1>Max Floor <span>Care</span></h1>
         ) : spacesOnly ? (
           <h1>Max <span>Space</span> — Map View</h1>
         ) : (
@@ -168,7 +172,7 @@ export function MapsApp() {
           <ImportButton commit={commit} rules={rules} />
         </>}
         {workloadOnly && <RoomListImportButton label="📊 Import room list (Excel/CSV)" />}
-        {!scopeOnly && !spacesOnly && !workloadOnly && (
+        {!scopeOnly && !spacesOnly && !workloadOnly && !floorcareOnly && (
           <button className="pbtn" onClick={() => setReport(true)}>⚠ Unassigned Tasks</button>
         )}
       </header>
@@ -228,6 +232,11 @@ export function MapsApp() {
             selectedId={roomSel}
             onRoom={(sp) => {
               if (!sp) { setRoomSel(null); return; }
+              if (tab === "map" && schedSelected && schedSelected.floorCareId) {
+                // floor-care schedules are edited in Max Floor Care only
+                alert("This schedule was built in Max Floor Care — edit it there. (Schedules tab → Edit in Floor Care)");
+                return;
+              }
               if (tab === "map" && schedSelected) {
                 // one-click membership editing on the selected schedule —
                 // and the sidebar opens too, so tasks are right there
@@ -323,6 +332,10 @@ export function MapsApp() {
 
         {tab === "workload" && (
           <WorkloadApp data={data} rules={rules} commit={commit} commitRules={commitRules} />
+        )}
+
+        {tab === "floorcare" && (
+          <FloorCareApp data={data} rules={rules} commit={commit} />
         )}
       </div>
 
@@ -859,9 +872,14 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
               <b>{s.num} · {s.name}</b>
               <span>{s.shift} · {s.employee || "unassigned"}</span>
               <em className={mins > target ? "over" : ""}>{mins}m of {target}m</em>
+              <HoursBar minutes={mins} />
               <span className="schedacts">
                 <button className="pbtn small primary" onClick={() => onPrint(s.id)}>🖨 Print schedule</button>
-                <button className="pbtn small" onClick={() => onOpenOnMap(s.id)}>🗺 Edit on map</button>
+                {s.floorCareId ? (
+                  <a className="pbtn small" href={"./maps.html#floorcare?fc=" + s.floorCareId}>🧽 Edit in Floor Care</a>
+                ) : (
+                  <button className="pbtn small" onClick={() => onOpenOnMap(s.id)}>🗺 Edit on map</button>
+                )}
                 <button className="pbtn small danger" onClick={() => {
                   if (confirm(`Delete schedule "${s.name}"? Rooms stay, just unscheduled.`)) {
                     commit((d) => deleteSchedule(d, s.id));

@@ -50,6 +50,16 @@
           e.stopPropagation();
           window.location.href = "./maps.html";
         }, true); // capture: beat the classic app's own handler
+        // Max Floor Care lives right under Max Schedules in the nav
+        if (!document.getElementById("fusion-nav-floorcare") && b.parentNode) {
+          var fcBtn = document.createElement("button");
+          fcBtn.id = "fusion-nav-floorcare";
+          fcBtn.type = "button";
+          fcBtn.className = b.className;
+          fcBtn.textContent = "🧽 Max Floor Care";
+          fcBtn.addEventListener("click", function () { window.location.href = "./maps.html#floorcare"; });
+          b.parentNode.insertBefore(fcBtn, b.nextSibling);
+        }
       }
       // retire the sections Scope now owns
       if ((t === "Break Times" || t === "Turn Times" || t === "Turn Rules") && b.style.display !== "none") {
@@ -1024,13 +1034,29 @@
       // ── the universal fallback: EVERYTHING is readable and editable, even
       //    fields added to the app after these tools were written ──
       {
+        name: "add_floor_care_project",
+        description: "Schedule a floor-care PROJECT on the Max Floor Care calendar: strip & refinish, scrub & recoat, carpet extraction… It records man-hours (hours × team members) and flows into Max Notes, the calendar and manager reminders automatically.",
+        input_schema: {
+          type: "object",
+          required: ["task", "date", "hours", "team_members"],
+          properties: {
+            task: { type: "string", enum: ["Carpet Extraction", "Scrub", "Scrub & Recoat", "Strip & Refinish", "Miscellaneous"] },
+            date: { type: "string", description: "YYYY-MM-DD" },
+            hours: { type: "number", description: "estimated duration, 1–8" },
+            team_members: { type: "number", description: "how many people, 1–8" },
+            room_number: { type: "string", description: "the room it happens in (any room)" },
+            note: { type: "string" }
+          }
+        }
+      },
+      {
         name: "read_data",
-        description: "Universal reader: see the REAL records and field names in any area of the app — rooms (every field they carry, including new ones), schedules, employees, the cleaning rulebook, recurring services, floor plans. Use it when no purpose-built tool covers what the user is asking about, then edit with edit_records.",
+        description: "Universal reader: see the REAL records and field names in any area of the app — rooms (every field they carry, including new ones), schedules, employees, the cleaning rulebook, recurring services, floor plans, floor-care schedules and projects, and the floor-machine equipment catalog. Use it when no purpose-built tool covers what the user is asking about, then edit with edit_records.",
         input_schema: {
           type: "object",
           required: ["area"],
           properties: {
-            area: { type: "string", enum: ["rooms", "schedules", "employees", "cleaning_rules", "recurring_services", "floor_plans"] },
+            area: { type: "string", enum: ["rooms", "schedules", "employees", "cleaning_rules", "recurring_services", "floor_plans", "floor_care_schedules", "floor_care_projects", "equipment_catalog"] },
             query: { type: "string", description: "filter text matched against the records (room number, name, department, building...)" },
             limit: { type: "number", description: "max records to return (default 25)" },
             offset: { type: "number" }
@@ -1073,6 +1099,7 @@
         "- Cleaning frequencies read like \"7x / week\", \"5x / week\", \"Every other week\", \"Monthly\".\n" +
         "- The Scope rulebook (rates, room types, tasks, staffing) is edited with get_cleaning_rules / update_cleaning_rules / set_room_type_rule / set_task_rule; every change reprices all rooms and the Workload Intelligence FTE instantly.\n" +
         "- Room cleanability (whether a room counts toward EVS workload) is set with set_room_cleanability.\n" +
+        "- MAX FLOOR CARE owns floor-tech work (machine scrubbing, dust mopping, burnishing, machine sweeping, machine carpet cleaning): daily floor-care schedules are built there (with machine choices priced by manufacturer rates) and ship into Max Schedules; edit them in Max Floor Care, not in Max Schedules. Floor-care PROJECTS (strip & refinish, extractions) go on its calendar via add_floor_care_project; read floor_care_schedules / floor_care_projects / equipment_catalog with read_data.\n" +
         "- NOTHING IS OUT OF REACH: if no purpose-built tool covers a request, call read_data to see the real records and field names (rooms carry every field, including newly added ones), then edit_records to change any field — its guardrails resolve floor types to the only three (Carpet, Hard floor — finished, Hard floor — unfinished), require room types that exist in Scope, and reprice every touched room. Prefer purpose-built tools when one fits.";
     }
 
@@ -1336,7 +1363,87 @@
             return { building: p.building, floor: p.floor, rooms_drawn: (p.rooms || []).length };
           }));
         }
-        return { success: false, error: "Unknown area. Use: rooms, schedules, employees, cleaning_rules, recurring_services, floor_plans." };
+        if (inp.area === "floor_care_schedules") {
+          var fcStore = F.loadFloorCare();
+          var rulesFc = F.loadRules();
+          return page(fcStore.schedules.filter(hits).map(function (fc) {
+            var timing = F.fcTiming(rulesFc, cx.spaces || [], fc);
+            return {
+              name: fc.name, shift: fc.shift,
+              technicians: fc.techs.map(function (t) { return t.name || t.key; }),
+              equipment: Object.keys(fc.equipment).map(function (k) {
+                return k + ": " + fc.equipment[k].label + " (" + fc.equipment[k].sqftPerHour + " sqft/hr)";
+              }),
+              stops: fc.stops.length,
+              total_minutes: timing.total,
+              longest_tech_minutes: timing.longestTech
+            };
+          }));
+        }
+        if (inp.area === "floor_care_projects") {
+          return page(F.loadFloorCare().projects.filter(hits).map(function (p) {
+            return { task: p.task, date: p.date, hours: p.hours, team_members: p.teamMembers, man_hours: p.manHours, location: p.location, note: p.note };
+          }));
+        }
+        if (inp.area === "equipment_catalog") {
+          var cats = Object.keys(F.EQUIPMENT);
+          var rows = [];
+          cats.forEach(function (c) {
+            F.EQUIPMENT[c].forEach(function (m) {
+              rows.push({ category: c, brand: m.brand, model: m.model, path: m.pathIn, sqft_per_hour: m.sqftPerHour, basis: m.basis });
+            });
+          });
+          F.DUST_MOP_SIZES.forEach(function (s) {
+            rows.push({ category: "dust-mop", brand: "—", model: s.widthIn + "\" dust mop", sqft_per_hour: s.sqftPerHour, basis: "ISSA-style starting rate" });
+          });
+          return page(rows.filter(hits));
+        }
+        return { success: false, error: "Unknown area. Use: rooms, schedules, employees, cleaning_rules, recurring_services, floor_plans, floor_care_schedules, floor_care_projects, equipment_catalog." };
+      },
+
+      add_floor_care_project: function (inp, cx) {
+        if (["Carpet Extraction", "Scrub", "Scrub & Recoat", "Strip & Refinish", "Miscellaneous"].indexOf(inp.task) < 0) {
+          return { success: false, error: "Task must be one of: Carpet Extraction, Scrub, Scrub & Recoat, Strip & Refinish, Miscellaneous." };
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(inp.date || ""))) return { success: false, error: "Give the date as YYYY-MM-DD." };
+        var hours = Math.max(1, Math.min(8, parseInt(inp.hours) || 0));
+        var team = Math.max(1, Math.min(8, parseInt(inp.team_members) || 0));
+        if (!hours || !team) return { success: false, error: "Hours and team members must each be 1–8." };
+        var room = inp.room_number ? findRoom(cx, inp.room_number) : null;
+        if (inp.room_number && !room) return { success: false, error: "Space " + inp.room_number + " not found" };
+        var manHours = hours * team;
+        var noteId = uid2("fcnote");
+        var nowIso = new Date().toISOString();
+        var location = room ? String(room.roomNumber || "") + " " + String(room.roomName || "") : "";
+        // the project note — Classic turns it into the calendar entry,
+        // project schedule and manager reminders on its own
+        if (cx.setNotes) {
+          cx.setNotes(function (p) {
+            return (p || []).concat([{
+              id: noteId, date: new Date().toLocaleDateString(),
+              title: "Floor care — " + inp.task + (location ? " · " + location.trim() : ""),
+              body: inp.task + ". " + team + " team member" + (team > 1 ? "s" : "") + " × " + hours + "h = " + manHours + " man-hours." + (inp.note ? " " + inp.note : ""),
+              linkedSpaceId: room ? room.id : "", linkedScheduleId: "", linkedEmployeeId: "",
+              tags: ["Project"], kind: "project", isProject: true,
+              projectDate: inp.date, projectTime: "", projectDuration: String(hours * 60),
+              projectPriority: "medium", projectStatus: "scheduled",
+              readAt: "", createdAt: nowIso, updatedAt: nowIso
+            }]);
+          });
+        }
+        var fcStore = F.loadFloorCare();
+        fcStore.projects.push({
+          id: uid2("fcp"), task: inp.task, date: inp.date, hours: hours,
+          teamMembers: team, manHours: manHours,
+          spaceId: room ? room.id : undefined, location: location.trim(),
+          note: String(inp.note || ""), noteId: noteId, createdAt: nowIso
+        });
+        F.saveFloorCare(fcStore);
+        return {
+          success: true,
+          message: "Scheduled " + inp.task + " on " + inp.date + (location ? " in " + location.trim() : "") +
+            " — " + team + " × " + hours + "h = " + manHours + " man-hours. It's on the Floor Care calendar, in Max Notes and the reminders."
+        };
       },
 
       edit_records: function (inp, cx) {
