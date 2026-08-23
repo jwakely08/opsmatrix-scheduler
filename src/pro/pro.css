@@ -464,3 +464,97 @@ body {
 .fc-proj b { display: block; color: #fbbf24; font-size: 11px; }
 .fc-proj span { color: #94a3b8; font-size: 10px; }
 .pfield.grow { flex: 1; }
+
+/* ── device layouts: phone-first (≤640), tablet (641–1024), desktop ─────── */
+
+/* zoom controls (all sizes — thumbs and mice both welcome) */
+.pro-zoomctl {
+  position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.pro-zoomctl button {
+  width: 42px; height: 42px; border-radius: 10px; font-size: 19px; cursor: pointer;
+  background: rgba(15,23,42,.92); color: #e2e8f0; border: 1px solid rgba(148,163,184,.25);
+}
+.pro-zoomctl button:active { background: #0d9488; }
+
+/* ── iPhone / small phones ── */
+@media (max-width: 640px) {
+  /* iOS zooms into inputs under 16px — keep form text at 16 so it never does */
+  input, select, textarea { font-size: 16px !important; }
+  .pbtn { min-height: 42px; }
+  .pbtn.small { min-height: 36px; }
+
+  .pro-head { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
+  .pro-head h1 { font-size: 14px; }
+
+  /* filters become one thumb-scrollable strip */
+  .pro-filters { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .pro-filters .psel { flex: none; }
+
+  /* the room panel becomes a slide-up sheet over the map — tap a room, the
+     sheet pops with its info and Add buttons; ✕ or tapping the map closes it */
+  .pro-side {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    width: auto; max-height: 62vh; z-index: 85;
+    border-left: none; border-top: 1px solid rgba(148,163,184,.25);
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -12px 40px rgba(0,0,0,.5);
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    animation: sheetup .22s ease;
+  }
+  .pro-side::before {
+    content: ""; display: block; width: 44px; height: 4px; border-radius: 2px;
+    background: rgba(148,163,184,.4); margin: 0 auto 10px;
+  }
+  @keyframes sheetup { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  /* legend: a horizontal strip along the bottom, zoom controls above it */
+  .pro-legend {
+    left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom));
+    flex-direction: row; overflow-x: auto; gap: 12px; padding: 8px 12px;
+  }
+  .pro-legend span { flex: none; }
+  .pro-zoomctl { bottom: calc(64px + env(safe-area-inset-bottom)); right: 8px; }
+
+  .pro-list { padding: 12px; }
+  .ptabs { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; }
+  .ptabs button { flex: none; }
+  .prow { flex-wrap: wrap; }
+
+  .schedhead { flex-wrap: wrap; }
+  .schedhead .fc-hoursbar { min-width: 100%; }
+  .schedacts { width: 100%; flex-wrap: wrap; }
+  .fc-hourslabel { width: 84px; }
+
+  .wi-hero { flex-direction: column; }
+  .wi-kpis { margin-left: 0; }
+  .wi-cards { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .wi-toolbar .wi-search { width: 100%; }
+  .wi-tabs { margin-bottom: 12px; }
+
+  .fc-builder { flex-direction: column; align-items: stretch; }
+  .fc-rail { width: auto; position: static; }
+  .fc-eqtiles { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+  .fc-cal { gap: 3px; }
+  .fc-calday { min-height: 58px; padding: 3px; border-radius: 7px; }
+  .fc-proj b { font-size: 9.5px; }
+  .fc-proj span { font-size: 8.5px; }
+  .fc-rooms { max-height: none; }
+  .fc-room .pbtn.small { min-height: 40px; }
+
+  /* modals ride up from the bottom like sheets */
+  .pro-modalback { padding: 0; align-items: flex-end; }
+  .pro-modal {
+    width: 100%; max-width: none; max-height: 90vh; overflow-y: auto;
+    border-radius: 18px 18px 0 0;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom));
+    animation: sheetup .22s ease;
+  }
+}
+
+/* ── iPad / small tablets: desktop layout, gently narrowed ── */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .pro-side { width: 300px; }
+  .fc-rail { width: 260px; }
+  .wi-charts { grid-template-columns: 1fr; }
+}

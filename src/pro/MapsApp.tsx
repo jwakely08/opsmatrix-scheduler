@@ -481,6 +481,22 @@ function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, s
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
   const drag = useRef({ x: 0, y: 0, moved: false, on: false });
+  // live pointers — two fingers on a phone means pinch-zoom, not a tap
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
+
+  const zoomAt = (sx: number, sy: number, factor: number) => {
+    setView((v) => {
+      const k2 = Math.max(0.2, Math.min(12, v.k * factor));
+      const f = k2 / v.k;
+      return { k: k2, tx: sx - (sx - v.tx) * f, ty: sy - (sy - v.ty) * f };
+    });
+  };
+  const zoomCenter = (factor: number) => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, factor);
+  };
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -534,8 +550,31 @@ function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, s
   return (
     <div className="pro-mapwrap">
       <svg ref={svgRef} className="pro-map"
-        onPointerDown={(e) => { drag.current = { x: e.clientX, y: e.clientY, moved: false, on: true }; }}
+        onPointerDown={(e) => {
+          pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          (e.target as Element).setPointerCapture?.(e.pointerId);
+          if (pointers.current.size === 2) {
+            // second finger down → this gesture is a pinch, never a tap
+            const [a, b] = [...pointers.current.values()];
+            pinch.current = { dist: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
+            drag.current.on = false;
+            drag.current.moved = true;
+          } else {
+            drag.current = { x: e.clientX, y: e.clientY, moved: false, on: true };
+          }
+        }}
         onPointerMove={(e) => {
+          if (pointers.current.has(e.pointerId)) pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (pinch.current && pointers.current.size >= 2) {
+            const [a, b] = [...pointers.current.values()];
+            const dist = Math.hypot(a.x - b.x, a.y - b.y);
+            if (dist > 0 && pinch.current.dist > 0) {
+              const r = svgRef.current!.getBoundingClientRect();
+              zoomAt((a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top, dist / pinch.current.dist);
+            }
+            pinch.current.dist = dist;
+            return;
+          }
           if (!drag.current.on) return;
           const dx = e.clientX - drag.current.x, dy = e.clientY - drag.current.y;
           if (Math.abs(dx) + Math.abs(dy) > 4) drag.current.moved = true;
@@ -544,7 +583,20 @@ function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, s
             drag.current.x = e.clientX; drag.current.y = e.clientY;
           }
         }}
-        onPointerUp={(e) => { drag.current.on = false; click(e); setTimeout(() => { drag.current.moved = false; }, 0); }}>
+        onPointerUp={(e) => {
+          pointers.current.delete(e.pointerId);
+          if (pointers.current.size < 2) pinch.current = null;
+          drag.current.on = false;
+          if (pointers.current.size === 0) {
+            click(e);
+            setTimeout(() => { drag.current.moved = false; }, 0);
+          }
+        }}
+        onPointerCancel={(e) => {
+          pointers.current.delete(e.pointerId);
+          if (pointers.current.size < 2) pinch.current = null;
+          drag.current.on = false;
+        }}>
         <defs>
           {[...new Set(spaces.map((sp) => overlayFor?.(sp)).filter(Boolean) as string[])].map((c) => (
             <pattern key={c} id={"st-" + c.slice(1)} width="16" height="16"
@@ -598,6 +650,18 @@ function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, s
         </div>
       )}
       {legend}
+      {/* touch-friendly zoom controls — pinch works too, but thumbs deserve buttons */}
+      <div className="pro-zoomctl">
+        <button aria-label="Zoom in" onClick={() => zoomCenter(1.35)}>＋</button>
+        <button aria-label="Zoom out" onClick={() => zoomCenter(1 / 1.35)}>－</button>
+        <button aria-label="Fit plan" onClick={() => {
+          const svg = svgRef.current;
+          if (!svg) return;
+          const w = svg.clientWidth || 1000, h = svg.clientHeight || 640;
+          const k = Math.min(w / plan.w, h / plan.h) * 0.94;
+          setView({ k, tx: (w - plan.w * k) / 2, ty: (h - plan.h * k) / 2 });
+        }}>⤢</button>
+      </div>
     </div>
   );
 }
