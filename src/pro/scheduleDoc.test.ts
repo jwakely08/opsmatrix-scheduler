@@ -108,7 +108,7 @@ describe("buildScheduleDoc", () => {
     const doc = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
     expect(doc.rows[0].tasks).toEqual(["General Clean"]);
     expect(doc.rows[1].tasks).toEqual(["General Clean", "High Dusting"]);
-    expect(doc.rows[2].tasks).toEqual(["General Clean", "Auto Scrub", "Dust Mop"]);
+    expect(doc.rows[2].tasks).toEqual(["General Clean", "Machine Scrubbing", "Dust Mopping"]);
   });
 
   it("prints only the tasks THIS schedule covers when a room is shared", () => {
@@ -256,9 +256,9 @@ describe("buildScheduleDoc", () => {
     const doc = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
     expect(doc.totals.taskCounts).toEqual([
       { label: "General Clean", count: 3 },
-      { label: "Auto Scrub", count: 1 },
-      { label: "Dust Mop", count: 1 },
-      { label: "High Dusting", count: 1 }
+      { label: "Dust Mopping", count: 1 },
+      { label: "High Dusting", count: 1 },
+      { label: "Machine Scrubbing", count: 1 }
     ]);
   });
 

@@ -1,0 +1,224 @@
+// Max Floor Care — the floor-tech scheduling engine.
+//
+// Floor-care tasks (machine scrubbing, dust mopping, burnishing, machine
+// sweeping, machine carpet cleaning) are built into schedules HERE, not in
+// Max Schedules. A confirmed floor-care schedule ships INTO Max Schedules as
+// a finished schedule (same canonical stores, so coverage, printing and
+// Workload Intelligence all see it) — but its home for editing stays Max
+// Floor Care.
+//
+// Timing: a stop is priced by the SELECTED EQUIPMENT's manufacturer rate
+// when the schedule has equipment for that task; otherwise by the Scope
+// task rate — so the same room can take 12 minutes behind a walk-behind and
+// 4 minutes on a rider, per the maker's published productivity.
+import {
+  type Rules, type SpaceLike, computeMinutes, isCarpet, requiredTasks, toClassicRoomTasks
+} from "./rules";
+import type { ClassicData, ClassicSpace, ClassicSchedule } from "./classicStore";
+
+export const FLOORCARE_KEY = "opsmatrix_fusion_floorcare";
+
+export interface FcEquip {
+  label: string;            // "Tennant T7" / '36" dust mop' / custom name
+  sqftPerHour: number;      // the scheduling rate in force for this schedule
+  basis?: string;           // OEM practical / OEM max / custom…
+}
+
+export interface FcTech {
+  key: string;              // "T1".."T4" — the role; printable without a name
+  employeeId?: string;
+  name?: string;            // display name when an employee is attached
+}
+
+export interface FcStop {
+  spaceId: string;
+  taskId: string;           // one of the five floor-care task ids
+  techKey: string;          // which technician role runs this stop
+}
+
+export interface FcSchedule {
+  id: string;
+  name: string;
+  shift: string;
+  techs: FcTech[];
+  /** taskId → the equipment selected for that task on THIS schedule */
+  equipment: Record<string, FcEquip>;
+  /** ordered — the order rooms/tasks were clicked is the running order */
+  stops: FcStop[];
+  /** the Max Schedules schedule this shipped to (edit redirects back here) */
+  linkedScheduleId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FcProject {
+  id: string;
+  task: string;             // Carpet Extraction | Scrub | Scrub & Recoat | Strip & Refinish | Miscellaneous
+  date: string;             // YYYY-MM-DD
+  hours: number;            // estimated duration 1–8
+  teamMembers: number;
+  manHours: number;         // hours × teamMembers — recorded, not recomputed
+  spaceId?: string;
+  location?: string;        // display text for the picked room
+  note?: string;
+  noteId?: string;          // the Classic project note this created
+  createdAt: string;
+}
+
+export interface FcStore { schedules: FcSchedule[]; projects: FcProject[] }
+
+export const FC_PROJECT_TASKS = [
+  "Carpet Extraction", "Scrub", "Scrub & Recoat", "Strip & Refinish", "Miscellaneous"
+];
+
+export function loadFloorCare(): FcStore {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FLOORCARE_KEY) ?? "{}") ?? {};
+    return {
+      schedules: Array.isArray(parsed.schedules) ? parsed.schedules : [],
+      projects: Array.isArray(parsed.projects) ? parsed.projects : []
+    };
+  } catch {
+    return { schedules: [], projects: [] };
+  }
+}
+
+export function saveFloorCare(store: FcStore) {
+  localStorage.setItem(FLOORCARE_KEY, JSON.stringify(store));
+}
+
+/** the five floor-care task rules, in Scope's order */
+export function floorCareTasks(rules: Rules) {
+  return rules.tasks.filter((t) => t.floorCare);
+}
+
+/**
+ * Which rooms belong on the floor-care map/list: rooms whose required tasks
+ * include floor-care work, plus carpeted rooms (machine carpet cleaning is
+ * always available on carpet). Everything else greys out.
+ */
+export function fcEligible(rules: Rules, space: SpaceLike): boolean {
+  const fcIds = new Set(floorCareTasks(rules).map((t) => t.id));
+  if (requiredTasks(rules, space).some((id) => fcIds.has(id))) return true;
+  return isCarpet(space.floorType);
+}
+
+/** which of the five tasks make sense for one specific room */
+export function fcTasksForSpace(rules: Rules, space: SpaceLike): string[] {
+  const fcIds = floorCareTasks(rules).map((t) => t.id);
+  const required = new Set(requiredTasks(rules, space));
+  const out = fcIds.filter((id) => required.has(id));
+  if (isCarpet(space.floorType)) {
+    if (!out.includes("machine-carpet")) out.push("machine-carpet");
+    // wet-scrub/burnish tasks don't apply to carpet
+    return out.filter((id) => ["machine-carpet", "machine-sweep"].includes(id) || required.has(id));
+  }
+  // hard floors: every floor-care task except carpet cleaning is offerable
+  return fcIds.filter((id) => id !== "machine-carpet");
+}
+
+/**
+ * Minutes for ONE stop. Equipment rate wins when the schedule carries
+ * equipment for that task; the Scope task rate is the fallback. Never less
+ * than 1 minute — no room is entered and left in zero time.
+ */
+export function stopMinutes(rules: Rules, space: SpaceLike, taskId: string, equipment: Record<string, FcEquip>): number {
+  const sqft = Number(space.squareFeet) || 0;
+  const eq = equipment[taskId];
+  if (eq && eq.sqftPerHour > 0) {
+    return Math.max(1, Math.round(sqft / (eq.sqftPerHour / 60)));
+  }
+  return Math.max(1, computeMinutes(rules, space, { tasks: [taskId], includeBase: false }).total);
+}
+
+export interface FcTiming {
+  perTech: Record<string, number>;  // techKey → minutes
+  total: number;                    // minutes (max per-tech when multi-tech? no — summed work; see below)
+  longestTech: number;              // the slowest technician's minutes = wall-clock
+}
+
+/**
+ * Timing for a whole floor-care schedule. Each technician's minutes are the
+ * sum of their own stops; `total` is all labor minutes combined (man-time),
+ * `longestTech` is the wall-clock length of the schedule (the slowest tech).
+ */
+export function fcTiming(rules: Rules, spaces: ClassicSpace[], fc: FcSchedule): FcTiming {
+  const byId = new Map(spaces.map((s) => [s.id, s]));
+  const perTech: Record<string, number> = {};
+  for (const t of fc.techs) perTech[t.key] = 0;
+  for (const stop of fc.stops) {
+    const sp = byId.get(stop.spaceId);
+    if (!sp) continue;
+    const min = stopMinutes(rules, sp, stop.taskId, fc.equipment);
+    perTech[stop.techKey] = (perTech[stop.techKey] ?? 0) + min;
+  }
+  const values = Object.values(perTech);
+  return {
+    perTech,
+    total: values.reduce((s, v) => s + v, 0),
+    longestTech: values.length ? Math.max(...values) : 0
+  };
+}
+
+/**
+ * Ship a confirmed floor-care schedule into Max Schedules as a finished
+ * schedule. Coverage-true: each room's roomTasks are exactly the floor-care
+ * tasks scheduled there (never the base clean — that belongs to the EVS
+ * schedules), so the "Unassigned Tasks" report sees floor-care work as
+ * covered. `floorCareId` marks it so Max Schedules redirects edits here,
+ * and `floorCareMinutes` carries the equipment-priced total.
+ */
+export function shipToSchedules(data: ClassicData, rules: Rules, fc: FcSchedule): ClassicSchedule {
+  const spaces = data.v7.spaces ?? [];
+  const byId = new Map(spaces.map((s) => [s.id, s]));
+  const order: string[] = [];
+  const tasksByRoom: Record<string, string[]> = {};
+  for (const stop of fc.stops) {
+    if (!byId.has(stop.spaceId)) continue;
+    if (!order.includes(stop.spaceId)) order.push(stop.spaceId);
+    const list = tasksByRoom[stop.spaceId] ?? (tasksByRoom[stop.spaceId] = []);
+    if (!list.includes(stop.taskId)) list.push(stop.taskId);
+  }
+  const roomTasks: Record<string, string[]> = {};
+  for (const [spaceId, taskIds] of Object.entries(tasksByRoom)) {
+    roomTasks[spaceId] = toClassicRoomTasks(byId.get(spaceId)!, taskIds, false);
+  }
+  const timing = fcTiming(rules, spaces, fc);
+  const now = new Date().toISOString();
+
+  const scheds = data.v7.schedules ?? (data.v7.schedules = []);
+  let sched = fc.linkedScheduleId ? scheds.find((s) => s.id === fc.linkedScheduleId) : undefined;
+  if (!sched) {
+    sched = {
+      id: "sched-fc-" + fc.id,
+      num: String(101 + scheds.filter((s) => !s.projectNoteId).length),
+      color: "#f59e0b",
+      targetHours: 8,
+      tasks: [], notes: "",
+      createdAt: now
+    } as ClassicSchedule;
+    scheds.push(sched);
+  }
+  const lead = fc.techs.find((t) => t.employeeId);
+  Object.assign(sched, {
+    name: fc.name,
+    shift: fc.shift,
+    employeeId: lead?.employeeId ?? "",
+    employee: fc.techs.length > 1
+      ? fc.techs.length + " floor technicians"
+      : (lead?.name ?? ""),
+    spaceOrder: order,
+    roomTasks,
+    floorCareId: fc.id,
+    floorCareMinutes: timing.total,
+    updatedAt: now
+  });
+  fc.linkedScheduleId = sched.id;
+  return sched;
+}
+
+/** remove the shipped counterpart when a floor-care schedule is deleted */
+export function unship(data: ClassicData, fc: FcSchedule) {
+  if (!fc.linkedScheduleId) return;
+  data.v7.schedules = (data.v7.schedules ?? []).filter((s) => s.id !== fc.linkedScheduleId);
+}

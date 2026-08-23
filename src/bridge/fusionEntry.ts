@@ -340,3 +340,9 @@ export {
 } from "../pro/rules";
 export { retuneAllSpaces, fusionFloorLabel, FLOOR_TYPES } from "../pro/classicStore";
 export { loadAliases, normalizeFloorType as normalizeFloorFinish } from "../pro/roomListImport";
+
+// Max Floor Care: store + timing + equipment catalog, for Hey Max's tools
+export {
+  loadFloorCare, saveFloorCare, fcTiming, floorCareTasks, FC_PROJECT_TASKS
+} from "../pro/floorcare";
+export { EQUIPMENT, DUST_MOP_SIZES, brandsFor, modelsFor } from "../pro/equipment";

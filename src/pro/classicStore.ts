@@ -323,6 +323,9 @@ export function coverageMinutes(rules: Rules, space: ClassicSpace, cov: Coverage
 }
 
 export function scheduleMinutes(data: ClassicData, rules: Rules, sched: ClassicSchedule): number {
+  // a schedule shipped from Max Floor Care carries its equipment-priced
+  // total (a rider scrubs a corridor far faster than the generic task rate)
+  if (Number(sched.floorCareMinutes) > 0) return Number(sched.floorCareMinutes);
   const spaces = data.v7.spaces ?? [];
   let total = 0;
   for (const id of sched.spaceOrder ?? []) {
