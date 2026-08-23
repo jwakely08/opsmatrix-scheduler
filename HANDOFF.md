@@ -167,6 +167,15 @@ The floor-tech engine, split from Max Schedules by design. `maps.html#floorcare`
 - **Voice**: `add_floor_care_project` tool (validated task/date/hours/team, resolves the room, writes both the fc store and the project note); read_data areas `floor_care_schedules` / `floor_care_projects` / `equipment_catalog`; platform guide teaches the ownership rule (floor care edited in Max Floor Care, not Max Schedules).
 - Verified end-to-end in the browser on the real E-building (12/12): nav, tile→brand→model picking, per-tech bars, ship (equipment-priced minutes, no general-cleaning), edit-redirect, hour bars in Max Schedules, project → calendar + Classic note, voice-created project.
 
+## 12d. DEVICE LAYOUTS — PHONE FIRST (added 2026-08-23)
+
+Every hub view (Map, Schedules, #spaces, #scope, #workload, #floorcare) now has three layouts via CSS breakpoints in `pro.css`: **phone ≤640px**, tablet 641–1024 (narrowed side panels, single-column charts), desktop. Full feature parity — layout only. Phone specifics:
+- **Map**: pinch-to-zoom added to MapCanvas (two-pointer tracking; wheel/drag untouched) plus ＋/−/⤢ zoom buttons (`.pro-zoomctl`, all sizes). The room panel (`.pro-side`) becomes a slide-up **bottom sheet** (grab bar, safe-area padding) — tap a room → sheet pops with info + "＋ Add to schedule"; legend is a horizontal strip along the bottom.
+- Filters/tabs become thumb-scrollable strips; modals ride up as bottom sheets; inputs stay ≥16px so iOS never auto-zooms; buttons get ≥42px touch targets.
+- Floor Care builder stacks single-column (rail below, full width); calendar compresses; WI hero/kpis stack.
+- Classic itself already had its own mobile UI (archive); fusion overlays inherit it.
+- Verified at iPhone viewport (393×852, touch): 13/13 — no horizontal overflow on any view, sheet interactions, zoom buttons, stacked builder.
+
 ## 13. BUILD & DEPLOY WORKFLOW
 
 ```
