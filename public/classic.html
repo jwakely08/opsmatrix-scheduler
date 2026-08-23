@@ -43148,12 +43148,61 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
   }
   wireMaxFusionTools();
 
+  // ── phone bottom nav: one strip that slides, EVERY destination on it ───────
+  // Classic's own mobile bar shows four items plus a "More" grid; on a phone
+  // that hid Max Floor Care (and made everything two taps). This replaces it
+  // with a horizontally scrollable bar built FROM the sidebar's buttons — so
+  // whatever the sidebar holds (fusion additions included) is always one
+  // thumb-slide away. The archive bar is hidden by CSS, never modified.
+  function ensureMobileNav() {
+    var host = document.getElementById("fusion-bottomnav");
+    if (!host) {
+      var style = document.createElement("style");
+      style.textContent =
+        "#fusion-bottomnav{display:none;position:fixed;left:0;right:0;bottom:0;z-index:60;" +
+        "overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap;" +
+        "background:rgba(10,18,32,.96);backdrop-filter:blur(10px);" +
+        "border-top:1px solid rgba(148,163,184,.2);" +
+        "padding:6px 6px calc(6px + env(safe-area-inset-bottom));}" +
+        "#fusion-bottomnav::-webkit-scrollbar{display:none}" +
+        "#fusion-bottomnav button{display:inline-block;vertical-align:middle;border:none;background:none;" +
+        "color:#94a3b8;font:600 12.5px 'Segoe UI',sans-serif;padding:12px 13px;border-radius:10px;cursor:pointer}" +
+        "#fusion-bottomnav button:active{background:rgba(20,184,166,.18);color:#2dd4bf}" +
+        "@media (max-width: 767px){.bottombar{display:none !important}#fusion-bottomnav{display:block}}";
+      document.head.appendChild(style);
+      host = document.createElement("div");
+      host.id = "fusion-bottomnav";
+      document.body.appendChild(host);
+    }
+    var sidebarBtns = [];
+    var all = document.querySelectorAll(".sidebar button");
+    for (var i = 0; i < all.length; i++) {
+      var label = (all[i].textContent || "").trim();
+      if (!label) continue;
+      if (label.indexOf("Ask Max") >= 0) label = "🤖 Ask Max";
+      sidebarBtns.push({ label: label, el: all[i] });
+    }
+    if (!sidebarBtns.length) return;
+    var sig = sidebarBtns.map(function (b) { return b.label; }).join("|");
+    if (host.getAttribute("data-sig") === sig) return;
+    host.setAttribute("data-sig", sig);
+    host.innerHTML = "";
+    sidebarBtns.forEach(function (b) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = b.label;
+      btn.addEventListener("click", function () { b.el.click(); });
+      host.appendChild(btn);
+    });
+  }
+
   // the classic app re-renders constantly; keep our button present cheaply
   // (demo seeding lives in fusion-seed.js, injected BEFORE the app's script)
-  var mo = new MutationObserver(function () { ensureSpaceScreen(); ensureButton(); });
+  var mo = new MutationObserver(function () { ensureSpaceScreen(); ensureButton(); ensureMobileNav(); });
   function boot() {
     ensureSpaceScreen();
     ensureButton();
+    ensureMobileNav();
     // characterData too: React swaps some labels (e.g. the plan picker's) by
     // rewriting the text node in place, which is not a childList mutation.
     // Our relabels are guarded by an exact-match test, so this cannot loop.

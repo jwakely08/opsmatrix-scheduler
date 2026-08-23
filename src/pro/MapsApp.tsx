@@ -239,7 +239,10 @@ export function MapsApp() {
               }
               if (tab === "map" && schedSelected) {
                 // one-click membership editing on the selected schedule —
-                // and the sidebar opens too, so tasks are right there
+                // on desktop the sidebar opens too, so tasks are right there;
+                // on a phone the sheet would cover the map after every tap,
+                // so rapid assigning stays sheet-free (the room recolors as
+                // feedback) and a plain tap outside edit mode opens the sheet
                 commit((d) => {
                   const cov = coverageForSpace(d, sp.id).find((c) => c.scheduleId === schedSelected.id);
                   if (cov) {
@@ -251,7 +254,7 @@ export function MapsApp() {
                     setCoverage(d, sp.id, schedSelected.id, true, u.tasks);
                   }
                 });
-                setRoomSel(sp.id);
+                if (!window.matchMedia("(max-width: 640px)").matches) setRoomSel(sp.id);
                 return;
               }
               setRoomSel(sp ? sp.id : null);
@@ -480,7 +483,11 @@ function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, s
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
-  const drag = useRef({ x: 0, y: 0, moved: false, on: false });
+  // sx/sy = where the gesture STARTED: a tap is judged by total travel from
+  // there, not per-event deltas. A fingertip naturally wobbles a few pixels,
+  // so touch gets a much bigger tap slop than a mouse — without this, real
+  // thumbs "click" rooms and nothing happens.
+  const drag = useRef({ x: 0, y: 0, sx: 0, sy: 0, moved: false, on: false, slop: 5 });
   // live pointers — two fingers on a phone means pinch-zoom, not a tap
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
@@ -552,7 +559,7 @@ function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, s
       <svg ref={svgRef} className="pro-map"
         onPointerDown={(e) => {
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-          (e.target as Element).setPointerCapture?.(e.pointerId);
+          try { (e.target as Element).setPointerCapture?.(e.pointerId); } catch { /* not capturable — fine */ }
           if (pointers.current.size === 2) {
             // second finger down → this gesture is a pinch, never a tap
             const [a, b] = [...pointers.current.values()];
@@ -560,7 +567,11 @@ function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, s
             drag.current.on = false;
             drag.current.moved = true;
           } else {
-            drag.current = { x: e.clientX, y: e.clientY, moved: false, on: true };
+            drag.current = {
+              x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY,
+              moved: false, on: true,
+              slop: e.pointerType === "touch" ? 14 : 5
+            };
           }
         }}
         onPointerMove={(e) => {
@@ -577,7 +588,8 @@ function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, s
           }
           if (!drag.current.on) return;
           const dx = e.clientX - drag.current.x, dy = e.clientY - drag.current.y;
-          if (Math.abs(dx) + Math.abs(dy) > 4) drag.current.moved = true;
+          const travel = Math.hypot(e.clientX - drag.current.sx, e.clientY - drag.current.sy);
+          if (travel > drag.current.slop) drag.current.moved = true;
           if (drag.current.moved) {
             setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }));
             drag.current.x = e.clientX; drag.current.y = e.clientY;

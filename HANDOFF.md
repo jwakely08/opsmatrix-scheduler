@@ -175,6 +175,7 @@ Every hub view (Map, Schedules, #spaces, #scope, #workload, #floorcare) now has 
 - Floor Care builder stacks single-column (rail below, full width); calendar compresses; WI hero/kpis stack.
 - Classic itself already had its own mobile UI (archive); fusion overlays inherit it.
 - Verified at iPhone viewport (393×852, touch): 13/13 — no horizontal overflow on any view, sheet interactions, zoom buttons, stacked builder.
+- **Real-device fixes (Josh's iPhone testing)**: (1) tap slop — a fingertip wobbles, so touch taps get a 14px total-travel budget before counting as a drag (mouse keeps 5px); without it real thumbs couldn't select rooms. (2) During legend-assign mode on phones the room sheet stays CLOSED so rooms can be tapped rapid-fire (recolor = feedback); a plain tap still opens the sheet. (3) Classic's mobile bottom bar (4 items + "More" grid) is hidden on ≤767px and replaced by `#fusion-bottomnav` (fusion-ui `ensureMobileNav`): one horizontally sliding strip built FROM the sidebar's buttons, so every destination — fusion additions like Max Floor Care included — is one thumb-slide away, and anything added to the sidebar later appears automatically.
 
 ## 13. BUILD & DEPLOY WORKFLOW
 
