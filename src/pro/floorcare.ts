@@ -93,14 +93,16 @@ export function floorCareTasks(rules: Rules) {
 }
 
 /**
- * Which rooms belong on the floor-care map/list: rooms whose required tasks
- * include floor-care work, plus carpeted rooms (machine carpet cleaning is
- * always available on carpet). Everything else greys out.
+ * Which rooms belong on the floor-care map/list: ONLY rooms whose required
+ * task list carries floor-care work — because their room type comes with it
+ * in Scope (corridors and hallways get Machine Scrubbing + Dust Mopping), or
+ * because a manager added a floor-care task to that room in Max Space.
+ * A carpet floor by itself is NOT a ticket in (Josh's rule, 2026-08-24):
+ * carpeted offices don't belong to the floor crew unless someone says so.
  */
 export function fcEligible(rules: Rules, space: SpaceLike): boolean {
   const fcIds = new Set(floorCareTasks(rules).map((t) => t.id));
-  if (requiredTasks(rules, space).some((id) => fcIds.has(id))) return true;
-  return isCarpet(space.floorType);
+  return requiredTasks(rules, space).some((id) => fcIds.has(id));
 }
 
 /** which of the five tasks make sense for one specific room */
@@ -117,18 +119,45 @@ export function fcTasksForSpace(rules: Rules, space: SpaceLike): string[] {
   return fcIds.filter((id) => id !== "machine-carpet");
 }
 
+// ── industry-realistic stop timing (recalibrated 2026-08-24, Josh's ask) ────
+// A machine's published rate is squeegee-down cruising speed. Real stops also
+// carry getting the machine to the room, doors, cones, cords/charge checks and
+// edge work — and when a maker publishes only a MAXIMUM/theoretical figure,
+// nobody schedules a crew at 100% of it. So every stop gets flat setup
+// minutes, "maximum" rates are derated to a practical pace, and no machine
+// stop is ever booked under a floor. All three knobs are named constants.
+
+/** flat minutes added to every stop: reach the room, set up, edge, move on */
+export const FC_SETUP_MINUTES = 2;
+/** the floor: no room is entered, machined and left faster than this */
+export const FC_MIN_STOP_MINUTES = 3;
+/** OEM "maximum"/theoretical rates are scheduled at this practical fraction */
+export const FC_PRACTICAL_FACTOR = 0.67;
+
+/**
+ * The sq ft/hr a stop is actually SCHEDULED at. Rates whose basis says
+ * maximum/theoretical get the practical derate; rates already published as
+ * practical (TASKI practical, ISSA dust-mop rates, custom entries) are used
+ * as given.
+ */
+export function fcScheduledRate(eq: FcEquip): number {
+  const theoretical = /max|theoretical/i.test(eq.basis ?? "");
+  return eq.sqftPerHour * (theoretical ? FC_PRACTICAL_FACTOR : 1);
+}
+
 /**
  * Minutes for ONE stop. Equipment rate wins when the schedule carries
- * equipment for that task; the Scope task rate is the fallback. Never less
- * than 1 minute — no room is entered and left in zero time.
+ * equipment for that task; the Scope task rate is the fallback. Either way
+ * the stop includes setup minutes and never dips under the minimum — a
+ * 60 sq ft office with a carpet machine is a real visit, not "1 minute".
  */
 export function stopMinutes(rules: Rules, space: SpaceLike, taskId: string, equipment: Record<string, FcEquip>): number {
   const sqft = Number(space.squareFeet) || 0;
   const eq = equipment[taskId];
-  if (eq && eq.sqftPerHour > 0) {
-    return Math.max(1, Math.round(sqft / (eq.sqftPerHour / 60)));
-  }
-  return Math.max(1, computeMinutes(rules, space, { tasks: [taskId], includeBase: false }).total);
+  const machineMin = eq && eq.sqftPerHour > 0
+    ? sqft / (fcScheduledRate(eq) / 60)
+    : computeMinutes(rules, space, { tasks: [taskId], includeBase: false }).total;
+  return Math.max(FC_MIN_STOP_MINUTES, Math.round(machineMin + FC_SETUP_MINUTES));
 }
 
 export interface FcTiming {
@@ -161,6 +190,16 @@ export function fcTiming(rules: Rules, spaces: ClassicSpace[], fc: FcSchedule): 
 }
 
 /**
+ * The Max Schedules id a floor-care schedule ships to. Deterministic on
+ * purpose: callers can know the link BEFORE the ship runs (React state
+ * updaters run later than they look), so the floor-care store never saves
+ * without its linkage.
+ */
+export function fcScheduleId(fc: FcSchedule): string {
+  return fc.linkedScheduleId || "sched-fc-" + fc.id;
+}
+
+/**
  * Ship a confirmed floor-care schedule into Max Schedules as a finished
  * schedule. Coverage-true: each room's roomTasks are exactly the floor-care
  * tasks scheduled there (never the base clean — that belongs to the EVS
@@ -187,10 +226,11 @@ export function shipToSchedules(data: ClassicData, rules: Rules, fc: FcSchedule)
   const now = new Date().toISOString();
 
   const scheds = data.v7.schedules ?? (data.v7.schedules = []);
-  let sched = fc.linkedScheduleId ? scheds.find((s) => s.id === fc.linkedScheduleId) : undefined;
+  const schedId = fcScheduleId(fc);
+  let sched = scheds.find((s) => s.id === schedId);
   if (!sched) {
     sched = {
-      id: "sched-fc-" + fc.id,
+      id: schedId,
       num: String(101 + scheds.filter((s) => !s.projectNoteId).length),
       color: "#f59e0b",
       targetHours: 8,
@@ -213,7 +253,7 @@ export function shipToSchedules(data: ClassicData, rules: Rules, fc: FcSchedule)
     floorCareMinutes: timing.total,
     updatedAt: now
   });
-  fc.linkedScheduleId = sched.id;
+  fc.linkedScheduleId = schedId;
   return sched;
 }
 

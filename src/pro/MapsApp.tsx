@@ -9,11 +9,15 @@ import {
 } from "./classicStore";
 import { PrintSchedule } from "./PrintSchedule";
 import { AiPlanImport } from "./AiPlanImport";
-import { WorkloadApp, RoomListImportButton } from "./WorkloadApp";
+import { WorkloadApp, ImportResult } from "./WorkloadApp";
 import { FloorCareApp, HoursBar } from "./FloorCareApp";
 import { buildScheduleDoc, parseClock, type SchedBreak } from "./scheduleDoc";
 import { importScan } from "../bridge/fusionEntry";
-import { attachPlanToRooms, resolvePendingRoomTypes, loadAliases } from "./roomListImport";
+import {
+  attachPlanToRooms, resolvePendingRoomTypes, loadAliases,
+  importRoomListIntoStorage, type ImportSummary
+} from "./roomListImport";
+import { fileToSheets, isSpreadsheet } from "./sheetFile";
 import {
   loadRules, saveRules, defaultRules, computeMinutes, requiredTasks, autoTasksFor,
   typeIdFromLabel, isCarpet, FREQUENCIES, type Rules
@@ -166,12 +170,9 @@ export function MapsApp() {
           </>
         )}
         <span className="grow" />
-        {spacesOnly && <>
-          <RoomListImportButton />
-          <AiPlanImport commit={commit} onImported={() => window.location.reload()} />
-          <ImportButton commit={commit} rules={rules} />
-        </>}
-        {workloadOnly && <RoomListImportButton label="📊 Import room list (Excel/CSV)" />}
+        {/* uploading lives in ONE place: Max Space's ⬆ Upload button — the
+            same three options here as in Classic, nothing anywhere else */}
+        {spacesOnly && <UploadHub commit={commit} rules={rules} />}
         {!scopeOnly && !spacesOnly && !workloadOnly && !floorcareOnly && (
           <button className="pbtn" onClick={() => setReport(true)}>⚠ Unassigned Tasks</button>
         )}
@@ -290,8 +291,10 @@ export function MapsApp() {
                 A floor plan is optional: add one any time (a picture, PDF, or magicplan scan)
                 and it attaches to these same rooms.
               </p>
+            ) : tab === "spaces" ? (
+              <p>Use the ⬆ Upload button above — a floor plan (picture or PDF), a room list, or a magicplan scan all get you started.</p>
             ) : (
-              <p>Add a floor plan (picture, PDF or magicplan scan), or import a room list — either one gets you started.</p>
+              <p>Go to Max Space and use its ⬆ Upload button — a floor plan (picture or PDF), a room list, or a magicplan scan all get you started.</p>
             )}
             <a className="pbtn primary" href="./classic.html">← Back to OpsMatrix</a>
           </div>
@@ -412,41 +415,123 @@ function PrintPreview({ data, rules, scheduleId, onClose }: {
 
 // ── shared bits ──────────────────────────────────────────────────────────────
 
-// ── Max Space Map View: import scans right here ─────────────────────────────
-function ImportButton({ commit, rules }: {
+// ── ⬆ Upload: THE one front door for bringing data in (Josh's rule,
+//    2026-08-24 — "the only place to upload anything in OpsMatrix, period").
+//    One button, three options: floor plan (always read by Max — there is no
+//    manual path), room list, magicplan export. The exact same chooser fronts
+//    Classic's Max Space (fusion-ui.js); this is its hub twin. ─────────────
+function UploadHub({ commit, rules }: {
   commit: (mut: (d: ClassicData) => void) => void;
   rules: Rules;
 }) {
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [chooser, setChooser] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [rlPhase, setRlPhase] = useState<"idle" | "working" | "done" | "error">("idle");
+  const [rlError, setRlError] = useState("");
+  const [rlSummary, setRlSummary] = useState<ImportSummary | null>(null);
+  const rlRef = useRef<HTMLInputElement>(null);
+  const mpRef = useRef<HTMLInputElement>(null);
+
+  const handleRoomList = async (file: File) => {
+    setRlPhase("working");
+    try {
+      if (!isSpreadsheet(file)) throw new Error("Pick an Excel (.xlsx), CSV or raw-data text file of rooms.");
+      const sheets = await fileToSheets(file);
+      const s = importRoomListIntoStorage(sheets, { fileName: file.name });
+      setRlSummary(s);
+      setRlPhase("done");
+    } catch (e) {
+      setRlError(String((e as Error)?.message ?? e));
+      setRlPhase("error");
+    }
+  };
+
+  const handleMagicplan = async (files: File[]) => {
+    const dxfF = files.find((f) => f.name.toLowerCase().endsWith(".dxf"));
+    const csvF = files.find((f) => f.name.toLowerCase().endsWith(".csv"));
+    if (!dxfF || !csvF) { alert("Pick both files from the same export: the .dxf and the .csv"); return; }
+    const [dxfT, csvT] = await Promise.all([dxfF.text(), csvF.text()]);
+    try {
+      const result = importScan(dxfT, csvT, {});
+      let outcome = { attached: 0, added: 0 };
+      commit((d) => {
+        // a scan of rooms already imported from a list ATTACHES to them
+        d.v7.spaces = d.v7.spaces ?? [];
+        outcome = attachPlanToRooms(d.v7.spaces as never, result as never);
+        d.plans.push(result.plan as unknown as ClassicData["plans"][0]);
+        localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans));
+        for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, rules);
+      });
+      alert(`✓ ${result.summary.rooms} rooms imported, ${result.summary.autoDetected} drawn automatically` +
+        (outcome.attached ? `, ${outcome.attached} matched to rooms you already had` : ""));
+      window.location.reload();
+    } catch (err) {
+      alert("Could not read that scan: " + err);
+    }
+  };
+
   return (
     <>
-      <button className="pbtn primary" onClick={() => fileRef.current?.click()}>⚡ Import magicplan Scan</button>
-      <input ref={fileRef} type="file" multiple accept=".dxf,.csv" style={{ display: "none" }}
-        onChange={async (e) => {
+      <button className="pbtn primary" onClick={() => setChooser(true)}>⬆ Upload</button>
+
+      {chooser && (
+        <div className="pro-modalback" onClick={(e) => { if (e.target === e.currentTarget) setChooser(false); }}>
+          <div className="pro-modal">
+            <div className="pshead"><h2>Upload space data</h2>
+              <button className="pbtn ghost" onClick={() => setChooser(false)}>✕</button></div>
+            <p className="pnote">Pick what you have — OpsMatrix knows what to do with each.</p>
+            <button className="upltile" onClick={() => { setChooser(false); setPlanOpen(true); }}>
+              <b>🗺 Floor plan — picture or PDF</b>
+              <span>Max reads the rooms, numbers and sizes, then redraws the plan in OpsMatrix's own style.</span>
+            </button>
+            <button className="upltile" onClick={() => { setChooser(false); rlRef.current?.click(); }}>
+              <b>📊 Room list — Excel, CSV or raw data</b>
+              <span>A spreadsheet or export of rooms and details, imported straight into Max Space.</span>
+            </button>
+            <button className="upltile" onClick={() => { setChooser(false); mpRef.current?.click(); }}>
+              <b>⚡ magicplan export — DXF + CSV</b>
+              <span>A laser-measured scan. Rooms are detected and drawn exactly.</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      <AiPlanImport open={planOpen} onClose={() => setPlanOpen(false)}
+        commit={commit} onImported={() => window.location.reload()} />
+
+      <input ref={rlRef} type="file" style={{ display: "none" }}
+        accept=".xlsx,.xlsm,.xls,.csv,.tsv"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          setChooser(false);
+          if (f) handleRoomList(f);
+        }} />
+      <input ref={mpRef} type="file" multiple accept=".dxf,.csv" style={{ display: "none" }}
+        onChange={(e) => {
           const files = [...(e.target.files ?? [])];
           e.target.value = "";
-          const dxfF = files.find((f) => f.name.toLowerCase().endsWith(".dxf"));
-          const csvF = files.find((f) => f.name.toLowerCase().endsWith(".csv"));
-          if (!dxfF || !csvF) { alert("Pick both files from the same export: the .dxf and the .csv"); return; }
-          const [dxfT, csvT] = await Promise.all([dxfF.text(), csvF.text()]);
-          try {
-            const result = importScan(dxfT, csvT, {});
-            let outcome = { attached: 0, added: 0 };
-            commit((d) => {
-              // a scan of rooms already imported from a list ATTACHES to them
-              d.v7.spaces = d.v7.spaces ?? [];
-              outcome = attachPlanToRooms(d.v7.spaces as never, result as never);
-              d.plans.push(result.plan as unknown as ClassicData["plans"][0]);
-              localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans));
-              for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, rules);
-            });
-            alert(`✓ ${result.summary.rooms} rooms imported, ${result.summary.autoDetected} drawn automatically` +
-              (outcome.attached ? `, ${outcome.attached} matched to rooms you already had` : ""));
-            window.location.reload();
-          } catch (err) {
-            alert("Could not read that scan: " + err);
-          }
+          setChooser(false);
+          if (files.length) handleMagicplan(files);
         }} />
+
+      {rlPhase !== "idle" && (
+        <div className="pro-modalback" onClick={(e) => {
+          if (e.target === e.currentTarget && rlPhase !== "working") setRlPhase("idle");
+        }}>
+          <div className="pro-modal">
+            {rlPhase === "working" && (
+              <div className="aiworking"><div className="aispin" /><b>Reading the room list…</b></div>
+            )}
+            {rlPhase === "error" && (<>
+              <div className="pshead"><h2>Import room list</h2>
+                <button className="pbtn ghost" onClick={() => setRlPhase("idle")}>✕</button></div>
+              <p className="warntext">⚠ {rlError}</p>
+            </>)}
+            {rlPhase === "done" && rlSummary && <ImportResult summary={rlSummary} />}
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -952,7 +1037,7 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
               <span className="schedacts">
                 <button className="pbtn small primary" onClick={() => onPrint(s.id)}>🖨 Print schedule</button>
                 {s.floorCareId ? (
-                  <a className="pbtn small" href={"./maps.html#floorcare?fc=" + s.floorCareId}>🧽 Edit in Floor Care</a>
+                  <a className="pbtn small" href={"./maps.html#floorcare?fc=" + s.floorCareId}>Edit in Floor Care</a>
                 ) : (
                   <button className="pbtn small" onClick={() => onOpenOnMap(s.id)}>🗺 Edit on map</button>
                 )}

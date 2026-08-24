@@ -12,14 +12,13 @@ or medical information, and no database column to hold them.
 
 - **`/` (the new scheduler)** — the map-first React app.
 - **`/classic.html` (OpsMatrix Classic + fusion)** — Josh's original full
-  OpsMatrix (Max AI, inspections, reports, visual schedule builder),
-  byte-identical to the archive, with ONE injected addition: an
-  **"⚡ Import magicplan Scan"** button in Max Space → Floor Plans. It runs the
-  modern auto-detection pipeline in the browser and writes the classic app's
-  own data stores (`opsmatrix_v7`, `opsmatrix_v7_plans`): plan image rendered
-  from the DXF, rooms pre-traced as polygons, square footage from the CSV,
-  minutes via the classic rate table. Everything else about Classic is
-  untouched. Regenerate after pipeline changes with `npm run build:classic`
+  OpsMatrix (Max AI, inspections, reports, visual schedule builder), generated
+  from the untouched archive with the fusion layer injected. Uploading happens
+  in ONE place: Max Space's **"⬆ Upload"** button — floor plan read by Max
+  (picture/PDF), room list (Excel/CSV), or magicplan export (DXF + CSV, the
+  modern auto-detection pipeline run in the browser). Imports write the
+  classic app's own data stores (`opsmatrix_v7`, `opsmatrix_v7_plans`).
+  Regenerate after fusion changes with `npm run build:classic`
   (commits `public/classic.html`).
 
 ## What's in this repo

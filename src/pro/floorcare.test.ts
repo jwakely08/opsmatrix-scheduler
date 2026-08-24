@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { defaultRules } from "./rules";
 import {
   floorCareTasks, fcEligible, fcTasksForSpace, stopMinutes, fcTiming,
-  shipToSchedules, unship, type FcSchedule
+  fcScheduledRate, shipToSchedules, unship, type FcSchedule
 } from "./floorcare";
 import { EQUIPMENT, DUST_MOP_SIZES, brandsFor, modelsFor } from "./equipment";
 import { scheduleMinutes, type ClassicData, type ClassicSpace } from "./classicStore";
@@ -28,13 +28,17 @@ describe("floor-care task identity and eligibility", () => {
     expect(floorCareTasks(rules).map((t) => t.id).sort()).toEqual(
       ["auto-scrub", "burnish", "dust-mop", "machine-carpet", "machine-sweep"]);
   });
-  it("corridors and carpet are eligible; a plain office is greyed out", () => {
-    expect(fcEligible(rules, corridor)).toBe(true);
-    expect(fcEligible(rules, carpetLounge)).toBe(true);   // machine carpet cleaning
+  it("only rooms whose tasks carry floor-care work are eligible — carpet alone is not a ticket in", () => {
+    expect(fcEligible(rules, corridor)).toBe(true);       // Scope gives corridors floor-care tasks
+    expect(fcEligible(rules, carpetLounge)).toBe(false);  // carpet by itself no longer qualifies
     expect(fcEligible(rules, office)).toBe(false);
   });
-  it("a carpet room offers carpet cleaning, never wet scrubbing", () => {
-    const tasks = fcTasksForSpace(rules, carpetLounge);
+  it("a room hand-edited to carry a floor-care task becomes eligible", () => {
+    const editedOffice = { ...carpetLounge, spaceTasks: ["machine-carpet"] };
+    expect(fcEligible(rules, editedOffice)).toBe(true);
+  });
+  it("an eligible carpet room offers carpet cleaning, never wet scrubbing", () => {
+    const tasks = fcTasksForSpace(rules, { ...carpetLounge, spaceTasks: ["machine-carpet"] });
     expect(tasks).toContain("machine-carpet");
     expect(tasks).not.toContain("auto-scrub");
     expect(tasks).not.toContain("burnish");
@@ -67,18 +71,27 @@ describe("equipment catalog (manufacturer sheets)", () => {
 });
 
 describe("stop timing — equipment rate wins, Scope rate is the fallback", () => {
-  it("a Tennant T7 scrubs 10,000 sq ft in ~11 minutes; the generic rate takes 50", () => {
-    const withT7 = { "auto-scrub": { label: "Tennant T7", sqftPerHour: 56320 } };
-    expect(stopMinutes(rules, corridor, "auto-scrub", withT7)).toBe(11);   // 10000/938.7
-    expect(stopMinutes(rules, corridor, "auto-scrub", {})).toBe(50);       // 10000/200
+  it("OEM-max rates are derated to a practical pace and every stop carries setup minutes", () => {
+    const withT7 = { "auto-scrub": { label: "Tennant T7", sqftPerHour: 56320, basis: "OEM max" } };
+    // 10000 / (56320 × 0.67 / 60) = 15.9, + 2 setup → 18
+    expect(stopMinutes(rules, corridor, "auto-scrub", withT7)).toBe(18);
+    // Scope fallback: 10000/200 = 50, + 2 setup → 52
+    expect(stopMinutes(rules, corridor, "auto-scrub", {})).toBe(52);
+  });
+  it("rates already published as practical are used as given (setup still added)", () => {
+    const practical = { "auto-scrub": { label: "TASKI DD-55 Perf", sqftPerHour: 19978, basis: "OEM practical" } };
+    // 10000 / (19978/60) = 30.0, + 2 setup → 32
+    expect(stopMinutes(rules, corridor, "auto-scrub", practical)).toBe(32);
+    expect(fcScheduledRate({ label: "x", sqftPerHour: 20000, basis: "custom" })).toBe(20000);
+    expect(fcScheduledRate({ label: "x", sqftPerHour: 20000, basis: "OEM theoretical max" })).toBe(20000 * 0.67);
   });
   it("equipment applies only to ITS task on this schedule", () => {
-    const withT7 = { "auto-scrub": { label: "Tennant T7", sqftPerHour: 56320 } };
-    expect(stopMinutes(rules, corridor, "dust-mop", withT7)).toBe(67);     // 10000/150 — unaffected
+    const withT7 = { "auto-scrub": { label: "Tennant T7", sqftPerHour: 56320, basis: "OEM max" } };
+    expect(stopMinutes(rules, corridor, "dust-mop", withT7)).toBe(69);     // 10000/150 + 2 — unaffected
   });
-  it("never zero minutes", () => {
+  it("a tiny room is still a real visit — never under the 3-minute floor", () => {
     expect(stopMinutes(rules, { squareFeet: 10 } as never, "burnish",
-      { burnish: { label: "x", sqftPerHour: 999999 } })).toBe(1);
+      { burnish: { label: "x", sqftPerHour: 999999, basis: "custom" } })).toBe(3);
   });
 });
 
@@ -90,9 +103,9 @@ const fc: FcSchedule = {
     "dust-mop": { label: '36" dust mop', sqftPerHour: 20000 }
   },
   stops: [
-    { spaceId: "c1", taskId: "dust-mop", techKey: "T1" },   // 10000/(20000/60)=30
-    { spaceId: "c1", taskId: "auto-scrub", techKey: "T2" }, // 11
-    { spaceId: "c2", taskId: "machine-carpet", techKey: "T2" } // scope 800/180 → 4
+    { spaceId: "c1", taskId: "dust-mop", techKey: "T1" },   // 10000/(20000/60)=30 +2 setup → 32
+    { spaceId: "c1", taskId: "auto-scrub", techKey: "T2" }, // T7 derated: 15.9 +2 → 18
+    { spaceId: "c2", taskId: "machine-carpet", techKey: "T2" } // scope 800/180=4.4 +2 → 6
   ],
   createdAt: "2026-08-23", updatedAt: "2026-08-23"
 };
@@ -100,10 +113,10 @@ const fc: FcSchedule = {
 describe("multi-technician timing", () => {
   it("each tech's minutes are their own stops; total is combined labor", () => {
     const t = fcTiming(rules, [corridor, carpetLounge, office], fc);
-    expect(t.perTech.T1).toBe(30);
-    expect(t.perTech.T2).toBe(11 + 4);
-    expect(t.total).toBe(45);
-    expect(t.longestTech).toBe(30);
+    expect(t.perTech.T1).toBe(32);
+    expect(t.perTech.T2).toBe(18 + 6);
+    expect(t.total).toBe(56);
+    expect(t.longestTech).toBe(32);
   });
 });
 
@@ -119,7 +132,7 @@ describe("shipping into Max Schedules", () => {
     expect(sched.floorCareId).toBe("fc1");
     expect(sched.employee).toBe("2 floor technicians");
     // Max Schedules shows the equipment-priced total, not the generic rate
-    expect(scheduleMinutes(data, rules, sched)).toBe(45);
+    expect(scheduleMinutes(data, rules, sched)).toBe(56);
   });
   it("re-shipping updates the same schedule; unship removes it", () => {
     const data: ClassicData = { v7: { spaces: [corridor, carpetLounge], schedules: [] }, plans: [], nonSpace: [] };
