@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-08-22 (evening: CAD room import + Workload Intelligence). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-08-23 (CAD room import + Workload Intelligence §12a, Hey Max full voice control §12b, Max Floor Care §12c, phone/tablet/desktop layouts §12d). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -234,6 +234,8 @@ git add -A && git commit && git push          # Pages deploys automatically (~35
 - Multi-floor "stacking" floor picker exists (`.floorstack`, shows when >1 plan) but has never seen real multi-floor data.
 - ~~Printing is probably the next real gap~~ — **DONE 2026-08-12**: native printed schedules in the hub (§10). Classic's original Visual/Legacy Builder screens remain unreachable via nav (rewired), which is fine now.
 - The AI plan reader (§11) has been verified on Josh's real architect's sheet, but more real-world plans will shake out edge cases; the coordinate-scale rescue and zone-wrapper pruning exist because real model answers needed them.
+- **Floor Care follow-ups (Josh-acknowledged)**: map-view room picking inside the Floor Care builder (list view works; the greyed-out interactive map mode from his spec is not built); per-technician printed sheets for multi-tech schedules; a manufacturer SWEEPER spec sheet (none provided — Machine Sweeping is custom-entry only until one drops in).
+- **Device layouts**: iPhone pass shipped + real-device fixes (§12d); iPad has only the gentle middle breakpoint — a dedicated iPad pass is future work. Josh tests on his real iPhone and reports; expect more small tap-target/spacing tuning.
 - The 20.6 sq ft closet reads 18.1 from geometry (threshold convention) — explained, accepted.
 - Old React app (surface C) still deployed at `/` with its own demo; candidate for retirement to avoid confusion.
 - Privacy note (flagged to Josh): the repo is public and contains his real home scan + it's visible in the public demo. The Akron hospital CAD workbook used to build/verify the room-list importer was deliberately NOT committed (real hospital data, public repo) — keep it out.
