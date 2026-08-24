@@ -9,13 +9,20 @@ import { planFileToImage, isPdf } from "./planFile";
 import { loadApiKey, saveApiKey } from "./classicStore";
 import type { ClassicData } from "./classicStore";
 
-type Phase = "idle" | "form" | "working" | "done" | "error";
+type Phase = "form" | "working" | "done" | "error";
 
-export function AiPlanImport({ commit, onImported }: {
+/**
+ * Controlled modal — the ⬆ Upload hub owns the trigger. There is exactly one
+ * way a floor plan comes into OpsMatrix: Max reads it. (Josh's order,
+ * 2026-08-24: no manual "upload as a picture" path.)
+ */
+export function AiPlanImport({ commit, onImported, open, onClose }: {
   commit: (mut: (d: ClassicData) => void) => void;
   onImported: () => void;
+  open: boolean;
+  onClose: () => void;
 }) {
-  const [phase, setPhase] = useState<Phase>("idle");
+  const [phase, setPhase] = useState<Phase>("form");
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [apiKey, setApiKey] = useState<string>(() => loadApiKey());
@@ -25,7 +32,7 @@ export function AiPlanImport({ commit, onImported }: {
   const [result, setResult] = useState<{ rooms: number; printed: number; scaled: boolean } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const close = () => { setPhase("idle"); setError(""); setStatus(""); setResult(null); };
+  const close = () => { setPhase("form"); setError(""); setStatus(""); setResult(null); onClose(); };
 
   async function handleFile(file: File) {
     setPhase("working");
@@ -71,13 +78,11 @@ export function AiPlanImport({ commit, onImported }: {
     }
   }
 
+  if (!open) return null;
+
   return (
     <>
-      <button className="pbtn" onClick={() => setPhase("form")}>
-        ✨ Read a floor plan with Max
-      </button>
-
-      {phase !== "idle" && (
+      {(
         <div className="pro-modalback" onClick={(e) => {
           if (e.target === e.currentTarget && phase !== "working") close();
         }}>

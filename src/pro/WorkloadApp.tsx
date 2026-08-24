@@ -6,19 +6,18 @@
 //
 // No hover tooltips anywhere (house rule): every chart value is printed
 // directly on the chart.
-import React, { useMemo, useRef, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   type Rules, spaceCleanability, typeIdFromLabelStrict
 } from "./rules";
 import {
   loadAliases, saveAliases, blankDeptLabels, departmentDisplay,
-  importRoomListIntoStorage, type ImportSummary, type SourceRecord
+  type ImportSummary, type SourceRecord
 } from "./roomListImport";
 import {
   facilityTotals, buildTree, byDepartment, byFloor, explainRoom,
   type WorkSpace, type WorkNode, type Totals
 } from "./workload";
-import { fileToSheets, isSpreadsheet } from "./sheetFile";
 import { suggestRoomTypes } from "../bridge/roomTypeSuggest";
 import { loadApiKey } from "./classicStore";
 import type { ClassicData, ClassicSpace } from "./classicStore";
@@ -681,62 +680,12 @@ function AssumptionsTab({ rules, commitRules }: {
   );
 }
 
-// ── Import button + result screen (shared with Max Space's header) ─────────
+// ── Import result screen (rendered by the ⬆ Upload hub in MapsApp) ─────────
+// The upload buttons themselves were consolidated 2026-08-24: uploading
+// happens in exactly ONE place — Max Space's ⬆ Upload button (Classic and
+// the hub's #spaces header) — so this file only keeps the result screen.
 
-export function RoomListImportButton({ label }: { label?: string }) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [phase, setPhase] = useState<"idle" | "working" | "done" | "error">("idle");
-  const [error, setError] = useState("");
-  const [summary, setSummary] = useState<ImportSummary | null>(null);
-
-  const handle = async (file: File) => {
-    setPhase("working");
-    try {
-      if (!isSpreadsheet(file)) throw new Error("Pick an Excel (.xlsx) or CSV file of rooms.");
-      const sheets = await fileToSheets(file);
-      const s = importRoomListIntoStorage(sheets, { fileName: file.name });
-      setSummary(s);
-      setPhase("done");
-    } catch (e) {
-      setError(String((e as Error)?.message ?? e));
-      setPhase("error");
-    }
-  };
-
-  return (
-    <>
-      <button className="pbtn" onClick={() => fileRef.current?.click()}>
-        {label ?? "📊 Import room list"}
-      </button>
-      <input ref={fileRef} type="file" style={{ display: "none" }}
-        accept=".xlsx,.xlsm,.xls,.csv,.tsv"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          e.target.value = "";
-          if (f) handle(f);
-        }} />
-      {phase !== "idle" && (
-        <div className="pro-modalback" onClick={(e) => {
-          if (e.target === e.currentTarget && phase !== "working") setPhase("idle");
-        }}>
-          <div className="pro-modal">
-            {phase === "working" && (
-              <div className="aiworking"><div className="aispin" /><b>Reading the room list…</b></div>
-            )}
-            {phase === "error" && (<>
-              <div className="pshead"><h2>Import room list</h2>
-                <button className="pbtn ghost" onClick={() => setPhase("idle")}>✕</button></div>
-              <p className="warntext">⚠ {error}</p>
-            </>)}
-            {phase === "done" && summary && <ImportResult summary={summary} />}
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
-function ImportResult({ summary: s }: { summary: ImportSummary }) {
+export function ImportResult({ summary: s }: { summary: ImportSummary }) {
   return (
     <>
       <p className="pnote big">✓ Room list imported — {fmt(s.rows)} rooms/spaces processed.</p>

@@ -5,35 +5,26 @@
 // and reloads, so every classic feature just sees more data.
 (function () {
   "use strict";
-  var BTN_ID = "fusion-import-btn";
   var OVERLAY_ID = "fusion-overlay";
 
-  function findAnchorButtons() {
-    var out = [];
+  /**
+   * Uploading happens in exactly ONE place (Josh's rule, 2026-08-24): Max
+   * Space's ⬆ Upload button, three options, nothing else. The classic app's
+   * own "Add Floor Plan" / "Upload First Plan" buttons were the old manual
+   * path — they are hidden, not rewired, so the archive stays untouched.
+   */
+  function hideClassicPlanUploadButtons() {
     var buttons = document.querySelectorAll("button");
     for (var i = 0; i < buttons.length; i++) {
       var t = (buttons[i].textContent || "").trim();
-      if (t === "Add Floor Plan" || t === "Upload First Plan") out.push(buttons[i]);
+      if ((t === "Add Floor Plan" || t === "Upload First Plan") && buttons[i].style.display !== "none") {
+        buttons[i].style.display = "none";
+      }
     }
-    return out;
   }
 
   function ensureButton() {
-    if (!document.getElementById(BTN_ID)) {
-      var anchors = findAnchorButtons();
-      if (anchors.length) {
-        var anchor = anchors[0];
-        var btn = document.createElement("button");
-        btn.id = BTN_ID;
-        btn.type = "button";
-        btn.textContent = "⚡ Import magicplan Scan";
-        btn.className = anchor.className; // borrow the classic app's own styling
-        btn.style.marginLeft = "8px";
-        btn.addEventListener("click", openOverlay);
-        anchor.parentNode.insertBefore(btn, anchor.nextSibling);
-      }
-    }
-    ensurePdfSupport();
+    hideClassicPlanUploadButtons();
     ensureNavLink();
   }
 
@@ -50,13 +41,22 @@
           e.stopPropagation();
           window.location.href = "./maps.html";
         }, true); // capture: beat the classic app's own handler
-        // Max Floor Care lives right under Max Schedules in the nav
+        // Max Floor Care lives right under Max Schedules in the nav.
+        // Same anatomy as the classic app's own items (nav-icon + nav-label
+        // spans, 16px stroke icon) so it looks native — a floor machine
+        // outline, not an emoji.
         if (!document.getElementById("fusion-nav-floorcare") && b.parentNode) {
           var fcBtn = document.createElement("button");
           fcBtn.id = "fusion-nav-floorcare";
           fcBtn.type = "button";
           fcBtn.className = b.className;
-          fcBtn.textContent = "🧽 Max Floor Care";
+          fcBtn.innerHTML =
+            '<span class="nav-icon">' +
+            '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+            'stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">' +
+            '<path d="M17 3l-6 8"/><circle cx="10" cy="16" r="5"/><path d="M4 22h16"/>' +
+            "</svg></span>" +
+            '<span class="nav-label">Max Floor Care</span>';
           fcBtn.addEventListener("click", function () { window.location.href = "./maps.html#floorcare"; });
           b.parentNode.insertBefore(fcBtn, b.nextSibling);
         }
@@ -64,6 +64,17 @@
       // retire the sections Scope now owns
       if ((t === "Break Times" || t === "Turn Times" || t === "Turn Rules") && b.style.display !== "none") {
         b.style.display = "none";
+      }
+      // Classic's own "Import"/"Import Spaces" buttons led to its retired
+      // import page — every road into OpsMatrix now goes through the ONE
+      // ⬆ Upload hub (Josh's rule: one place to upload, three options)
+      if ((t === "Import" || t === "Import Spaces") && !b.getAttribute("data-fusion-wired")) {
+        b.setAttribute("data-fusion-wired", "1");
+        b.addEventListener("click", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          showUploadHub();
+        }, true); // capture: beat the classic app's own handler
       }
       // Admin Settings → scope opens the Scope manager (the one source of truth)
       if (t === "scope" && !b.getAttribute("data-fusion-wired")) {
@@ -123,28 +134,6 @@
   // ── ⬆ Upload: route by what the user has, not by which screen owns it ──────
   var HUB_ID = "fusion-upload-hub";
 
-  function clickButtonByText(text) {
-    var btns = document.querySelectorAll("button");
-    for (var i = 0; i < btns.length; i++) {
-      if ((btns[i].textContent || "").trim() === text && btns[i].offsetParent !== null) {
-        btns[i].click();
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /** click "Add Floor Plan" once the Floor Plans screen has rendered it */
-  function goToAddFloorPlan() {
-    clickButtonByText("Floor Plans");
-    var tries = 0;
-    var t = setInterval(function () {
-      if (clickButtonByText("Add Floor Plan") || clickButtonByText("Upload First Plan") || ++tries > 25) {
-        clearInterval(t);
-      }
-    }, 120);
-  }
-
   function showUploadHub() {
     if (document.getElementById(HUB_ID)) return;
     var wrap = document.createElement("div");
@@ -167,8 +156,8 @@
       "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>Pick what you have — OpsMatrix knows what to do with each.</p>" +
       "<div id='fusion-hub-plan'>" + tile("🗺 Floor plan — picture or PDF",
         "Max reads the rooms, numbers and sizes, then redraws the plan in OpsMatrix's own style.") + "</div>" +
-      "<div id='fusion-hub-excel'>" + tile("📊 Room list — Excel or CSV",
-        "A spreadsheet of rooms and details, imported straight into Max Space.") + "</div>" +
+      "<div id='fusion-hub-excel'>" + tile("📊 Room list — Excel, CSV or raw data",
+        "A spreadsheet or export of rooms and details, imported straight into Max Space.") + "</div>" +
       "<div id='fusion-hub-magic'>" + tile("⚡ magicplan export — DXF + CSV",
         "A laser-measured scan. Rooms are detected and drawn exactly.") + "</div>" +
       "<div style='text-align:right'><button id='fusion-hub-cancel' type='button' " +
@@ -178,7 +167,7 @@
     function close() { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }
     wrap.addEventListener("click", function (e) { if (e.target === wrap) close(); });
     document.getElementById("fusion-hub-cancel").addEventListener("click", close);
-    document.getElementById("fusion-hub-plan").addEventListener("click", function () { close(); goToAddFloorPlan(); });
+    document.getElementById("fusion-hub-plan").addEventListener("click", function () { close(); openPlanUpload(); });
     document.getElementById("fusion-hub-excel").addEventListener("click", function () {
       close();
       openRoomListPicker();
@@ -211,10 +200,9 @@
   }
 
   // ── PDF floor plans ────────────────────────────────────────────────────────
-  // The classic app's plan picker only accepts images and reads the file
-  // straight to a data URL. Rather than touch the archive, we widen the picker
-  // and convert a chosen PDF's first page to a PNG before the app ever sees
-  // it — so naming, calibration and AI detection all run unchanged.
+  // pdf.js is vendored to our origin (scripts/copy-pdfjs.cjs) because this
+  // page's localStorage holds the user's API key — no third-party scripts.
+  // Loaded lazily: nobody downloads 1.7MB of pdf.js unless they pick a PDF.
 
   var PDFJS_URL = "./pdfjs/pdf.min.mjs";
   var PDF_WORKER_URL = "./pdfjs/pdf.worker.min.mjs";
@@ -222,45 +210,12 @@
 
   function loadPdfLib() {
     if (!pdfLibPromise) {
-      // lazy: nobody downloads 1.7MB of pdf.js unless they pick a PDF
       pdfLibPromise = import(PDFJS_URL).then(function (lib) {
         lib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
         return lib;
       });
     }
     return pdfLibPromise;
-  }
-
-  /** first page of a PDF → canvas, rendered big enough for room detection */
-  function pdfToCanvas(file) {
-    return loadPdfLib()
-      .then(function (lib) { return file.arrayBuffer().then(function (buf) { return lib.getDocument({ data: buf }).promise; }); })
-      .then(function (doc) { return doc.getPage(1); })
-      .then(function (page) {
-        // target ~2000px on the long edge: enough detail for Max to read walls
-        var base = page.getViewport({ scale: 1 });
-        var scale = Math.min(4, Math.max(1, 2000 / Math.max(base.width, base.height)));
-        var viewport = page.getViewport({ scale: scale });
-        var canvas = document.createElement("canvas");
-        canvas.width = Math.round(viewport.width);
-        canvas.height = Math.round(viewport.height);
-        var ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#ffffff"; // PDFs are transparent; walls need a white ground
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        return page.render({ canvasContext: ctx, viewport: viewport, canvas: canvas }).promise
-          .then(function () { return canvas; });
-      });
-  }
-
-  function pdfToPngFile(file) {
-    return pdfToCanvas(file).then(function (canvas) {
-      return new Promise(function (resolve) {
-        canvas.toBlob(function (blob) {
-          var name = (file.name || "floor-plan").replace(/\.pdf$/i, "") + ".png";
-          resolve(new File([blob], name, { type: "image/png" }));
-        }, "image/png");
-      });
-    });
   }
 
   /** a box within a box → the same box on the original source */
@@ -343,15 +298,22 @@
     });
   }
 
-  // ── the Anthropic API key: one setting, saved on this device only ──────────
+  // ── the Anthropic API key: entered once, kept forever on this device ───────
+  // Two slots: opsmatrix_v7.settings.maxApiKey (what the classic app reads)
+  // + a dedicated backup the classic app never rewrites. Classic's save
+  // effect used to clobber a key saved from here; the backup + the pre-app
+  // heal in fusion-seed.js make the key survive saves and demo reseeds.
+  var KEY_BACKUP = "opsmatrix_max_api_key";
   function getApiKey() {
     try {
       var v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") || "{}") || {};
-      return String((v7.settings || {}).maxApiKey || "");
+      return String((v7.settings || {}).maxApiKey || "") ||
+        String(localStorage.getItem(KEY_BACKUP) || "");
     } catch (e) { return ""; }
   }
   function setApiKey(key) {
     try {
+      localStorage.setItem(KEY_BACKUP, String(key || "").trim());
       var v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") || "{}") || {};
       v7.settings = v7.settings || {};
       v7.settings.maxApiKey = String(key || "").trim();
@@ -365,166 +327,40 @@
     return file && (file.type === "application/pdf" || /\.pdf$/i.test(file.name || ""));
   }
 
-  /**
-   * The archive's own wording predates PDF support and actively tells the user
-   * PDFs are not allowed ("Choose Floor Plan Image", "PNG or JPG"). Retext both
-   * — replacing only the text node, so the button keeps its icon <span>.
-   * Runs on every re-render; the guards stop it re-firing on its own change.
-   */
-  function relabelPlanPicker() {
-    var btns = document.querySelectorAll("button");
-    for (var i = 0; i < btns.length; i++) {
-      var kids = btns[i].childNodes;
-      for (var k = 0; k < kids.length; k++) {
-        if (kids[k].nodeType === 3 && (kids[k].nodeValue || "").trim() === "Choose Floor Plan Image") {
-          kids[k].nodeValue = "Choose Floor Plan (image or PDF)";
-        }
-      }
-    }
-    var hints = document.querySelectorAll("p");
-    for (var j = 0; j < hints.length; j++) {
-      if (hints[j].children.length) continue;
-      var txt = hints[j].textContent || "";
-      if (txt.indexOf("PNG or JPG") !== -1) {
-        hints[j].textContent = txt.replace("PNG or JPG", "PNG, JPG or PDF");
-      }
-    }
-  }
-
-  /** widen the plan picker and transparently convert PDFs */
-  function ensurePdfSupport() {
-    relabelPlanPicker();
-    var inputs = document.querySelectorAll('input[type="file"]');
-    for (var i = 0; i < inputs.length; i++) {
-      var input = inputs[i];
-      if ((input.accept || "").indexOf("image/") !== 0) continue; // plan picker only
-      if (input.getAttribute("data-fusion-pdf")) continue;
-      input.setAttribute("data-fusion-pdf", "1");
-      input.accept = "image/*,application/pdf,.pdf";
-      input.addEventListener("change", onPlanFileChosen, true); // capture: beat React
-    }
-  }
-
-  /**
-   * The classic app requires Building and Floor BEFORE a file, and silently
-   * throws the file away when they are blank — you pick a plan and nothing
-   * happens, with no message. Find those two fields so we can say so.
-   * Returns nulls if the form ever changes shape; we then fail open rather
-   * than block a working upload.
-   */
-  function planFormFields() {
-    var building = null, floor = null;
-    var inputs = document.querySelectorAll("input");
-    for (var i = 0; i < inputs.length; i++) {
-      var ph = inputs[i].placeholder || "";
-      if (/main tower/i.test(ph)) building = inputs[i];
-      else if (/^e\.g\.\s*4$/i.test(ph.trim())) floor = inputs[i];
-    }
-    return { building: building, floor: floor };
-  }
-
-  function onPlanFileChosen(e) {
-    var input = e.target;
-    // a re-dispatch from "upload as picture only" — let the classic app have it
-    if (input.getAttribute("data-fusion-passthrough")) {
-      input.removeAttribute("data-fusion-passthrough");
-      return;
-    }
-    var file = input.files && input.files[0];
-    if (!file || input.getAttribute("data-fusion-converting")) return;
-
-    // say what the app won't: which box still needs filling in
-    var f = planFormFields();
-    var missing = [];
-    if (f.building && !f.building.value.trim()) missing.push("Building");
-    if (f.floor && !f.floor.value.trim()) missing.push("Floor");
-    if (missing.length) {
-      e.stopImmediatePropagation();
-      e.preventDefault();
-      input.value = "";
-      var warn = showNote("Type the " + missing.join(" and ") +
-        " above first, then choose your floor plan again.");
-      warn.style.background = "#b45309";
-      setTimeout(function () { warn.remove(); }, 6000);
-      var focusMe = (f.building && !f.building.value.trim()) ? f.building : f.floor;
-      if (focusMe) focusMe.focus();
-      return;
-    }
-
-    // Every plan upload gets the choice, right here: read it with Max, or
-    // upload the raw picture and trace by hand. Nobody has to know a second
-    // screen exists to reach the smart path.
-    e.stopImmediatePropagation();
-    e.preventDefault();
-    // WE hold the file from here. The picker is emptied immediately so the
-    // classic app cannot also store the raw picture — one upload, one plan.
-    input.value = "";
-    showSmartChoice(input, file, f.building ? f.building.value.trim() : "", f.floor ? f.floor.value.trim() : "");
-  }
-
-  /** hand the held file to the classic app's own handler, untouched */
-  function passThrough(input, file) {
-    input.setAttribute("data-fusion-passthrough", "1");
-    if (!isPdf(file)) {
-      var dt0 = new DataTransfer();
-      dt0.items.add(file);
-      input.files = dt0.files;
-    }
-    if (isPdf(file)) {
-      input.setAttribute("data-fusion-converting", "1");
-      var note = showNote("Converting " + file.name + "…");
-      pdfToPngFile(file).then(function (png) {
-        var dt = new DataTransfer();
-        dt.items.add(png);
-        input.files = dt.files;
-        input.removeAttribute("data-fusion-converting");
-        note.remove();
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-      }).catch(function (err) {
-        input.removeAttribute("data-fusion-converting");
-        input.removeAttribute("data-fusion-passthrough");
-        input.value = "";
-        note.textContent = "Could not read that PDF (" + err + "). Try exporting it as a PNG.";
-        note.style.background = "#b91c1c";
-        setTimeout(function () { note.remove(); }, 6000);
-      });
-    } else {
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-  }
-
-  // ── "How should this plan come in?" — the choice every upload now gets ─────
+  // ── 🗺 floor plan upload: Max reads it, always — there is no manual path ───
+  // (Josh's rule, 2026-08-24: floor plans come in through the API, period.
+  // The old flow — Classic's Building/Floor form, then a "read it with Max
+  // or upload as a picture?" choice — is gone.)
   var SMART_ID = "fusion-smart";
 
-  function showSmartChoice(input, file, building, floor) {
+  function openPlanUpload() {
     if (document.getElementById(SMART_ID)) return;
     var wrap = document.createElement("div");
     wrap.id = SMART_ID;
     wrap.setAttribute("style",
       "position:fixed;inset:0;z-index:99999;background:rgba(15,23,32,.55);" +
       "display:flex;align-items:center;justify-content:center;padding:20px;");
-    var savedKey = getApiKey();
     var card = document.createElement("div");
     card.setAttribute("style",
       "background:#fff;border-radius:14px;max-width:520px;width:100%;padding:24px;" +
       "font-family:'Segoe UI',sans-serif;color:#1c2b33;box-shadow:0 18px 60px rgba(0,0,0,.35);");
     card.innerHTML =
-      "<h3 style='margin:0 0 6px;font-size:17px'>How should this floor plan come in?</h3>" +
-      "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>" + esc(file.name) + " → " +
-      esc(building || "?") + ", floor " + esc(floor || "?") + "</p>" +
-
-      "<div style='border:2px solid #0f6b62;border-radius:10px;padding:14px;margin-bottom:10px'>" +
-      "<b style='font-size:14.5px'>✨ Read it with Max <span style='font-weight:400;color:#5b7083'>(recommended)</span></b>" +
-      "<p style='margin:6px 0 10px;font-size:12.5px;color:#5b7083'>Max reads the rooms, their numbers and any square footage " +
-      "printed on the plan, then OpsMatrix redraws it in its own clean style. If the plan states its sizes, " +
-      "there is nothing to calibrate or measure.</p>" +
+      "<h3 style='margin:0 0 6px;font-size:17px'>🗺 Upload a floor plan</h3>" +
+      "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>Pick a picture or PDF. Max reads the rooms, " +
+      "their numbers and any square footage printed on the plan, then OpsMatrix redraws it in its own clean " +
+      "style. If the plan states its sizes, there is nothing to calibrate or measure.</p>" +
+      "<div style='display:flex;gap:8px;margin-bottom:10px'>" +
+      "<label style='flex:1;font-size:11px;letter-spacing:.05em;color:#8fa3b0;text-transform:uppercase'>Building" +
+      "<input id='fusion-plan-building' type='text' placeholder='read from the plan if left blank' " +
+      "style='display:block;width:100%;margin-top:4px;padding:9px 10px;border:1px solid #d8e0e6;border-radius:7px;font-size:13px'/></label>" +
+      "<label style='flex:1;font-size:11px;letter-spacing:.05em;color:#8fa3b0;text-transform:uppercase'>Floor" +
+      "<input id='fusion-plan-floor' type='text' placeholder='e.g. 4 East' " +
+      "style='display:block;width:100%;margin-top:4px;padding:9px 10px;border:1px solid #d8e0e6;border-radius:7px;font-size:13px'/></label>" +
+      "</div>" +
       "<div id='fusion-keyrow'></div>" +
       "<button id='fusion-smart-go' type='button' style='width:100%;padding:11px;border:none;background:#0f6b62;color:#fff;" +
-      "border-radius:8px;font-size:14px;font-weight:600;cursor:pointer'>✨ Read the plan</button>" +
-      "</div>" +
-
-      "<button id='fusion-smart-raw' type='button' style='width:100%;padding:10px;border:1px solid #d8e0e6;background:#fff;" +
-      "border-radius:8px;font-size:13px;cursor:pointer;color:#39505c'>Upload as a picture only — trace and calibrate by hand</button>" +
+      "border-radius:8px;font-size:14px;font-weight:600;cursor:pointer'>Choose floor plan (image or PDF)</button>" +
+      "<input id='fusion-plan-file' type='file' accept='image/*,application/pdf,.pdf' style='display:none'/>" +
       "<div id='fusion-smart-status' style='min-height:18px;font-size:12.5px;color:#0f6b62;margin-top:10px'></div>" +
       "<div style='text-align:right;margin-top:4px'>" +
       "<button id='fusion-smart-cancel' type='button' style='padding:7px 14px;border:none;background:none;" +
@@ -532,7 +368,7 @@
     wrap.appendChild(card);
     document.body.appendChild(wrap);
 
-    renderKeyRow(savedKey);
+    renderKeyRow(getApiKey());
 
     function renderKeyRow(key) {
       var row = document.getElementById("fusion-keyrow");
@@ -561,20 +397,22 @@
       }
     }
 
-    function close() {
-      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
-      input.value = "";
-    }
+    function close() { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }
     wrap.addEventListener("click", function (ev) { if (ev.target === wrap) close(); });
     document.getElementById("fusion-smart-cancel").addEventListener("click", close);
-    document.getElementById("fusion-smart-raw").addEventListener("click", function () {
-      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
-      passThrough(input, file);
-    });
+
+    var fileInput = document.getElementById("fusion-plan-file");
     document.getElementById("fusion-smart-go").addEventListener("click", function () {
-      var key = getApiKey();
-      if (!key) { setSmartStatus("Save the API key above first — one time only.", true); return; }
-      runSmartImport(file, building, floor, key, close);
+      if (!getApiKey()) { setSmartStatus("Save the API key above first — one time only.", true); return; }
+      fileInput.click();
+    });
+    fileInput.addEventListener("change", function () {
+      var file = fileInput.files && fileInput.files[0];
+      fileInput.value = "";
+      if (!file) return;
+      var building = (document.getElementById("fusion-plan-building").value || "").trim();
+      var floor = (document.getElementById("fusion-plan-floor").value || "").trim();
+      runSmartImport(file, building, floor, getApiKey(), close);
     });
   }
 
@@ -610,7 +448,7 @@
         (scaled ? " — already to scale, nothing to calibrate" : "") + ". Reloading…");
       setTimeout(function () { window.location.reload(); }, 1400);
     }).catch(function (err) {
-      if (go) { go.disabled = false; go.textContent = "✨ Read the plan"; }
+      if (go) { go.disabled = false; go.textContent = "Choose floor plan (image or PDF)"; }
       setSmartStatus((err && err.message ? err.message : String(err)), true);
     });
   }

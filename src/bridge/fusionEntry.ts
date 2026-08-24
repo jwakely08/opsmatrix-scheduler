@@ -205,7 +205,9 @@ import dxfRaw from "../../test-fixtures/Test_project_-_1st_Floor.dxf?raw";
 import csvRaw from "../../test-fixtures/Test_project_Statistics.csv?raw";
 
 export function demoStamp(): string {
-  return "classic-demo-v3:" + dxfRaw.length + ":" + csvRaw.length;
+  // v4: Bedroom 1 carries Machine Carpet Cleaning so Max Floor Care has an
+  // eligible room to demo (carpet alone no longer qualifies, 2026-08-24)
+  return "classic-demo-v4:" + dxfRaw.length + ":" + csvRaw.length;
 }
 
 /** demo floor finishes: real values on most rooms, ONE genuinely missing so
@@ -222,6 +224,12 @@ export function buildClassicDemo() {
   for (const sp of scan.spaces) {
     const ft = DEMO_FLOORS[String(sp.roomNumber)];
     if (ft) sp.floorType = ft;
+    // one room hand-assigned floor-care work: rooms only reach Max Floor
+    // Care through their task list now, and the demo should show that path
+    if (String(sp.roomNumber) === "Bedroom 1") {
+      const prior = Array.isArray(sp.spaceTasks) ? (sp.spaceTasks as string[]) : [];
+      sp.spaceTasks = [...new Set([...prior, "machine-carpet"])];
+    }
   }
   const now = new Date();
   const iso = now.toISOString();

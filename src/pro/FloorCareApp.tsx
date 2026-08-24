@@ -6,13 +6,14 @@
 //     schedule into Max Schedules (where editing redirects back here).
 //   • Projects — a live calendar of strip & refinish / extraction work that
 //     flows into Max Notes, the Classic calendar and manager reminders.
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   type Rules, isCarpet
 } from "./rules";
 import {
   loadFloorCare, saveFloorCare, floorCareTasks, fcEligible, fcTasksForSpace,
-  stopMinutes, fcTiming, shipToSchedules, unship, FC_PROJECT_TASKS,
+  stopMinutes, fcTiming, shipToSchedules, unship, fcScheduleId, fcScheduledRate,
+  FC_SETUP_MINUTES, FC_PRACTICAL_FACTOR, FC_PROJECT_TASKS,
   type FcSchedule, type FcStore, type FcEquip, type FcProject
 } from "./floorcare";
 import {
@@ -99,7 +100,10 @@ function EquipPicker({ cat, taskLabel, current, onPick, onClear }: {
       {current && (
         <p className="fc-eqcurrent">
           ✓ {current.label} — {fmt(Math.round(current.sqftPerHour))} sq ft/hr
-          {current.basis ? ` (${current.basis})` : ""}{" "}
+          {current.basis ? ` (${current.basis})` : ""}
+          {fcScheduledRate(current) !== current.sqftPerHour
+            ? ` · scheduled at ${fmt(Math.round(fcScheduledRate(current)))} — real-world pace`
+            : ""}{" "}
           <button className="plink" onClick={onClear}>change</button>
         </p>
       )}
@@ -172,6 +176,7 @@ export function FloorCareApp({ data, rules, commit }: {
 }) {
   const [tab, setTab] = useState<FcTab>("daily");
   const [store, setStore] = useState<FcStore>(() => loadFloorCare());
+  const [justShipped, setJustShipped] = useState<string | null>(null);
   const [editing, setEditing] = useState<FcSchedule | null>(() => {
     const m = /[?&]fc=([a-z0-9-]+)/i.exec(window.location.search + window.location.hash);
     if (!m) return null;
@@ -189,21 +194,28 @@ export function FloorCareApp({ data, rules, commit }: {
       </nav>
       {tab === "daily" && !editing && (
         <DailyList data={data} rules={rules} store={store} commitStore={commitStore} commit={commit}
-          onEdit={(fc) => setEditing(JSON.parse(JSON.stringify(fc)))}
-          onNew={() => setEditing({
-            id: uid("fc"), name: "", shift: "3rd Shift",
-            techs: [{ key: "T1" }], equipment: {}, stops: [],
-            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
-          })} />
+          justShipped={justShipped}
+          onEdit={(fc) => { setJustShipped(null); setEditing(JSON.parse(JSON.stringify(fc))); }}
+          onNew={() => {
+            setJustShipped(null);
+            setEditing({
+              id: uid("fc"), name: "", shift: "3rd Shift",
+              techs: [{ key: "T1" }], equipment: {}, stops: [],
+              createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+            });
+          }} />
       )}
       {tab === "daily" && editing && (
         <Builder data={data} rules={rules} fc={editing} setFc={setEditing}
           onCancel={() => setEditing(null)}
           onConfirm={(fc) => {
-            commit((d) => { shipToSchedules(d, rules, fc); });
-            const next = { ...store, schedules: [...store.schedules.filter((s) => s.id !== fc.id), fc] };
-            commitStore(next);
+            // link BEFORE the ship: React runs the commit mutator later than
+            // it reads, and the floor-care store must never save unlinked
+            const shipped = { ...fc, linkedScheduleId: fcScheduleId(fc) };
+            commit((d) => { shipToSchedules(d, rules, { ...shipped }); });
+            commitStore({ ...store, schedules: [...store.schedules.filter((s) => s.id !== fc.id), shipped] });
             setEditing(null);
+            setJustShipped(shipped.name);
           }} />
       )}
       {tab === "projects" && (
@@ -214,18 +226,26 @@ export function FloorCareApp({ data, rules, commit }: {
 }
 
 // ── daily schedules list ───────────────────────────────────────────────────
-function DailyList({ data, rules, store, commitStore, commit, onEdit, onNew }: {
+function DailyList({ data, rules, store, commitStore, commit, onEdit, onNew, justShipped }: {
   data: ClassicData; rules: Rules; store: FcStore;
   commitStore: (s: FcStore) => void;
   commit: (mut: (d: ClassicData) => void) => void;
   onEdit: (fc: FcSchedule) => void;
   onNew: () => void;
+  justShipped: string | null;
 }) {
   const spaces = data.v7.spaces ?? [];
   return (
     <div className="wi-body">
+      {justShipped !== null && (
+        <p className="pnote shipped">
+          ✓ <b>{justShipped || "Your floor-care schedule"}</b> is now in Max Schedules — it prints
+          and reports like any other schedule, and editing it brings you back here.{" "}
+          <a className="plink" href="./maps.html">Open Max Schedules</a>
+        </p>
+      )}
       <div className="prow">
-        <button className="pbtn primary" onClick={onNew}>🧽 Build Floor Care Schedule</button>
+        <button className="pbtn primary" onClick={onNew}>＋ Build Floor Care Schedule</button>
       </div>
       {store.schedules.length === 0 && (
         <p className="pnote">
@@ -284,6 +304,8 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm }: {
   const [activeTech, setActiveTech] = useState(fc.techs[0]?.key ?? "T1");
   const [taskFilter, setTaskFilter] = useState("");
   const [q, setQ] = useState("");
+  const [confirmErr, setConfirmErr] = useState("");
+  const nameRef = useRef<HTMLInputElement>(null);
 
   const fcTasks = floorCareTasks(rules);
   const eligible = useMemo(() => spaces.filter((sp) => fcEligible(rules, sp)), [spaces, rules]);
@@ -316,8 +338,8 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm }: {
       <div className="fc-main">
         <div className="prow">
           <label className="pfield grow">Schedule name
-            <input value={fc.name} placeholder="e.g. Night Floor Crew — Main"
-              onChange={(e) => patch({ name: e.target.value })} />
+            <input ref={nameRef} value={fc.name} placeholder="e.g. Night Floor Crew — Main"
+              onChange={(e) => { setConfirmErr(""); patch({ name: e.target.value }); }} />
           </label>
           <label className="pfield">Shift
             <select value={fc.shift} onChange={(e) => patch({ shift: e.target.value })}>
@@ -349,7 +371,9 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm }: {
           ))}
         </div>
 
-        <h3 className="fc-h">Select equipment <small>the machine's manufacturer rate prices its task on this schedule</small></h3>
+        <h3 className="fc-h">Select equipment <small>the machine's manufacturer rate prices its task on this schedule.
+          Every stop includes {FC_SETUP_MINUTES} minutes of setup, and a maker's "maximum" speed is scheduled
+          at {Math.round(FC_PRACTICAL_FACTOR * 100)}% — the pace a crew really holds.</small></h3>
         <div className="fc-eqtiles">
           {fcTasks.map((t) => {
             const cat = FLOORCARE_CATEGORY_OF_TASK[t.id];
@@ -420,7 +444,11 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm }: {
               </div>
             );
           })}
-          {!rooms.length && <p className="pnote">No eligible rooms match. Floor-care rooms are the ones whose tasks include floor-tech work (corridors, lobbies…) plus carpeted rooms.</p>}
+          {!rooms.length && <p className="pnote">
+            No rooms with floor-care work match. A room shows up here when its room type comes with a
+            floor-care task in Scope (corridors and hallways come with Machine Scrubbing and Dust
+            Mopping), or when you add a floor-care task to that room yourself in Max Space.
+          </p>}
         </div>
       </div>
 
@@ -448,10 +476,24 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm }: {
           {!fc.stops.length && <p className="pnote">Tap a task on a room to add the first stop.</p>}
         </div>
         <div className="fc-railacts">
-          <button className="pbtn primary wide" disabled={!fc.name.trim() || !fc.stops.length}
-            onClick={() => onConfirm(fc)}>
+          {/* never silently disabled: a manager who taps it always learns
+              what is missing (the old greyed-out button read as "broken") */}
+          <button className="pbtn primary wide"
+            onClick={() => {
+              if (!fc.name.trim()) {
+                setConfirmErr("Give this schedule a name first — the box at the top left.");
+                nameRef.current?.focus();
+                return;
+              }
+              if (!fc.stops.length) {
+                setConfirmErr("Tap at least one room task first — the schedule is still empty.");
+                return;
+              }
+              onConfirm(fc);
+            }}>
             ✓ Confirm — ship to Max Schedules
           </button>
+          {confirmErr && <p className="warntext">⚠ {confirmErr}</p>}
           <button className="pbtn ghost wide" onClick={onCancel}>Cancel</button>
         </div>
       </aside>

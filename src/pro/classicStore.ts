@@ -134,23 +134,54 @@ export function fusionFloorLabel(v: unknown): string {
 }
 
 /**
- * The Anthropic API key lives in ONE place — the classic app's own
- * settings.maxApiKey — so entering it in either surface lights up both.
+ * The Anthropic API key: entered once, working everywhere, surviving
+ * everything. It lives in TWO places on this device:
+ *   • `opsmatrix_v7 → settings.maxApiKey` — where the classic app reads it
+ *     (Max AI, AI Detect), and where its own Admin Settings screen saves it.
+ *   • KEY_BACKUP — a dedicated slot the classic app never writes. Classic's
+ *     save effect rewrites ALL of opsmatrix_v7 from its in-memory state, so a
+ *     key saved from a fusion surface (or wiped by a demo reseed) used to
+ *     vanish on the next save. The backup survives that, and healApiKey()
+ *     puts it back before the app loads.
  * It stays on this device; it is never committed, bundled or synced.
  */
+const KEY_BACKUP = "opsmatrix_max_api_key";
+
 export function loadApiKey(): string {
   try {
     const v7 = JSON.parse(localStorage.getItem(V7) ?? "{}") ?? {};
-    return String((v7.settings ?? {}).maxApiKey ?? "");
+    const inV7 = String((v7.settings ?? {}).maxApiKey ?? "");
+    return inV7 || String(localStorage.getItem(KEY_BACKUP) ?? "");
   } catch { return ""; }
 }
 
 export function saveApiKey(key: string) {
   try {
+    localStorage.setItem(KEY_BACKUP, key.trim());
     const v7 = JSON.parse(localStorage.getItem(V7) ?? "{}") ?? {};
     v7.settings = { ...(v7.settings ?? {}), maxApiKey: key.trim() };
     localStorage.setItem(V7, JSON.stringify(v7));
   } catch { /* storage unavailable — the caller still has the key in memory */ }
+}
+
+/**
+ * Make the two key slots agree. A key the classic app saved itself (its
+ * Admin Settings) refreshes the backup; a key the classic app LOST (save
+ * effect clobber, demo reseed) is restored from the backup into opsmatrix_v7
+ * so the app's next load sees it again. Run on every page entrance.
+ */
+export function healApiKey() {
+  try {
+    const backup = String(localStorage.getItem(KEY_BACKUP) ?? "");
+    const v7 = JSON.parse(localStorage.getItem(V7) ?? "{}") ?? {};
+    const inV7 = String((v7.settings ?? {}).maxApiKey ?? "");
+    if (inV7 && inV7 !== backup) {
+      localStorage.setItem(KEY_BACKUP, inV7);
+    } else if (!inV7 && backup) {
+      v7.settings = { ...(v7.settings ?? {}), maxApiKey: backup };
+      localStorage.setItem(V7, JSON.stringify(v7));
+    }
+  } catch { /* unreadable storage — nothing to heal */ }
 }
 
 export function saveClassic(data: ClassicData) {
