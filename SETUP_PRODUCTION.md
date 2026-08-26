@@ -74,23 +74,41 @@ In console.anthropic.com:
    data retention — relevant only if a customer's procurement asks about
    zero-data-retention (answer per the readiness report §10/M5).
 
-Deploy the proxy to EACH Supabase project (needs the Supabase CLI,
-`npm i -g supabase`, then `supabase login`):
+Deploy the proxy to EACH Supabase project. Run from the repo root on a
+machine with the repo checked out; use `npx supabase@latest …` (global npm
+install of the CLI is not supported — npx fetches it on demand). One-time:
+`npx supabase@latest login` (opens the browser).
 
 ```bash
-supabase functions deploy claude-proxy --project-ref <PROJECT_REF>
-supabase secrets set --project-ref <PROJECT_REF> \
-  ANTHROPIC_API_KEY=<that environment's key> \
+npx supabase@latest functions deploy claude-proxy --no-verify-jwt --project-ref <PROJECT_REF>
+# enter the key with a hidden prompt so it never lands in shell history:
+read -r -s -p "Anthropic API key for this environment: " AK; echo
+npx supabase@latest secrets set --project-ref <PROJECT_REF> \
+  ANTHROPIC_API_KEY="$AK" \
   ALLOWED_ORIGINS=<that environment's page origins, comma-separated> \
   AI_MONTHLY_TOKEN_BUDGET=20000000
+unset AK
 ```
 
-`ALLOWED_ORIGINS` examples — staging: `https://staging.opsmatrix.app` (or
-the `*.pages.dev` preview origin while you have no domain); production:
-`https://opsmatrix.app,https://www.opsmatrix.app`; dev: `http://localhost:5173`.
+`ALLOWED_ORIGINS` — dev: `http://localhost:5173,http://localhost:4173`;
+staging/production BEFORE Cloudflare exists: set the deliberate placeholder
+`https://pending.invalid` (no browser can call the proxy until section 3
+replaces it with the real origins, e.g. `https://staging.opsmatrix.app` /
+`https://opsmatrix.app,https://www.opsmatrix.app`).
 
-**Verify:** `curl -X POST <project-url>/functions/v1/claude-proxy` with no
-auth → a JSON "Sign in to OpsMatrix" 401 (not a platform error page).
+**Verify (per project):**
+`npx supabase@latest secrets list --project-ref <PROJECT_REF>` shows the
+three names (digests only — values are never displayed), and
+
+```bash
+curl -s -X POST "https://<PROJECT_REF>.supabase.co/functions/v1/claude-proxy" \
+  -H "Origin: <one origin you allowed>" -H "content-type: application/json" -d '{}'
+```
+
+→ the JSON `"Sign in to OpsMatrix to use Max."` 401. (The Origin header
+matters: without one that matches ALLOWED_ORIGINS you'll see the 403
+origin message instead — that's the CORS fence doing its job, not a
+deploy failure.)
 
 ## 3. Cloudflare Pages (~30 min)
 
