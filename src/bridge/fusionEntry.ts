@@ -366,3 +366,8 @@ export function startCloudSync(): void {
   if (!isCloudConfigured) return;
   void startBackgroundSync({ cloud: cloudClient }).catch(() => undefined);
 }
+
+// AI transport for classic.html: null in local builds or signed-out sessions
+// (→ the direct user-key mode, unchanged), or {url, token} for the
+// server-side claude-proxy on cloud builds (fresh token per call).
+export { aiProxy } from "../pro/aiTransport";

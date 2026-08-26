@@ -1,0 +1,9 @@
+# Supabase project configuration (checked in; per-environment values live in
+# each project's dashboard / function secrets, never here).
+
+# claude-proxy authenticates INSIDE the function (session lookup + org
+# resolution + budget), so platform JWT verification is off — otherwise the
+# browser's CORS preflight (which carries no Authorization header) is
+# rejected before the function can answer it.
+[functions.claude-proxy]
+verify_jwt = false
