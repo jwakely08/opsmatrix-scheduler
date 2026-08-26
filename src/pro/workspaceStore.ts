@@ -96,21 +96,32 @@ export function applyWorkspace(snapshot: unknown, get: Getter, set: Setter): str
   return applied;
 }
 
-/**
- * Cheap, stable fingerprint of the whole workspace — the sync engine compares
- * it between ticks to know whether anything changed without re-serializing
- * megabytes into the comparison itself. djb2 over each store, order-fixed.
- */
-export function workspaceFingerprint(get: Getter): string {
+/** djb2 of one store's content — shared by the fingerprint and delta pushes */
+export function storeHash(raw: string): string {
+  let h = 5381;
+  for (let i = 0; i < raw.length; i++) h = ((h << 5) + h + raw.charCodeAt(i)) | 0;
+  return raw.length + ":" + (h >>> 0).toString(36);
+}
+
+/** fingerprint of an already-collected snapshot's stores, order-fixed */
+export function snapshotFingerprint(stores: Record<string, string>): string {
   let out = "";
   for (const key of WORKSPACE_KEYS) {
-    const raw = get(key);
-    if (raw === null || raw === undefined) { out += key + ":-;"; continue; }
-    let h = 5381;
-    for (let i = 0; i < raw.length; i++) h = ((h << 5) + h + raw.charCodeAt(i)) | 0;
-    out += key + ":" + raw.length + ":" + (h >>> 0).toString(36) + ";";
+    const raw = stores[key];
+    out += raw === undefined ? key + ":-;" : key + ":" + storeHash(raw) + ";";
   }
   return out;
+}
+
+/**
+ * Cheap, stable fingerprint of the whole workspace — the sync engine compares
+ * it between ticks to know whether anything changed. Computed over the
+ * COLLECTED (secret-stripped) stores, i.e. exactly what would sync — so a
+ * device injecting its own API key into opsmatrix_v7 does not read as a data
+ * change and can never trigger a phantom push.
+ */
+export function workspaceFingerprint(get: Getter): string {
+  return snapshotFingerprint(collectWorkspace(get).stores);
 }
 
 /** filename for a downloaded backup: opsmatrix-backup-2026-08-26.json */

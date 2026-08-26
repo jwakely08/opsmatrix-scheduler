@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { MapsApp } from "./MapsApp";
+import { AuthGate } from "./AuthGate";
 import { buildClassicDemo, demoStamp } from "../bridge/fusionEntry";
 import { healApiKey, loadApiKey } from "./classicStore";
 import "./pro.css";
@@ -45,6 +46,10 @@ healApiKey();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <MapsApp />
+    {/* AuthGate is transparent in local/demo builds (no Supabase env) —
+        it only fronts the app in cloud-configured builds */}
+    <AuthGate>
+      <MapsApp />
+    </AuthGate>
   </React.StrictMode>
 );

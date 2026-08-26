@@ -1562,6 +1562,11 @@
     ensureSpaceScreen();
     ensureButton();
     ensureMobileNav();
+    // cloud builds only: mirror this page's data to the organization (no-op
+    // on the demo/local builds and when nobody is signed in — see fusionEntry)
+    if (window.OpsMatrixFusion && typeof window.OpsMatrixFusion.startCloudSync === "function") {
+      try { window.OpsMatrixFusion.startCloudSync(); } catch (e) { /* stays local */ }
+    }
     // characterData too: React swaps some labels (e.g. the plan picker's) by
     // rewriting the text node in place, which is not a childList mutation.
     // Our relabels are guarded by an exact-match test, so this cannot loop.
