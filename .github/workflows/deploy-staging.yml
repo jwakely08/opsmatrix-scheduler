@@ -1,0 +1,49 @@
+# STAGING — auto-deploys every push to the `staging` branch to Cloudflare
+# Pages, built in CLOUD mode against the staging Supabase project. This is
+# where migrations are rehearsed and QA happens; production only ever
+# receives what staging has already proven.
+#
+# Required GitHub environment `staging` (Settings → Environments):
+#   secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
+#            VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
+#   vars:    CLOUDFLARE_PAGES_PROJECT   (e.g. opsmatrix)
+# See SETUP_PRODUCTION.md for the one-time setup.
+name: Deploy staging (Cloudflare Pages)
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      # cloud mode is baked at build time: classic first (fusion bundle gets
+      # the env), then the MPA build which copies public/ into dist
+      - run: npm run build:classic && npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+      - name: Deploy to Cloudflare Pages (staging branch)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }} --branch=staging

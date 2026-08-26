@@ -13,6 +13,7 @@
     "predev": "node scripts/copy-pdfjs.cjs && node scripts/copy-xlsx.cjs && node scripts/copy-vendor.cjs"
   },
   "dependencies": {
+    "@sentry/browser": "^10.71.0",
     "@supabase/supabase-js": "^2.112.4",
     "clipper-lib": "^6.4.2",
     "pdfjs-dist": "^4.10.38",

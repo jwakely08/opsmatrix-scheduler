@@ -1,0 +1,48 @@
+# PRODUCTION — deploys `main` to Cloudflare Pages, built in CLOUD mode
+# against the PRODUCTION Supabase project. Gated by the GitHub `production`
+# environment: configure required reviewers there so every production deploy
+# needs an explicit approval click (Settings → Environments → production).
+#
+# Required GitHub environment `production`:
+#   secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
+#            VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY
+#   vars:    CLOUDFLARE_PAGES_PROJECT   (e.g. opsmatrix)
+# See SETUP_PRODUCTION.md. The old deploy.yml (GitHub Pages) remains the
+# permanently-local DEMO and is unaffected by this pipeline.
+name: Deploy production (Cloudflare Pages)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false   # never cancel a production deploy midway
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:classic && npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+      - name: Deploy to Cloudflare Pages (production)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }} --branch=main

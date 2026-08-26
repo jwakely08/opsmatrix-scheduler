@@ -4,8 +4,12 @@ import { MapsApp } from "./MapsApp";
 import { AuthGate } from "./AuthGate";
 import { buildClassicDemo, demoStamp } from "../bridge/fusionEntry";
 import { healApiKey, loadApiKey } from "./classicStore";
+import { initMonitoring } from "../lib/logger";
 import "./pro.css";
 import "./print.css";
+
+// error tracking — a no-op unless the build carries VITE_SENTRY_DSN
+initMonitoring();
 
 // Any entrance can restore the demo: ?demo=1 seeds when the saved data is a
 // stale/absent demo (stamped — never touches real imported work).
