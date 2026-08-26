@@ -18,6 +18,7 @@ import {
   importRoomListIntoStorage, type ImportSummary
 } from "./roomListImport";
 import { fileToSheets, isSpreadsheet } from "./sheetFile";
+import { collectWorkspace, applyWorkspace, backupFilename } from "./workspaceStore";
 import {
   loadRules, saveRules, defaultRules, computeMinutes, requiredTasks, autoTasksFor,
   typeIdFromLabel, isCarpet, FREQUENCIES, type Rules
@@ -1345,6 +1346,57 @@ function ScopeTab({ rules, onChange, data, commit, schedules }: {
       <p className="pnote">Assigned non-space tasks show on the schedule's card and count toward its hours. Linking rooms to them (like a sanitation route) is optional — do it from the schedule card on the map.</p>
 
       <button className="pbtn" onClick={() => onChange(defaultRules())}>Reset to healthcare standards</button>
+
+      <BackupCard />
+    </div>
+  );
+}
+
+// ── data backup: download / restore the whole workspace as one file ─────────
+// Until the shared backend is live this is the ONLY backup that exists —
+// browser data is one "Clear browsing data" away from gone. The file never
+// contains the API key (workspaceStore strips it), and restoring keeps the
+// device's own key.
+function BackupCard() {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [msg, setMsg] = useState("");
+  return (
+    <div className="prule-block backupcard">
+      <h3>Data backup</h3>
+      <p className="pnote">
+        Everything OpsMatrix knows — rooms, plans, schedules, rules, floor care — saved as one
+        file you keep. Your API key is never included. Restore replaces what's on this device.
+      </p>
+      <div className="prow">
+        <button className="pbtn primary" onClick={() => {
+          const snap = collectWorkspace((k) => localStorage.getItem(k));
+          const blob = new Blob([JSON.stringify(snap)], { type: "application/json" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = backupFilename();
+          a.click();
+          URL.revokeObjectURL(a.href);
+          setMsg("✓ Backup downloaded — keep it somewhere safe (email it to yourself, or a USB stick).");
+        }}>💾 Download backup</button>
+        <button className="pbtn" onClick={() => fileRef.current?.click()}>Restore from a backup…</button>
+        <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }}
+          onChange={async (e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (!f) return;
+            try {
+              const snap = JSON.parse(await f.text());
+              const when = String(snap?.exportedAt ?? "").slice(0, 10) || "an unknown date";
+              if (!confirm(`Replace everything on this device with the backup from ${when}? This cannot be undone.`)) return;
+              applyWorkspace(snap, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v));
+              setMsg("✓ Backup restored — reloading…");
+              setTimeout(() => window.location.reload(), 600);
+            } catch (err) {
+              setMsg("⚠ " + String((err as Error)?.message ?? err));
+            }
+          }} />
+      </div>
+      {msg && <p className={msg.startsWith("⚠") ? "warntext" : "pnote keysaved"}>{msg}</p>}
     </div>
   );
 }
