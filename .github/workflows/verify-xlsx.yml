@@ -1,0 +1,50 @@
+# Supply-chain guard for the spreadsheet parser.
+#
+# SheetJS stopped publishing to the npm registry at the vulnerable 0.18.5, so
+# package.json aliases `xlsx` to the community republish @e965/xlsx (0.20.x).
+# That republish is only trustworthy if it matches the OFFICIAL distribution —
+# so this job downloads the same version straight from cdn.sheetjs.com and
+# fails hard if the shipped dist file differs by a single byte. Runs on every
+# push/PR that could change the dependency, and weekly as a canary.
+name: Verify xlsx matches official SheetJS
+
+on:
+  push:
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/verify-xlsx.yml"
+  pull_request:
+    paths:
+      - "package.json"
+      - "package-lock.json"
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Compare installed dist against official cdn.sheetjs.com tarball
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./node_modules/xlsx/package.json').version")
+          echo "Installed xlsx version: $VERSION"
+          curl -fsSL "https://cdn.sheetjs.com/xlsx-${VERSION}/xlsx-${VERSION}.tgz" -o /tmp/official.tgz
+          mkdir -p /tmp/official && tar -xzf /tmp/official.tgz -C /tmp/official
+          if cmp -s /tmp/official/package/dist/xlsx.full.min.js node_modules/xlsx/dist/xlsx.full.min.js; then
+            echo "OK: dist/xlsx.full.min.js is byte-identical to the official SheetJS ${VERSION} release."
+          else
+            echo "::error::node_modules/xlsx dist DIFFERS from the official SheetJS ${VERSION} distribution — do not ship. Investigate the @e965/xlsx republish immediately."
+            exit 1
+          fi

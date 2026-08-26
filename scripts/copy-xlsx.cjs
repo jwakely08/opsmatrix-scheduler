@@ -15,7 +15,18 @@ if (!fs.existsSync(from)) {
   process.exit(1);
 }
 fs.mkdirSync(to, { recursive: true });
-fs.copyFileSync(from, path.join(to, "xlsx.full.min.js"));
 const version = require("../node_modules/xlsx/package.json").version;
+// Security floor: 0.19.3 fixed prototype pollution (GHSA-4r6h-8v6p-xvw6),
+// 0.20.2 fixed ReDoS (GHSA-5pgg-2g8v-p4x9). The npm registry stops at the
+// vulnerable 0.18.5, so package.json aliases the official 0.20.x release
+// republished as @e965/xlsx — and CI verifies that republish byte-for-byte
+// against cdn.sheetjs.com (.github/workflows/verify-xlsx.yml). Refuse to
+// ship anything older.
+const [maj, min, pat] = version.split(".").map(Number);
+if (maj === 0 && (min < 20 || (min === 20 && pat < 2))) {
+  console.error(`copy-xlsx: xlsx ${version} has known vulnerabilities — need >= 0.20.2`);
+  process.exit(1);
+}
+fs.copyFileSync(from, path.join(to, "xlsx.full.min.js"));
 fs.writeFileSync(path.join(to, "XLSX_VERSION"), version + "\n");
 console.log(`copy-xlsx: vendored xlsx ${version} → public/vendor/`);
