@@ -117,8 +117,12 @@ deploy failure.)
    project named e.g. `opsmatrix` (any first upload works; the workflows
    overwrite it).
    Simplest path: `npx wrangler pages project create opsmatrix` locally.
-2. Create an **API token** (My Profile → API Tokens → Create → "Edit
-   Cloudflare Workers/Pages" template) and note your **Account ID**.
+2. Create an **API token** (My Profile → API Tokens → **Create Custom
+   Token** — skip the over-broad templates): exactly ONE permission row,
+   `Account → Cloudflare Pages → Edit`; Account Resources = Include → your
+   specific account; no zone rows; leave IP filtering blank (GitHub runner
+   IPs rotate) and TTL blank (or ~1 year with a rotation reminder). That is
+   everything `wrangler pages deploy` needs. Note your **Account ID** too.
 3. Custom domain (when bought): Pages project → Custom domains → add
    `opsmatrix.app` (production = the `main` branch deployment) and
    `staging.opsmatrix.app` (the `staging` branch alias). HTTPS + certs are
