@@ -8,7 +8,7 @@
 import React, { useMemo, useState } from "react";
 import {
   scopeSpaces, scopeLabel, exportFilename,
-  reimportRows, reportRoomsRows, reportSummaryRows,
+  reimportRows, dataExportRows,
   type ExportScope, type Cell
 } from "./exportData";
 import { loadSheetJs } from "./sheetFile";
@@ -51,27 +51,16 @@ export function ExportApp({ data, rules }: { data: ClassicData; rules: Rules }) 
   const inF = (sp: ClassicSpace) => inB(sp) && (!floor || txt(sp.floor) === floor);
   const inD = (sp: ClassicSpace) => inF(sp) && (!department || txt(sp.department) === department);
 
-  async function download(kind: "report" | "reimport") {
+  async function download(kind: "data" | "reimport") {
     if (!selected.length) { setMsg("⚠ Nothing to export — this selection has no rooms."); return; }
     setMsg("Building the file…");
     try {
       const XLSX = await loadSheetJs();
       const wb = XLSX.utils.book_new();
-      if (kind === "report") {
-        const summary = reportSummaryRows(data, rules, scope);
-        const rooms = reportRoomsRows(data, rules, scope);
-        const ws1 = XLSX.utils.aoa_to_sheet(summary);
-        ws1["!cols"] = fitColumns(summary);
-        const ws2 = XLSX.utils.aoa_to_sheet(rooms);
-        ws2["!cols"] = fitColumns(rooms);
-        XLSX.utils.book_append_sheet(wb, ws1, "Summary");
-        XLSX.utils.book_append_sheet(wb, ws2, "Rooms");
-      } else {
-        const rows = reimportRows(data, scope);
-        const ws = XLSX.utils.aoa_to_sheet(rows);
-        ws["!cols"] = fitColumns(rows);
-        XLSX.utils.book_append_sheet(wb, ws, "Rooms");
-      }
+      const rows = kind === "data" ? dataExportRows(data, scope) : reimportRows(data, scope);
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws["!cols"] = fitColumns(rows);
+      XLSX.utils.book_append_sheet(wb, ws, "Rooms");
       const name = exportFilename(data, scope, kind);
       XLSX.writeFile(wb, name);
       setMsg(`✓ ${name} downloaded — ${selected.length} room${selected.length === 1 ? "" : "s"}.`);
@@ -123,12 +112,12 @@ export function ExportApp({ data, rules }: { data: ClassicData; rules: Rules }) 
       </p>
 
       <h3>Pick the format</h3>
-      <button className="upltile" onClick={() => download("report")}>
-        <b>📄 Clean report — Excel</b>
+      <button className="upltile" onClick={() => download("data")}>
+        <b>📄 Data export — Excel</b>
         <span>
-          A Summary page plus every room with all of its data — type, floor type, fixtures,
-          square feet, priority, cleanability, tasks, minutes, frequency, notes. For printing,
-          emailing, or working outside OpsMatrix.
+          The whole dataset, one row per room: Building, Floor, Department, Room Number,
+          Room Name, Room Type, Floor Type, Fixtures, Square Feet, Priority. Everything
+          Max Space knows about the selection — no totals, no summary pages.
         </span>
       </button>
       <button className="upltile" onClick={() => download("reimport")}>

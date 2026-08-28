@@ -1,8 +1,9 @@
-// Admin Settings → Exporting (§12g): turn any slice of the room inventory —
-// a whole building, one floor, one department, or a single room — into a
-// spreadsheet, in two shapes:
-//   • REPORT  — the readable one: a Summary sheet plus every room with all
-//     of its data, for printing, emailing, or working outside OpsMatrix.
+// Admin Settings → Exporting (§12g, reshaped 2026-08-28 evening): turn any
+// slice of the room inventory — a whole building, one floor, one department,
+// or a single room — into a spreadsheet, in two shapes:
+//   • DATA EXPORT — the whole dataset, one row per room, columns exactly
+//     like the tree reads (Building → Floor → Department → Room + the room's
+//     data points). NOT a report: no totals, no summary page.
 //   • RE-IMPORT — the round-trip one: headers drawn from the importer's own
 //     vocabulary, so ⬆ Import accepts the file and upserts every row back
 //     onto the same rooms (matched by Internal Handle, then the composite
@@ -13,10 +14,6 @@ import {
   spacePriority, PRIORITY_NUM,
   type ClassicData, type ClassicSpace
 } from "./classicStore";
-import {
-  computeMinutes, requiredTasks, typeIdFromLabel, spaceCleanability, weeklyMinutes,
-  type Rules
-} from "./rules";
 
 const txt = (v: unknown) => String(v ?? "").trim();
 export type Cell = string | number;
@@ -56,10 +53,10 @@ export function scopeLabel(data: ClassicData, scope: ExportScope): string {
   return parts.length ? parts.join(" · ") : "Everything";
 }
 
-export function exportFilename(data: ClassicData, scope: ExportScope, kind: "report" | "reimport"): string {
+export function exportFilename(data: ClassicData, scope: ExportScope, kind: "data" | "reimport"): string {
   const day = new Date().toISOString().slice(0, 10);
   const slug = scopeLabel(data, scope).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "all";
-  return `opsmatrix-${kind === "report" ? "export" : "reimport"}-${slug}-${day}.xlsx`;
+  return `opsmatrix-${kind === "data" ? "export" : "reimport"}-${slug}-${day}.xlsx`;
 }
 
 interface SourceLike { key?: string; department?: string; site?: string; }
@@ -119,64 +116,33 @@ export function reimportRows(data: ClassicData, scope: ExportScope): Cell[][] {
   return rows;
 }
 
-// ── the REPORT shape ────────────────────────────────────────────────────────
+// ── the DATA EXPORT shape ───────────────────────────────────────────────────
+// Not a report (Josh, 2026-08-28): no totals, no summary page — the whole
+// dataset, one row per room, columns laid out exactly like the tree reads:
+// Building → Floor → Department → Room, then the room's own data points.
 
-export function reportRoomsRows(data: ClassicData, rules: Rules, scope: ExportScope): Cell[][] {
-  const head: Cell[] = [
-    "Building", "Floor", "Department", "Room Number", "Room Name", "Room Type",
-    "Floor Type", "Fixtures", "Square Feet", "Priority (1-3)", "Cleanable",
-    "Tasks", "Minutes per Clean", "Cleaning Frequency", "Weekly Minutes", "Notes"
-  ];
-  const rows: Cell[][] = [head];
+export const DATA_EXPORT_HEADERS = [
+  "Building", "Floor", "Department", "Room Number", "Room Name", "Room Type",
+  "Floor Type", "Fixtures", "Square Feet", "Priority (1-3)", "Internal Handle"
+] as const;
+
+export function dataExportRows(data: ClassicData, scope: ExportScope): Cell[][] {
+  const rows: Cell[][] = [[...DATA_EXPORT_HEADERS]];
   for (const sp of scopeSpaces(data, scope)) {
-    const clean = spaceCleanability(rules, sp);
-    const rt = rules.roomTypes.find((x) => x.id === typeIdFromLabel(rules, sp.roomType ?? ""));
-    const tasks = ["General Clean", ...requiredTasks(rules, sp)
-      .map((t) => rules.tasks.find((x) => x.id === t)?.label ?? t)];
-    const weekly = weeklyMinutes(rules, sp);
+    const src = sp.source as SourceLike | undefined;
     rows.push([
-      txt(sp.building), txt(sp.floor), txt(sp.department),
-      txt(sp.roomNumber), txt(sp.roomName), txt(sp.roomType) || "needs review",
-      txt(sp.floorType) || "not set",
+      txt(sp.building),
+      txt(sp.floor),
+      txt(sp.department),
+      txt(sp.roomNumber),
+      txt(sp.roomName),
+      txt(sp.roomType),
+      txt(sp.floorType),
       Number(sp.fixtureCount) || 0,
       Number(sp.squareFeet) > 0 ? Number(sp.squareFeet) : "",
       PRIORITY_NUM[spacePriority(sp)],
-      clean,
-      tasks.join(", "),
-      clean === "Non-cleanable" ? "" : Math.round(computeMinutes(rules, sp).total),
-      rt?.frequency ?? "",
-      weekly === null ? "not yet calculable" : Math.round(weekly),
-      txt(sp.notes)
+      txt(src?.key) || sp.id
     ]);
   }
-  return rows;
-}
-
-export function reportSummaryRows(data: ClassicData, rules: Rules, scope: ExportScope): Cell[][] {
-  const spaces = scopeSpaces(data, scope);
-  const total = spaces.reduce((a, s) => a + (Number(s.squareFeet) || 0), 0);
-  let cleanableSqFt = 0, nonCleanable = 0, review = 0, weeklyTotal = 0, weeklyUnknown = 0;
-  for (const sp of spaces) {
-    const c = spaceCleanability(rules, sp);
-    if (c === "Cleanable") cleanableSqFt += Number(sp.squareFeet) || 0;
-    if (c === "Non-cleanable") nonCleanable++;
-    if (c === "Needs review") review++;
-    const w = weeklyMinutes(rules, sp);
-    if (w === null) weeklyUnknown++; else weeklyTotal += w;
-  }
-  const rows: Cell[][] = [
-    ["OpsMatrix — Room Inventory Export"],
-    ["Scope", scopeLabel(data, scope)],
-    ["Exported", new Date().toLocaleString()],
-    [],
-    ["Rooms", spaces.length],
-    ["Total square feet", Math.round(total)],
-    ["Cleanable square feet", Math.round(cleanableSqFt)],
-    ["Non-cleanable rooms", nonCleanable],
-    ["Rooms needing review", review],
-    ["Weekly cleaning minutes (calculable rooms)", Math.round(weeklyTotal)],
-  ];
-  if (weeklyUnknown) rows.push(["Rooms not yet calculable", weeklyUnknown]);
-  rows.push([], ["Numbers come from the Scope rulebook — the same engine every OpsMatrix screen uses."]);
   return rows;
 }

@@ -208,7 +208,7 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
               return (
                 <button key={t.id} className={"ptask" + (on ? " on" : "")}
                   onClick={() => set({ spaceTasks: on ? req.filter((x) => x !== t.id) : [...req, t.id] })}>
-                  {t.label}{auto ? " •" : ""}
+                  {t.floorCare ? "🧽 " : ""}{t.label}{auto ? " •" : ""}
                 </button>
               );
             })}

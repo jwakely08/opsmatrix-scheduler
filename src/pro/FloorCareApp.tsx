@@ -211,6 +211,7 @@ export function FloorCareApp({ data, rules, commit }: {
       )}
       {tab === "daily" && editing && (
         <Builder data={data} rules={rules} fc={editing} setFc={setEditing}
+          otherStops={store.schedules.filter((s) => s.id !== editing.id).flatMap((s) => s.stops)}
           onCancel={() => setEditing(null)}
           onConfirm={(fc) => {
             // link BEFORE the ship: React runs the commit mutator later than
@@ -295,12 +296,15 @@ function taskLabel(rules: Rules, id: string): string {
 }
 
 // ── the builder ────────────────────────────────────────────────────────────
-function Builder({ data, rules, fc, setFc, onCancel, onConfirm }: {
+function Builder({ data, rules, fc, setFc, onCancel, onConfirm, otherStops }: {
   data: ClassicData; rules: Rules;
   fc: FcSchedule;
   setFc: (fc: FcSchedule) => void;
   onCancel: () => void;
   onConfirm: (fc: FcSchedule) => void;
+  /** stops already booked by OTHER floor-care schedules — a room is only
+   *  "complete" when every floor-care task it carries is booked somewhere */
+  otherStops: FcSchedule["stops"];
 }) {
   const spaces = data.v7.spaces ?? [];
   const employees = data.v7.employees ?? [];
@@ -336,6 +340,15 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm }: {
     return out;
   }, [mapSpaces]);
   const eligibleIds = useMemo(() => new Set(eligible.map((sp) => sp.id)), [eligible]);
+  // a room is complete when EVERY floor-care task it carries is booked —
+  // on this schedule or any other (rooms can be split across schedules)
+  const bookedFc = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of [...otherStops, ...fc.stops]) set.add(s.spaceId + "|" + s.taskId);
+    return set;
+  }, [otherStops, fc.stops]);
+  const fcRemaining = (sp: ClassicSpace): string[] =>
+    fcTasksForSpace(rules, sp).filter((id) => !bookedFc.has(sp.id + "|" + id));
   const techColorOf = (spaceId: string): string | null => {
     const stop = fc.stops.find((s) => s.spaceId === spaceId);
     if (!stop) return null;
@@ -472,6 +485,8 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm }: {
                 if (!eligibleIds.has(sp.id)) return "#33404d"; // no floor-care work — not selectable
                 return techColorOf(sp.id) ?? "#475569";
               }}
+              flagFor={(sp) =>
+                eligibleIds.has(sp.id) && fcRemaining(sp).length > 0 ? "⚠" : null}
               selectedId={pickRoom?.id ?? null}
               onRoom={(sp) => {
                 if (!sp) { setPickRoom(null); return; }

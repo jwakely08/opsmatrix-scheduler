@@ -4,7 +4,7 @@
 // running the real importer over the real export rows.
 import { describe, it, expect } from "vitest";
 import {
-  scopeSpaces, scopeLabel, exportFilename, reimportRows, reportRoomsRows, reportSummaryRows
+  scopeSpaces, scopeLabel, exportFilename, reimportRows, dataExportRows, DATA_EXPORT_HEADERS
 } from "./exportData";
 import {
   importRoomList, detectHeader, normalizeFloorType,
@@ -148,18 +148,26 @@ describe("scoping", () => {
   });
 });
 
-describe("the readable report", () => {
-  it("carries every data point and a truthful summary", () => {
+describe("the data export", () => {
+  it("is the whole dataset, one row per room, columns like the tree", () => {
     const data = fixture();
-    const rooms = reportRoomsRows(data, rules, {});
-    expect(rooms[0]).toContain("Floor Type");
-    expect(rooms[0]).toContain("Priority (1-3)");
-    const cad = rooms.find((r) => r[3] === "E1-1000")!;
-    expect(cad[9]).toBe("1");               // priority spoken Josh's way
-    expect(cad[10]).toBe("Non-cleanable");
-    expect(cad[12]).toBe("");               // non-cleanable rooms price at nothing
-    const summary = reportSummaryRows(data, rules, {});
-    expect(summary.some((r) => r[0] === "Rooms" && r[1] === 3)).toBe(true);
+    const rows = dataExportRows(data, {});
+    expect(rows[0]).toEqual([...DATA_EXPORT_HEADERS]);
+    expect(rows.length).toBe(4); // header + 3 rooms, no summary, no totals
+    const cad = rows.find((r) => r[3] === "E1-1000")!;
+    expect(cad[0]).toBe("HOSPITAL-E");           // Building leads, like the tree
+    expect(cad[2]).toBe("Oncology (7 East)");
+    expect(cad[5]).toBe("Corridor");
+    expect(cad[6]).toBe("Hard floor — finished");
+    expect(cad[7]).toBe(2);                       // fixtures
+    expect(cad[8]).toBe(1433);                    // square feet
+    expect(cad[9]).toBe("1");                     // priority spoken Josh's way
+    expect(cad[10]).toBe("12808_AC_SP_01.dwg");   // internal handle survives
+    // no report-style columns anywhere
+    expect(rows[0]).not.toContain("Cleanable");
+    expect(rows[0]).not.toContain("Notes");
+    expect(rows[0]).not.toContain("AHU");
+    expect(rows[0]).not.toContain("Weekly Minutes");
   });
 });
 

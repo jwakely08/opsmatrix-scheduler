@@ -662,7 +662,10 @@
       choiceTile("fusion-choice-read", "✨ Yes — the sizes are printed on the plan",
         "Max reads the rooms, numbers and square footage, and the plan arrives already to scale. Nothing to measure.") +
       choiceTile("fusion-choice-cal", "📐 No — it's just the floor plan, no sizes",
-        "Calibrate it yourself: trace 1–3 rooms you KNOW the square footage of, and OpsMatrix measures every other room from your calibration (border detection included).") +
+        "Max still reads and draws every room. Then you type the square footage of 1–3 rooms you KNOW, and every other room is measured from your calibration.") +
+      "<p style='margin:0;font-size:12px;color:#8fa3b0'>Worst-case plan (too blurry for Max)? " +
+      "<button id='fusion-choice-trace' type='button' style='border:none;background:none;padding:0;" +
+      "color:#0f6b62;text-decoration:underline;cursor:pointer;font-size:12px'>Trace it by hand in the plan editor</button></p>" +
       "</div>" +
       "<div id='fusion-smart-form' style='display:none'>" +
       "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>Pick the picture or PDF. Max reads the rooms, " +
@@ -693,7 +696,12 @@
     });
     document.getElementById("fusion-choice-cal").addEventListener("click", function () {
       if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
-      goToCalibrate();
+      // Max reads + user calibrates 1–3 known rooms — the hub owns that flow
+      window.location.href = "./maps.html#spaces?view=map&plancal=1";
+    });
+    document.getElementById("fusion-choice-trace").addEventListener("click", function () {
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+      goToCalibrate(); // the archive's hand-tracing editor, for worst cases
     });
 
     renderKeyRow(getApiKey());

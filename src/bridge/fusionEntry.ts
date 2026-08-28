@@ -207,7 +207,9 @@ import csvRaw from "../../test-fixtures/Test_project_Statistics.csv?raw";
 export function demoStamp(): string {
   // v4: Bedroom 1 carries Machine Carpet Cleaning so Max Floor Care has an
   // eligible room to demo (carpet alone no longer qualifies, 2026-08-24)
-  return "classic-demo-v4:" + dxfRaw.length + ":" + csvRaw.length;
+  // v5 (2026-08-28): floor-care tasks came OFF the demo's cleaning schedules
+  // (they belong to Max Floor Care exclusively — Josh's rule)
+  return "classic-demo-v5:" + dxfRaw.length + ":" + csvRaw.length;
 }
 
 /** demo floor finishes: real values on most rooms, ONE genuinely missing so
@@ -267,9 +269,11 @@ export function buildClassicDemo() {
   const groupA = ids.slice(0, half), groupB = ids.slice(half);
   const tasksFor = (spId: string) => {
     const sp = spaces.find((s) => s.id === spId)!;
+    // NEVER a floor-care task here (dust-mop et al. are Max Floor Care's) —
+    // cleaning schedules carry cleaning work only
     return String(sp.roomType) === "Restroom"
       ? ["general-cleaning", "trash-pull", "wet-mop"]
-      : ["general-cleaning", "trash-pull", "dust-mop"];
+      : ["general-cleaning", "trash-pull", "high-dusting"];
   };
   const mkSched = (num: string, name: string, emp: typeof employees[0], color: string, group: string[]) => ({
     id: `sched-demo-${num}`,
