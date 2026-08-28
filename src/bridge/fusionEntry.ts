@@ -359,12 +359,49 @@ export { EQUIPMENT, DUST_MOP_SIZES, brandsFor, modelsFor } from "../pro/equipmen
 // the build is cloud-configured AND a fully-verified session exists (people
 // sign in on the hub; same origin, shared session). Local/demo builds and
 // signed-out sessions: silent no-op — classic behaves exactly as always.
-import { startBackgroundSync } from "../pro/syncEngine";
-import { cloud as cloudClient, cloudConfigured as isCloudConfigured } from "../pro/cloud";
+import { startBackgroundSync, clearSyncMeta, SIGNOUT_PENDING_KEY, type SyncEngine } from "../pro/syncEngine";
+import { cloud as cloudClient, cloudConfigured as isCloudConfigured, authStorageKey } from "../pro/cloud";
+import { WORKSPACE_KEYS } from "../pro/workspaceStore";
 export const cloudConfigured = isCloudConfigured;
+
+let classicEngine: SyncEngine | null = null;
+
 export function startCloudSync(): void {
   if (!isCloudConfigured) return;
-  void startBackgroundSync({ cloud: cloudClient }).catch(() => undefined);
+  void startBackgroundSync({ cloud: cloudClient })
+    .then((engine) => { classicEngine = engine; })
+    .catch(() => undefined);
+}
+
+/** does a signed-in session exist on this device? (cheap, local-storage read) */
+export async function hasCloudSession(): Promise<boolean> {
+  if (!isCloudConfigured) return false;
+  try {
+    const sb = cloudClient();
+    if (!sb) return false;
+    const { data } = await sb.auth.getSession();
+    return Boolean(data.session);
+  } catch { return false; }
+}
+
+/**
+ * Sign out from classic.html: push any unsaved work, end the session, and
+ * clear the organization's data from this device (a shared computer must
+ * not keep it), then land on the sign-in screen.
+ */
+export async function cloudSignOut(): Promise<void> {
+  if (!isCloudConfigured) return;
+  const sb = cloudClient();
+  if (!sb) return;
+  try { await classicEngine?.flush(); classicEngine?.stop(); } catch { /* best effort */ }
+  // the flag survives any autosave race — the sign-in screen sweeps on it
+  localStorage.setItem(SIGNOUT_PENDING_KEY, "1");
+  try { await sb.auth.signOut(); } catch { /* still sign out locally */ }
+  const authKey = authStorageKey();
+  if (authKey) localStorage.removeItem(authKey);
+  for (const k of WORKSPACE_KEYS) localStorage.removeItem(k);
+  clearSyncMeta();
+  window.location.replace("./maps.html");
 }
 
 // AI transport for classic.html: null in local builds or signed-out sessions

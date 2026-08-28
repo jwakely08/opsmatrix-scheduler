@@ -19,6 +19,9 @@ import {
 } from "./workspaceStore";
 
 export const SYNC_META_KEY = "opsmatrix_sync_meta";
+/** one-shot marker: a sign-out happened; the sign-in screen must sweep the
+ *  workspace off this device (classic's autosave can race direct clearing) */
+export const SIGNOUT_PENDING_KEY = "opsmatrix_signout_pending";
 const TICK_MS = 20_000;
 
 export interface SyncMeta {

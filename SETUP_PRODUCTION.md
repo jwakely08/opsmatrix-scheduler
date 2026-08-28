@@ -42,8 +42,10 @@ region, same for all three): `opsmatrix-dev`, `opsmatrix-staging`,
 1. **SQL Editor** → run `supabase/migrations/0001_init.sql`, then
    `supabase/migrations/0002_production.sql` (in that order; both should end
    "Success").
-2. **Authentication → Sign In / Up → Email**: leave "Confirm email" ON for
-   staging/production (OFF is fine for dev).
+2. **Authentication → Sign In / Up**: turn **"Allow new users to sign up" OFF**
+   (staging AND production — OpsMatrix is invite-only: every account is
+   provisioned by you, never self-created; the app's sign-in screen matches).
+   Leave "Confirm email" ON for staging/production (OFF is fine for dev).
 3. **Authentication → Multi-Factor**: ensure **TOTP** is enabled (it is by
    default). The app enforces enrollment for directors.
 4. Note the **Project URL** and **anon public key** (Settings → API) — these
@@ -184,6 +186,27 @@ On the staging URL:
 7. Classic (`/classic.html` on staging): signed-in session syncs and Max
    works through the proxy (Admin Settings shows a placeholder key —
    expected; the real key never exists in the browser).
+
+## 5.5 Administering users (the OpsMatrix-staff view, pilot edition)
+
+OpsMatrix is **invite-only**: no one can create their own account. Until an
+in-app super-admin console exists (roadmap), the Supabase dashboard IS your
+staff console — only you can reach it, behind your dashboard MFA.
+
+- **Create a customer's first account (their director):** Authentication →
+  Users → **Add user** → email + a generated password + "Auto Confirm User".
+  Hand them the credentials; on first sign-in they create their organization
+  and are required to set up two-step verification.
+- **Their teammates:** two halves, both required — YOU create the login the
+  same way, and THEIR DIRECTOR creates an invite code in the app (the ☁
+  status pill, bottom-right → **Invite a teammate** → pick supervisor/staff
+  → code). The teammate signs in with the credentials and enters the code;
+  codes are single-use and expire in 7 days.
+- **Password resets:** dashboard → Users → the user → "Send password
+  recovery" (self-serve reset is a roadmap item).
+- **Where sign out lives:** the ☁ pill menu on hub pages, and the "Sign out"
+  item at the bottom of the classic sidebar. Signing out removes the org's
+  data from that device.
 
 ## 6. Monitoring (~15 min)
 

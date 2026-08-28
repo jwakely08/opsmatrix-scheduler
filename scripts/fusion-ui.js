@@ -77,6 +77,45 @@
           showUploadHub();
         }, true); // capture: beat the classic app's own handler
       }
+      // cloud builds, signed in: a Sign out item at the bottom of the nav —
+      // same anatomy as the other items, visible on every classic screen.
+      // The session check resolves ONCE into a cached answer; injection then
+      // happens on whichever observer pass comes next, with a fresh anchor
+      // (React rebuilds the sidebar constantly — never trust a stale node).
+      if (t === "Admin Settings" && !document.getElementById("fusion-nav-signout") &&
+          b.parentNode && window.OpsMatrixFusion &&
+          typeof window.OpsMatrixFusion.hasCloudSession === "function" &&
+          window.OpsMatrixFusion.cloudConfigured) {
+        if (window.__fusionHasSession === undefined) {
+          window.__fusionHasSession = null; // resolving…
+          window.OpsMatrixFusion.hasCloudSession()
+            .then(function (yes) {
+              window.__fusionHasSession = yes;
+              // the app may be idle (no DOM mutations → no observer passes) —
+              // force one pass now so the button appears immediately
+              if (yes) ensureButton();
+            })
+            .catch(function () { window.__fusionHasSession = false; });
+        }
+        if (window.__fusionHasSession === true) {
+          var so = document.createElement("button");
+          so.id = "fusion-nav-signout";
+          so.type = "button";
+          so.className = b.className;
+          so.innerHTML =
+            '<span class="nav-icon">' +
+            '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+            'stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">' +
+            '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>' +
+            "</svg></span>" +
+            '<span class="nav-label">Sign out</span>';
+          so.addEventListener("click", function () {
+            if (!confirm("Sign out? Synced data is removed from this device (it stays safe in your organization's account).")) return;
+            window.OpsMatrixFusion.cloudSignOut();
+          });
+          b.parentNode.insertBefore(so, b.nextSibling);
+        }
+      }
       // Admin Settings → scope opens the Scope manager (the one source of truth)
       if (t === "scope" && !b.getAttribute("data-fusion-wired")) {
         b.setAttribute("data-fusion-wired", "1");

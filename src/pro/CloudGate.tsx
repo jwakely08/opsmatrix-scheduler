@@ -3,8 +3,8 @@
 // build is cloud-configured). See AuthGate.tsx for the mode explanation.
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
-import { cloud } from "./cloud";
-import { SyncEngine, clearSyncMeta, type SyncState } from "./syncEngine";
+import { cloud, authStorageKey } from "./cloud";
+import { SyncEngine, clearSyncMeta, SYNC_META_KEY, SIGNOUT_PENDING_KEY, type SyncState } from "./syncEngine";
 import { WORKSPACE_KEYS } from "./workspaceStore";
 
 interface Profile { organization_id: string; role: string; display_name: string }
@@ -27,7 +27,19 @@ export default function CloudGate({ children }: { children: React.ReactNode }) {
 
   const resolve = useCallback(async (s: Session | null) => {
     setErr("");
-    if (!s) { cameToSignIn.current = true; setStep("signin"); setProfile(null); return; }
+    if (!s) {
+      // no session, but this device HAD synced org data (sync meta exists):
+      // finish the sign-out's cleanup here — classic's own autosave can race
+      // the sign-out's clearing, and a shared computer must never keep a
+      // signed-out organization's data. (Never-synced local data is kept.)
+      if (localStorage.getItem(SYNC_META_KEY) !== null ||
+          localStorage.getItem(SIGNOUT_PENDING_KEY) !== null) {
+        for (const k of WORKSPACE_KEYS) localStorage.removeItem(k);
+        clearSyncMeta();
+        localStorage.removeItem(SIGNOUT_PENDING_KEY);
+      }
+      cameToSignIn.current = true; setStep("signin"); setProfile(null); return;
+    }
     setSession(s);
     // MFA: if a verified TOTP factor exists but this session is still aal1,
     // the code must be entered before anything else
@@ -92,7 +104,10 @@ export default function CloudGate({ children }: { children: React.ReactNode }) {
     if (!confirm("Sign out? Synced data is removed from this device (it stays safe in your organization's account).")) return;
     await engineRef.current?.flush();
     engineRef.current?.stop();
-    await sb.auth.signOut();
+    localStorage.setItem(SIGNOUT_PENDING_KEY, "1");
+    try { await sb.auth.signOut(); } catch { /* still sign out locally */ }
+    const authKey = authStorageKey();
+    if (authKey) localStorage.removeItem(authKey);
     // a shared computer must not keep the previous org's data
     for (const k of WORKSPACE_KEYS) localStorage.removeItem(k);
     clearSyncMeta();
@@ -103,7 +118,8 @@ export default function CloudGate({ children }: { children: React.ReactNode }) {
     return (
       <>
         {children}
-        <SyncPill state={syncState} detail={syncDetail} onSignOut={signOut} email={session?.user.email ?? ""} />
+        <SyncPill state={syncState} detail={syncDetail} onSignOut={signOut}
+          email={session?.user.email ?? ""} role={profile?.role ?? ""} sb={sb} />
       </>
     );
   }
@@ -122,9 +138,13 @@ export default function CloudGate({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ── sign in / create account ────────────────────────────────────────────────
+// ── sign in — INVITE-ONLY: there is no self-serve account creation ──────────
+// OpsMatrix administers every login (accounts are provisioned by OpsMatrix;
+// teammates join with credentials or an invite code from their
+// administrator). The UI offers sign-in only, and the Supabase project has
+// public sign-ups DISABLED (SETUP_PRODUCTION.md §1) — so this is enforced
+// server-side, not just hidden here.
 function SignIn({ sb }: { sb: SupabaseClient }) {
-  const [mode, setMode] = useState<"in" | "up">("in");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [msg, setMsg] = useState("");
@@ -133,35 +153,30 @@ function SignIn({ sb }: { sb: SupabaseClient }) {
   const go = async () => {
     setBusy(true); setMsg("");
     try {
-      if (mode === "in") {
-        const r = await sb.auth.signInWithPassword({ email: email.trim(), password: pw });
-        if (r.error) setMsg(r.error.message);
-      } else {
-        const r = await sb.auth.signUp({ email: email.trim(), password: pw });
-        if (r.error) setMsg(r.error.message);
-        else if (!r.data.session) setMsg("✓ Check your email to confirm the account, then sign in here.");
+      const r = await sb.auth.signInWithPassword({ email: email.trim(), password: pw });
+      if (r.error) {
+        setMsg(/invalid login credentials/i.test(r.error.message)
+          ? "That email and password don't match. Check them and try again."
+          : r.error.message);
       }
     } finally { setBusy(false); }
   };
 
   return (
     <>
-      <p className="pnote">{mode === "in" ? "Sign in to your organization's OpsMatrix." : "Create your account — you'll set up or join your organization next."}</p>
+      <p className="pnote">Sign in with the credentials from your OpsMatrix administrator.</p>
       <label className="pfield">Email
         <input type="email" value={email} autoComplete="email" onChange={(e) => setEmail(e.target.value)} />
       </label>
       <label className="pfield">Password
-        <input type="password" value={pw} autoComplete={mode === "in" ? "current-password" : "new-password"}
+        <input type="password" value={pw} autoComplete="current-password"
           onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void go(); }} />
       </label>
-      {msg && <p className={msg.startsWith("✓") ? "pnote keysaved" : "warntext"}>{msg}</p>}
-      <button className="pbtn primary wide" disabled={busy || !email.trim() || pw.length < 8} onClick={() => void go()}>
-        {mode === "in" ? "Sign in" : "Create account"}
+      {msg && <p className="warntext">⚠ {msg}</p>}
+      <button className="pbtn primary wide" disabled={busy || !email.trim() || !pw} onClick={() => void go()}>
+        Sign in
       </button>
-      {pw.length > 0 && pw.length < 8 && <small className="pnote">Passwords are at least 8 characters.</small>}
-      <button className="plink" onClick={() => { setMode(mode === "in" ? "up" : "in"); setMsg(""); }}>
-        {mode === "in" ? "New here? Create an account" : "Already have an account? Sign in"}
-      </button>
+      <p className="pnote">Accounts are set up by OpsMatrix — if you don't have one, ask your administrator.</p>
     </>
   );
 }
@@ -314,23 +329,55 @@ function OrgSetup({ sb, onDone }: { sb: SupabaseClient; onDone: () => void }) {
 }
 
 // ── the little status pill: sync state + sign out, never in the way ─────────
-function SyncPill({ state, detail, email, onSignOut }: {
-  state: SyncState; detail: string; email: string; onSignOut: () => void;
+function SyncPill({ state, detail, email, role, sb, onSignOut }: {
+  state: SyncState; detail: string; email: string; role: string;
+  sb: SupabaseClient; onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [inviteRole, setInviteRole] = useState<"supervisor" | "staff">("staff");
+  const [inviteCode, setInviteCode] = useState("");
+  const [inviteMsg, setInviteMsg] = useState("");
   const label =
     state === "synced" ? "☁ Saved to your organization" :
     state === "syncing" ? "☁ Saving…" :
     state === "view-only" ? "👁 View-only account" :
     state === "offline" ? "⚠ Offline — changes stay on this device until the connection returns" :
     state === "error" ? "⚠ Sync problem" : "☁";
+
+  const makeInvite = async () => {
+    setInviteMsg(""); setInviteCode("");
+    const r = await sb.rpc("create_invite", { invite_role: inviteRole });
+    if (r.error) setInviteMsg(r.error.message);
+    else setInviteCode(String(r.data));
+  };
+
   return (
     <div className={"syncpill " + state}>
       <button onClick={() => setOpen(!open)}>{label}</button>
       {open && (
         <div className="syncpill-menu">
-          <p>{email}</p>
+          <p>{email}{role ? ` · ${role}` : ""}</p>
           {state === "error" && detail && <p className="warntext">{detail}</p>}
+          {role === "director" && (
+            <div className="invitebox">
+              <b>Invite a teammate</b>
+              <div className="prow">
+                <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value as "supervisor" | "staff")}>
+                  <option value="staff">staff (view-only)</option>
+                  <option value="supervisor">supervisor (edits schedules)</option>
+                </select>
+                <button className="pbtn small primary" onClick={() => void makeInvite()}>Create code</button>
+              </div>
+              {inviteCode && (
+                <p className="pnote keysaved">
+                  Code: <code>{inviteCode}</code>{" "}
+                  <button className="plink" onClick={() => void navigator.clipboard?.writeText(inviteCode)}>copy</button>
+                  <br />Give it to your teammate with their sign-in credentials — it works once and expires in 7 days.
+                </p>
+              )}
+              {inviteMsg && <p className="warntext">⚠ {inviteMsg}</p>}
+            </div>
+          )}
           <button className="pbtn small" onClick={onSignOut}>Sign out</button>
         </div>
       )}

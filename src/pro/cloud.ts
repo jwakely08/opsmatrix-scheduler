@@ -18,3 +18,14 @@ export function cloud(): SupabaseClient | null {
   if (!client) client = createClient(supabaseUrl!, supabaseAnonKey!);
   return client;
 }
+
+/**
+ * The localStorage key supabase-js stores the session under. Sign-out
+ * removes it EXPLICITLY (belt and braces over supabase's own cleanup) so a
+ * signed-out device can never come back up signed in.
+ */
+export function authStorageKey(): string | null {
+  if (!cloudConfigured) return null;
+  try { return "sb-" + new URL(supabaseUrl!).hostname.split(".")[0] + "-auth-token"; }
+  catch { return null; }
+}
