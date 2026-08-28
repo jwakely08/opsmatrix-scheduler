@@ -371,3 +371,20 @@ export function startCloudSync(): void {
 // (→ the direct user-key mode, unchanged), or {url, token} for the
 // server-side claude-proxy on cloud builds (fresh token per call).
 export { aiProxy } from "../pro/aiTransport";
+
+/**
+ * Cloud builds: classic.html is for signed-in users — a signed-out visitor
+ * is sent to the hub's sign-in screen (after signing in they are returned
+ * to the Dashboard). Local builds: no-op, the app opens directly as always.
+ */
+export function enforceCloudSignIn(): void {
+  if (!isCloudConfigured) return;
+  void (async () => {
+    try {
+      const sb = cloudClient();
+      if (!sb) return;
+      const { data } = await sb.auth.getSession();
+      if (!data.session) window.location.replace("./maps.html");
+    } catch { /* can't tell — leave the page alone */ }
+  })();
+}

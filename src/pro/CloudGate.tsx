@@ -20,27 +20,38 @@ export default function CloudGate({ children }: { children: React.ReactNode }) {
   const [syncState, setSyncState] = useState<SyncState>("idle");
   const [syncDetail, setSyncDetail] = useState("");
   const engineRef = useRef<SyncEngine | null>(null);
+  // did THIS page load walk through sign-in/setup screens? Then the person
+  // just signed in — land them on the Dashboard (classic.html), the app's
+  // real front page, instead of dropping them into the hub.
+  const cameToSignIn = useRef(false);
 
   const resolve = useCallback(async (s: Session | null) => {
     setErr("");
-    if (!s) { setStep("signin"); setProfile(null); return; }
+    if (!s) { cameToSignIn.current = true; setStep("signin"); setProfile(null); return; }
     setSession(s);
     // MFA: if a verified TOTP factor exists but this session is still aal1,
     // the code must be entered before anything else
     const aal = await sb.auth.mfa.getAuthenticatorAssuranceLevel();
     if (!aal.error && aal.data.nextLevel === "aal2" && aal.data.currentLevel !== "aal2") {
+      cameToSignIn.current = true;
       setStep("mfa-challenge");
       return;
     }
     const prof = await sb.from("profiles").select("organization_id, role, display_name")
       .eq("user_id", s.user.id).maybeSingle();
     if (prof.error) { setErr(prof.error.message); setStep("error"); return; }
-    if (!prof.data) { setStep("org-setup"); return; }
+    if (!prof.data) { cameToSignIn.current = true; setStep("org-setup"); return; }
     setProfile(prof.data as Profile);
     // directors must have two-step verification — enroll before entering
     if ((prof.data as Profile).role === "director" &&
         !(aal.error) && aal.data.nextLevel !== "aal2") {
+      cameToSignIn.current = true;
       setStep("mfa-enroll");
+      return;
+    }
+    if (cameToSignIn.current) {
+      // fresh sign-in → the Dashboard is the front door
+      window.location.replace("./classic.html");
       return;
     }
     setStep("ready");
