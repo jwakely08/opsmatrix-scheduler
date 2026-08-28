@@ -13,6 +13,7 @@ import {
   SpaceExplorerView, RoomListView, RoomEditor, notesForSpace, type SpacesView
 } from "./SpacesApp";
 import { ExportApp } from "./ExportApp";
+import { CalibrationEditorHome } from "./PlanStudio";
 import { sectionDirty, saveSection, type ScopeSection } from "./scopeDraft";
 import { fetchAccountRole, canEditFormula, type AccountRole } from "./accountRole";
 import { cloudConfigured } from "./cloudConfig";
@@ -52,16 +53,17 @@ type Tab = "map" | "rooms" | "schedules" | "spaces" | "scope" | "workload" | "fl
  * Keeping it in the hash (and re-reading it reactively) is what makes the
  * universal back button able to return to an EXACT view.
  */
-function parseHash(h: string): { tab: Tab; spacesView: SpacesView; autoAdd: boolean; planCal?: boolean } {
+function parseHash(h: string): { tab: Tab; spacesView: SpacesView; autoAdd: boolean; planCal?: boolean; planRead?: boolean } {
   if (h === "#scope") return { tab: "scope", spacesView: "explorer", autoAdd: false };
   if (h === "#workload") return { tab: "workload", spacesView: "explorer", autoAdd: false };
   if (h === "#exporting") return { tab: "exporting", spacesView: "explorer", autoAdd: false };
   if (h.indexOf("#floorcare") === 0) return { tab: "floorcare", spacesView: "explorer", autoAdd: false };
   if (h.indexOf("#spaces") === 0) {
-    const m = /view=(explorer|list|map)/.exec(h);
+    const m = /view=(explorer|list|map|studio)/.exec(h);
     return {
       tab: "spaces", spacesView: (m?.[1] as SpacesView) ?? "explorer",
-      autoAdd: /[?&]add=1/.test(h), planCal: /[?&]plancal=1/.test(h)
+      autoAdd: /[?&]add=1/.test(h),
+      planCal: /[?&]plancal=1/.test(h), planRead: /[?&]plan=1/.test(h)
     };
   }
   if (h === "#tab-schedules") return { tab: "schedules", spacesView: "explorer", autoAdd: false };
@@ -78,7 +80,7 @@ export function MapsApp() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  const { tab, spacesView, autoAdd, planCal } = parseHash(hash);
+  const { tab, spacesView, autoAdd, planCal, planRead } = parseHash(hash);
 
   // every view registers itself on the shared back-trail
   const navToken = tab === "spaces" ? "hub:spaces/" + spacesView : "hub:" + tab;
@@ -255,6 +257,7 @@ export function MapsApp() {
               <button className={spacesView === "explorer" ? "on" : ""} onClick={() => go("hub:spaces/explorer")}>Explorer</button>
               <button className={spacesView === "list" ? "on" : ""} onClick={() => go("hub:spaces/list")}>Room List</button>
               <button className={spacesView === "map" ? "on" : ""} onClick={() => go("hub:spaces/map")}>Map View</button>
+              <button className={spacesView === "studio" ? "on" : ""} onClick={() => go("hub:spaces/studio")}>Calibration Editor</button>
               <a className="ptab-link" href="./classic.html?fp=1">Floor Plans</a>
             </nav>
           </>
@@ -273,8 +276,8 @@ export function MapsApp() {
         <span className="grow" />
         {/* Max Space's ONLY two entry points for data: ⬆ Import and ＋ Add Room */}
         {tab === "spaces" && <>
-          <UploadHub key={planCal ? "plancal" : "plain"} commit={commit} rules={rules}
-            autoPlanCalibrate={Boolean(planCal)} />
+          <UploadHub key={planCal ? "plancal" : planRead ? "planread" : "plain"} commit={commit} rules={rules}
+            autoPlan={planCal ? "calibrate" : planRead ? "choice" : undefined} />
           <button className="pbtn primary" onClick={() => openEditor(null)}>＋ Add Room</button>
         </>}
         {(tab === "map" || tab === "rooms" || tab === "schedules") && (
@@ -421,6 +424,9 @@ export function MapsApp() {
         {tab === "spaces" && spacesView === "list" && (
           <RoomListView data={data} rules={rules} commit={commit} onEdit={openEditor} />
         )}
+        {tab === "spaces" && spacesView === "studio" && (
+          <CalibrationEditorHome rules={rules} />
+        )}
 
         {tab === "map" && roomSelected && (
           <ScheduleRoomSidebar
@@ -559,15 +565,16 @@ function PrintPreview({ data, rules, scheduleId, onClose }: {
 //    One button, three options: floor plan (always read by Max — there is no
 //    manual path), room list, magicplan export. The exact same chooser fronts
 //    Classic's Max Space (fusion-ui.js); this is its hub twin. ─────────────
-function UploadHub({ commit, rules, autoPlanCalibrate }: {
+function UploadHub({ commit, rules, autoPlan }: {
   commit: (mut: (d: ClassicData) => void) => void;
   rules: Rules;
-  /** open straight into the plan reader's calibrate mode (classic's "no sizes" tile) */
-  autoPlanCalibrate?: boolean;
+  /** open the plan modal on arrival: "choice" (classic's Floor plan tile)
+      or "calibrate" (classic's no-sizes tile / legacy links) */
+  autoPlan?: "choice" | "calibrate";
 }) {
   const [chooser, setChooser] = useState(false);
-  const [planOpen, setPlanOpen] = useState(() => Boolean(autoPlanCalibrate));
-  const [planMode] = useState<"read" | "calibrate" | undefined>(autoPlanCalibrate ? "calibrate" : undefined);
+  const [planOpen, setPlanOpen] = useState(() => Boolean(autoPlan));
+  const [planMode] = useState<"read" | "calibrate" | undefined>(autoPlan === "calibrate" ? "calibrate" : undefined);
   const [rlPhase, setRlPhase] = useState<"idle" | "working" | "done" | "error">("idle");
   const [rlError, setRlError] = useState("");
   const [rlSummary, setRlSummary] = useState<ImportSummary | null>(null);
@@ -639,7 +646,7 @@ function UploadHub({ commit, rules, autoPlanCalibrate }: {
       )}
 
       <AiPlanImport open={planOpen} onClose={() => setPlanOpen(false)}
-        defaultMode={planMode}
+        defaultMode={planMode} rules={rules}
         commit={commit} onImported={() => window.location.reload()} />
 
       <input ref={rlRef} type="file" style={{ display: "none" }}
