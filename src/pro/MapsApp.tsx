@@ -2,11 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom";
 import {
   loadClassic, saveClassic, syncSpaceMinutes, refreshAutoTasks, coverageForSpace, uncovered, setCoverage,
-  coverageMinutes, scheduleMinutes, createSchedule, deleteSchedule, scheduleColor,
+  coverageMinutes, scheduleMinutes, createSchedule, deleteSchedule, scheduleColor, SCHED_COLORS,
   spaceIncomplete, FLOOR_TYPES, rectifyForDisplay, pathFrom, centroidOf, boundsOf, pointIn,
-  moveInSchedule, spacePriority, PRIORITIES,
+  moveInSchedule, spacePriority, PRIORITIES, PRIORITY_WORD,
   type ClassicData, type ClassicSpace, type ClassicSchedule, type NonSpaceTask
 } from "./classicStore";
+import { navVisit, navBack, hubHashFor } from "./nav";
+import { MapCanvas } from "./MapCanvas";
+import {
+  SpaceExplorerView, RoomListView, RoomEditor, notesForSpace, type SpacesView
+} from "./SpacesApp";
 import { PrintSchedule } from "./PrintSchedule";
 import { AiPlanImport } from "./AiPlanImport";
 import { WorkloadApp, ImportResult } from "./WorkloadApp";
@@ -20,8 +25,8 @@ import {
 import { fileToSheets, isSpreadsheet } from "./sheetFile";
 import { collectWorkspace, applyWorkspace, backupFilename } from "./workspaceStore";
 import {
-  loadRules, saveRules, defaultRules, computeMinutes, requiredTasks, autoTasksFor,
-  typeIdFromLabel, isCarpet, FREQUENCIES, type Rules
+  loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor,
+  typeIdFromLabel, isCarpet, spaceCleanability, FREQUENCIES, type Rules
 } from "./rules";
 
 const WALL_STROKE = 13;
@@ -30,20 +35,84 @@ const RED = "#dc2626";
 
 function uid(p: string) { return p + "-" + Math.random().toString(36).slice(2, 9); }
 
-type Tab = "map" | "schedules" | "spaces" | "scope" | "workload" | "floorcare";
+type Tab = "map" | "rooms" | "schedules" | "spaces" | "scope" | "workload" | "floorcare";
+
+/**
+ * The hash is the hub's single source of truth for WHICH view is on screen:
+ *   (none)          Max Schedules — Map
+ *   #tab-rooms      Max Schedules — Rooms (list scheduling)
+ *   #tab-schedules  Max Schedules — Schedules
+ *   #spaces?view=explorer|list|map (&add=1)   Max Space
+ *   #scope / #workload / #floorcare           the standalone admin pages
+ * Keeping it in the hash (and re-reading it reactively) is what makes the
+ * universal back button able to return to an EXACT view.
+ */
+function parseHash(h: string): { tab: Tab; spacesView: SpacesView; autoAdd: boolean } {
+  if (h === "#scope") return { tab: "scope", spacesView: "explorer", autoAdd: false };
+  if (h === "#workload") return { tab: "workload", spacesView: "explorer", autoAdd: false };
+  if (h.indexOf("#floorcare") === 0) return { tab: "floorcare", spacesView: "explorer", autoAdd: false };
+  if (h.indexOf("#spaces") === 0) {
+    const m = /view=(explorer|list|map)/.exec(h);
+    return { tab: "spaces", spacesView: (m?.[1] as SpacesView) ?? "explorer", autoAdd: /[?&]add=1/.test(h) };
+  }
+  if (h === "#tab-schedules") return { tab: "schedules", spacesView: "explorer", autoAdd: false };
+  if (h === "#tab-rooms") return { tab: "rooms", spacesView: "explorer", autoAdd: false };
+  return { tab: "map", spacesView: "explorer", autoAdd: false };
+}
 
 export function MapsApp() {
   const [data, setData] = useState<ClassicData>(() => loadClassic());
   const [rules, setRules] = useState<Rules>(() => loadRules());
-  // #scope = the Admin Settings → Scope manager; #spaces = Max Space's own
-  // Map View; #workload = Admin Settings → Workload Intelligence. None is a
-  // Max Schedules tab — the hub itself is Map + Schedules.
-  const scopeOnly = window.location.hash === "#scope";
-  const spacesOnly = window.location.hash === "#spaces";
-  const workloadOnly = window.location.hash === "#workload";
-  const floorcareOnly = window.location.hash.indexOf("#floorcare") === 0;
-  const [tab, setTab] = useState<Tab>(() =>
-    scopeOnly ? "scope" : spacesOnly ? "spaces" : workloadOnly ? "workload" : floorcareOnly ? "floorcare" : "map");
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  const { tab, spacesView, autoAdd } = parseHash(hash);
+
+  // every view registers itself on the shared back-trail
+  const navToken = tab === "spaces" ? "hub:spaces/" + spacesView : "hub:" + tab;
+  useEffect(() => { navVisit(navToken); }, [navToken]);
+
+  /** navigate the hub (or leave for classic) by nav token */
+  const go = useCallback((token: string) => {
+    if (token.indexOf("classic") === 0) {
+      const page = token.split(":")[1];
+      if (page) sessionStorage.setItem("fusion-goto-page", page);
+      window.location.href = "./classic.html";
+      return;
+    }
+    window.location.hash = hubHashFor(token);
+  }, []);
+
+  const goBack = useCallback(() => {
+    const t = navBack();
+    if (!t || t.indexOf("classic") === 0) {
+      const page = t ? t.split(":")[1] : "";
+      if (page) sessionStorage.setItem("fusion-goto-page", page);
+      window.location.href = "./classic.html";
+      return;
+    }
+    window.location.hash = hubHashFor(t);
+  }, []);
+
+  // room editor modal (add + edit) — Max Space's one editing surface
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorTarget, setEditorTarget] = useState<ClassicSpace | null>(null);
+  useEffect(() => {
+    if (autoAdd) {
+      setEditorTarget(null);
+      setEditorOpen(true);
+      // one-shot: strip add=1 so back/refresh doesn't reopen it
+      history.replaceState(null, "", window.location.pathname + "#spaces?view=" + spacesView);
+    }
+  }, [autoAdd]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openEditor = useCallback((sp: ClassicSpace | null) => {
+    setEditorTarget(sp);
+    setEditorOpen(true);
+  }, []);
+
   const [roomSel, setRoomSel] = useState<string | null>(null);
   const [schedSel, setSchedSel] = useState<string | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -146,40 +215,54 @@ export function MapsApp() {
 
   const anyFilter = Object.values(filters).some(Boolean);
 
+  const onMapView = tab === "map" || (tab === "spaces" && spacesView === "map");
+
   return (
     <div className="pro-shell">
       <header className="pro-head">
-        <a className="pbtn ghost" href="./classic.html">← OpsMatrix</a>
-        {scopeOnly ? (
+        {/* THE back button: same blue bubble on every screen, true history —
+            it returns to the exact page the user came from (nav.ts) */}
+        <button className="pbtn primary backbtn" onClick={goBack}>‹ Back</button>
+        {tab === "scope" ? (
           <h1>Admin Settings — <span>Scope</span></h1>
-        ) : workloadOnly ? (
+        ) : tab === "workload" ? (
           <h1>Workload <span>Intelligence</span></h1>
-        ) : floorcareOnly ? (
+        ) : tab === "floorcare" ? (
           <h1>Max Floor <span>Care</span></h1>
-        ) : spacesOnly ? (
-          <h1>Max <span>Space</span> — Map View</h1>
+        ) : tab === "spaces" ? (
+          <>
+            <h1>Max <span>Space</span></h1>
+            <nav className="ptabs">
+              <button className={spacesView === "explorer" ? "on" : ""} onClick={() => go("hub:spaces/explorer")}>Explorer</button>
+              <button className={spacesView === "list" ? "on" : ""} onClick={() => go("hub:spaces/list")}>Room List</button>
+              <button className={spacesView === "map" ? "on" : ""} onClick={() => go("hub:spaces/map")}>Map View</button>
+              <a className="ptab-link" href="./classic.html?fp=1">Floor Plans</a>
+            </nav>
+          </>
         ) : (
           <>
             <h1>Max <span>Schedules</span></h1>
             <nav className="ptabs">
-              {(["map", "schedules"] as Tab[]).map((t) => (
-                <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
-                  {t === "map" ? "Map" : "Schedules"}
+              {(["map", "rooms", "schedules"] as Tab[]).map((t) => (
+                <button key={t} className={tab === t ? "on" : ""} onClick={() => go("hub:" + t)}>
+                  {t === "map" ? "Map" : t === "rooms" ? "Rooms" : "Schedules"}
                 </button>
               ))}
             </nav>
           </>
         )}
         <span className="grow" />
-        {/* uploading lives in ONE place: Max Space's ⬆ Upload button — the
-            same three options here as in Classic, nothing anywhere else */}
-        {spacesOnly && <UploadHub commit={commit} rules={rules} />}
-        {!scopeOnly && !spacesOnly && !workloadOnly && !floorcareOnly && (
+        {/* Max Space's ONLY two entry points for data: ⬆ Import and ＋ Add Room */}
+        {tab === "spaces" && <>
+          <UploadHub commit={commit} rules={rules} />
+          <button className="pbtn primary" onClick={() => openEditor(null)}>＋ Add Room</button>
+        </>}
+        {(tab === "map" || tab === "rooms" || tab === "schedules") && (
           <button className="pbtn" onClick={() => setReport(true)}>⚠ Unassigned Tasks</button>
         )}
       </header>
 
-      {(tab === "map" || tab === "spaces") && (
+      {onMapView && (
         <div className="pro-filters">
           {tab === "map" && <>
             <Sel label="Schedule" v={filters.schedule ?? ""} on={(v) => setFilters({ ...filters, schedule: v })}
@@ -205,12 +288,12 @@ export function MapsApp() {
       )}
 
       <div className="pro-main">
-        {(tab === "map" || tab === "spaces") && plan && (
+        {onMapView && plan && (
           <MapCanvas
-            key={tab + (plan?.id ?? "")}
+            key={tab + spacesView + (plan?.id ?? "")}
             plan={plan} plans={plans} onPlan={setPlanId}
             spaces={spaces} shapes={shapes}
-            mode={tab}
+            mode={tab === "spaces" ? "spaces" : "map"}
             fillFor={(sp) => {
               if (tab === "spaces") {
                 return spaceIncomplete(sp).length ? RED : "#475569";
@@ -282,23 +365,29 @@ export function MapsApp() {
           />
         )}
 
-        {(tab === "map" || tab === "spaces") && !plan && (
+        {onMapView && !plan && (
           <div className="pro-empty">
             <h2>No floor plan has been added{spaces.length ? " for these rooms" : " yet"}</h2>
             {spaces.length > 0 ? (
               <p>
                 Your {spaces.length} imported room{spaces.length === 1 ? "" : "s"} are already
-                working — in Max Space's list, on schedules, and in Workload Intelligence.
-                A floor plan is optional: add one any time (a picture, PDF, or magicplan scan)
-                and it attaches to these same rooms.
+                working — in the Explorer, the Room List, on schedules, and in Workload
+                Intelligence. A floor plan is optional: add one any time (a picture, PDF, or
+                magicplan scan) and it attaches to these same rooms.
               </p>
             ) : tab === "spaces" ? (
-              <p>Use the ⬆ Upload button above — a floor plan (picture or PDF), a room list, or a magicplan scan all get you started.</p>
+              <p>Use the ⬆ Import button above — a floor plan (picture or PDF), a room list, or a magicplan scan all get you started.</p>
             ) : (
-              <p>Go to Max Space and use its ⬆ Upload button — a floor plan (picture or PDF), a room list, or a magicplan scan all get you started.</p>
+              <p>Go to Max Space and use its ⬆ Import button — a floor plan (picture or PDF), a room list, or a magicplan scan all get you started.</p>
             )}
-            <a className="pbtn primary" href="./classic.html">← Back to OpsMatrix</a>
           </div>
+        )}
+
+        {tab === "spaces" && spacesView === "explorer" && (
+          <SpaceExplorerView data={data} rules={rules} commit={commit} onEdit={openEditor} />
+        )}
+        {tab === "spaces" && spacesView === "list" && (
+          <RoomListView data={data} rules={rules} commit={commit} onEdit={openEditor} />
         )}
 
         {tab === "map" && roomSelected && (
@@ -306,16 +395,17 @@ export function MapsApp() {
             key={roomSelected.id}
             space={roomSelected} data={data} rules={rules} schedules={schedules}
             onClose={() => setRoomSel(null)}
-            onEditSpace={() => setTab("spaces")}
+            onEditSpace={() => go("hub:spaces/map")}
             commit={commit}
           />
         )}
 
-        {tab === "spaces" && roomSelected && (
+        {tab === "spaces" && spacesView === "map" && roomSelected && (
           <SpaceSidebar
             key={roomSelected.id}
             space={roomSelected} rules={rules}
             onClose={() => setRoomSel(null)}
+            onOpenEditor={() => openEditor(roomSelected)}
             onChange={(patch) => commit((d) => {
               const sp = (d.v7.spaces ?? []).find((s) => s.id === roomSelected.id)!;
               Object.assign(sp, patch);
@@ -327,10 +417,15 @@ export function MapsApp() {
           />
         )}
 
+        {tab === "rooms" && (
+          <RoomsScheduleTab data={data} rules={rules} schedules={schedules}
+            commit={commit} onNewSchedule={() => go("hub:schedules")} />
+        )}
+
         {tab === "schedules" && (
           <SchedulesTab data={data} rules={rules} schedules={schedules} employees={employees}
             commit={commit} onPrint={setPrintId}
-            onOpenOnMap={(id) => { setSchedSel(id); setTab("map"); }} />
+            onOpenOnMap={(id) => { setSchedSel(id); go("hub:map"); }} />
         )}
 
         {tab === "scope" && (
@@ -349,7 +444,13 @@ export function MapsApp() {
       {report && (
         <ReportModal data={data} rules={rules} spaces={spaces} schedules={schedules}
           onClose={() => setReport(false)}
-          onJump={(id) => { setReport(false); setTab("map"); setRoomSel(id); }} />
+          onJump={(id) => { setReport(false); setRoomSel(id); go("hub:map"); }} />
+      )}
+
+      {editorOpen && (
+        <RoomEditor data={data} rules={rules}
+          space={editorTarget ? (data.v7.spaces ?? []).find((s) => s.id === editorTarget.id) ?? editorTarget : null}
+          commit={commit} onClose={() => setEditorOpen(false)} />
       )}
 
       {printId && (
@@ -473,7 +574,7 @@ function UploadHub({ commit, rules }: {
 
   return (
     <>
-      <button className="pbtn primary" onClick={() => setChooser(true)}>⬆ Upload</button>
+      <button className="pbtn primary" onClick={() => setChooser(true)}>⬆ Import</button>
 
       {chooser && (
         <div className="pro-modalback" onClick={(e) => { if (e.target === e.currentTarget) setChooser(false); }}>
@@ -551,219 +652,6 @@ function Sel({ label, v, on, opts }: {
   );
 }
 
-// ── the map canvas (shared by Map + Spaces tabs) ────────────────────────────
-
-function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, selectedId, onRoom, legend, mode }: {
-  plan: NonNullable<ClassicData["plans"][0]>;
-  plans: ClassicData["plans"];
-  onPlan: (id: string) => void;
-  spaces: ClassicSpace[];
-  shapes: Map<string, { pts: { x: number; y: number }[]; path: string; c: { x: number; y: number } }>;
-  fillFor: (sp: ClassicSpace) => string;
-  /** second schedule's color → the room renders two-tone striped */
-  overlayFor?: (sp: ClassicSpace) => string | null;
-  selectedId: string | null;
-  onRoom: (sp: ClassicSpace | null) => void;
-  legend: React.ReactNode;
-  mode: string;
-}) {
-  const svgRef = useRef<SVGSVGElement>(null);
-  const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
-  // sx/sy = where the gesture STARTED: a tap is judged by total travel from
-  // there, not per-event deltas. A fingertip naturally wobbles a few pixels,
-  // so touch gets a much bigger tap slop than a mouse — without this, real
-  // thumbs "click" rooms and nothing happens.
-  const drag = useRef({ x: 0, y: 0, sx: 0, sy: 0, moved: false, on: false, slop: 5 });
-  // live pointers — two fingers on a phone means pinch-zoom, not a tap
-  const pointers = useRef(new Map<number, { x: number; y: number }>());
-  const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
-
-  const zoomAt = (sx: number, sy: number, factor: number) => {
-    setView((v) => {
-      const k2 = Math.max(0.2, Math.min(12, v.k * factor));
-      const f = k2 / v.k;
-      return { k: k2, tx: sx - (sx - v.tx) * f, ty: sy - (sy - v.ty) * f };
-    });
-  };
-  const zoomCenter = (factor: number) => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, factor);
-  };
-
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    const fit = () => {
-      const w = svg.clientWidth || 1000, h = svg.clientHeight || 640;
-      const k = Math.min(w / plan.w, h / plan.h) * 0.94;
-      setView({ k, tx: (w - plan.w * k) / 2, ty: (h - plan.h * k) / 2 });
-    };
-    fit();
-    const ro = new ResizeObserver(fit);
-    ro.observe(svg);
-    return () => ro.disconnect();
-  }, [plan]);
-
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const r = svg.getBoundingClientRect();
-      const sx = e.clientX - r.left, sy = e.clientY - r.top;
-      setView((v) => {
-        const k2 = Math.max(0.2, Math.min(12, v.k * Math.exp(-e.deltaY * 0.0015)));
-        const f = k2 / v.k;
-        return { k: k2, tx: sx - (sx - v.tx) * f, ty: sy - (sy - v.ty) * f };
-      });
-    };
-    svg.addEventListener("wheel", onWheel, { passive: false });
-    return () => svg.removeEventListener("wheel", onWheel);
-  }, []);
-
-  function click(e: React.PointerEvent) {
-    if (drag.current.moved) return;
-    const svg = svgRef.current!;
-    const r = svg.getBoundingClientRect();
-    const x = (e.clientX - r.left - view.tx) / view.k;
-    const y = (e.clientY - r.top - view.ty) / view.k;
-    let hit: ClassicSpace | null = null;
-    let hitArea = Infinity;
-    for (const sp of spaces) {
-      const sh = shapes.get(sp.id);
-      if (!sh || !pointIn(sh.pts, x, y)) continue;
-      const b = boundsOf(sh.pts);
-      const area = (b.maxX - b.minX) * (b.maxY - b.minY);
-      if (area < hitArea) { hit = sp; hitArea = area; }
-    }
-    onRoom(hit);
-  }
-
-  return (
-    <div className="pro-mapwrap">
-      <svg ref={svgRef} className="pro-map"
-        onPointerDown={(e) => {
-          pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-          try { (e.target as Element).setPointerCapture?.(e.pointerId); } catch { /* not capturable — fine */ }
-          if (pointers.current.size === 2) {
-            // second finger down → this gesture is a pinch, never a tap
-            const [a, b] = [...pointers.current.values()];
-            pinch.current = { dist: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
-            drag.current.on = false;
-            drag.current.moved = true;
-          } else {
-            drag.current = {
-              x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY,
-              moved: false, on: true,
-              slop: e.pointerType === "touch" ? 14 : 5
-            };
-          }
-        }}
-        onPointerMove={(e) => {
-          if (pointers.current.has(e.pointerId)) pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-          if (pinch.current && pointers.current.size >= 2) {
-            const [a, b] = [...pointers.current.values()];
-            const dist = Math.hypot(a.x - b.x, a.y - b.y);
-            if (dist > 0 && pinch.current.dist > 0) {
-              const r = svgRef.current!.getBoundingClientRect();
-              zoomAt((a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top, dist / pinch.current.dist);
-            }
-            pinch.current.dist = dist;
-            return;
-          }
-          if (!drag.current.on) return;
-          const dx = e.clientX - drag.current.x, dy = e.clientY - drag.current.y;
-          const travel = Math.hypot(e.clientX - drag.current.sx, e.clientY - drag.current.sy);
-          if (travel > drag.current.slop) drag.current.moved = true;
-          if (drag.current.moved) {
-            setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }));
-            drag.current.x = e.clientX; drag.current.y = e.clientY;
-          }
-        }}
-        onPointerUp={(e) => {
-          pointers.current.delete(e.pointerId);
-          if (pointers.current.size < 2) pinch.current = null;
-          drag.current.on = false;
-          if (pointers.current.size === 0) {
-            click(e);
-            setTimeout(() => { drag.current.moved = false; }, 0);
-          }
-        }}
-        onPointerCancel={(e) => {
-          pointers.current.delete(e.pointerId);
-          if (pointers.current.size < 2) pinch.current = null;
-          drag.current.on = false;
-        }}>
-        <defs>
-          {[...new Set(spaces.map((sp) => overlayFor?.(sp)).filter(Boolean) as string[])].map((c) => (
-            <pattern key={c} id={"st-" + c.slice(1)} width="16" height="16"
-              patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-              <rect width="8" height="16" fill={c} />
-            </pattern>
-          ))}
-        </defs>
-        <g transform={`translate(${view.tx} ${view.ty}) scale(${view.k})`}>
-          {spaces.map((sp) => {
-            const sh = shapes.get(sp.id);
-            if (!sh) return null;
-            const color = fillFor(sp);
-            const overlay = overlayFor?.(sp) ?? null;
-            return (
-              <g key={sp.id} className={"proom" + (sp.id === selectedId ? " sel" : "") + (color === "#33404d" ? " dim" : "")}>
-                <path d={sh.path} fill={color} stroke={color}
-                  strokeWidth={WALL_STROKE} strokeLinejoin="round" />
-                {overlay && (
-                  <path d={sh.path} fill={"url(#st-" + overlay.slice(1) + ")"}
-                    stroke="none" style={{ pointerEvents: "none", opacity: 0.8 }} />
-                )}
-              </g>
-            );
-          })}
-          <image href={plan.img} width={plan.w} height={plan.h}
-            style={{ mixBlendMode: "multiply", pointerEvents: "none" }} />
-          {spaces.map((sp) => {
-            const sh = shapes.get(sp.id);
-            if (!sh) return null;
-            const b = boundsOf(sh.pts);
-            if ((b.maxX - b.minX) * view.k < 60) return null;
-            const mins = Number(sp.estimatedCleaningMinutes) || 0;
-            return (
-              <g key={"l" + sp.id} className="prolabel" transform={`translate(${sh.c.x} ${sh.c.y}) scale(${1 / Math.max(0.6, view.k)})`}>
-                <text y={-4}>{sp.roomNumber || sp.roomName}</text>
-                <text className="sub" y={12}>{Math.round(Number(sp.squareFeet) || 0)} ft² · {mins}m</text>
-              </g>
-            );
-          })}
-        </g>
-      </svg>
-      {plans.length > 1 && (
-        <div className="floorstack">
-          {[...plans].reverse().map((p) => (
-            <button key={p.id} className={"floorcard" + (p.id === plan.id ? " on" : "")}
-              onClick={() => onPlan(p.id)}>
-              <span>{p.floor ?? p.id}</span>
-            </button>
-          ))}
-        </div>
-      )}
-      {legend}
-      {/* touch-friendly zoom controls — pinch works too, but thumbs deserve buttons */}
-      <div className="pro-zoomctl">
-        <button aria-label="Zoom in" onClick={() => zoomCenter(1.35)}>＋</button>
-        <button aria-label="Zoom out" onClick={() => zoomCenter(1 / 1.35)}>－</button>
-        <button aria-label="Fit plan" onClick={() => {
-          const svg = svgRef.current;
-          if (!svg) return;
-          const w = svg.clientWidth || 1000, h = svg.clientHeight || 640;
-          const k = Math.min(w / plan.w, h / plan.h) * 0.94;
-          setView({ k, tx: (w - plan.w * k) / 2, ty: (h - plan.h * k) / 2 });
-        }}>⤢</button>
-      </div>
-    </div>
-  );
-}
-
 // ── Map tab sidebar: schedule THIS room (coverage per schedule) ─────────────
 
 function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpace, commit }: {
@@ -780,6 +668,7 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
   const req = requiredTasks(rules, space);
   const freq = rules.roomTypes.find((r) => r.id === typeIdFromLabel(rules, space.roomType ?? ""))?.frequency;
   const [addOpen, setAddOpen] = useState(false);
+  const notes = notesForSpace(data, space);
 
   return (
     <aside className="pro-side">
@@ -791,6 +680,15 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
         {space.roomType} · {Math.round(Number(space.squareFeet) || 0)} ft² · {space.floorType || "hard floor"} · {freq}
         {" "}<button className="plink" onClick={onEditSpace}>edit room details →</button>
       </p>
+      {/* the room's notes ride along into scheduling, so they get acknowledged */}
+      {(notes.own || notes.linked.length > 0) && (
+        <div className="roomnote">
+          {notes.own && <p>📝 {notes.own}</p>}
+          {notes.linked.map((n) => (
+            <p key={n.id}>📝 {n.title || ""}{n.title && n.body ? " — " : ""}{n.body ?? ""}</p>
+          ))}
+        </div>
+      )}
 
       <div className="pfield"><span>This room needs</span>
         <div className="ptasks readonly">
@@ -809,8 +707,8 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
         )}
       </div>
 
-      <div className="pfield"><span>Schedules covering this room</span></div>
-      {cov.length === 0 && <p className="pnote">None yet — add one below.</p>}
+      <div className="pfield"><span>Who cleans this room</span></div>
+      {cov.length === 0 && <p className="pnote">Nobody yet — tap <b>＋ Add to schedule</b> below to give it to a schedule.</p>}
       {cov.map((c) => {
         const sched = schedules.find((s) => s.id === c.scheduleId);
         if (!sched) return null;
@@ -846,58 +744,118 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
         );
       })}
 
-      {(() => {
-        const available = schedules.filter((s) => !cov.some((c) => c.scheduleId === s.id));
-        if (!available.length) return null;
-        return (
-          <div className="pfield big">
-            {!addOpen ? (
-              <button className="pbtn primary wide" onClick={() => setAddOpen(true)}>+ Add to schedule</button>
-            ) : (
-              <div className="addlist">
-                <span>Tap a schedule — it's added instantly, then pick its tasks above:</span>
-                {available.map((s) => (
-                  <button key={s.id} className="addrow" style={{ borderLeftColor: String(s.color) }}
-                    onClick={() => {
-                      commit((d) => {
-                        const hasPrimary = coverageForSpace(d, space.id).some((c) => c.primary);
-                        const u = uncovered(d, rules, d.v7.spaces!.find((x) => x.id === space.id)!);
-                        // instant add: base clean if unclaimed, else the leftover
-                        // tasks — and even with nothing left, the row appears so
-                        // tasks can be picked right here (keepEmpty)
-                        setCoverage(d, space.id, s.id, !hasPrimary, hasPrimary ? u.tasks : req, true);
-                      });
-                      setAddOpen(false);
-                    }}>
-                    <i style={{ background: String(s.color) }} />
-                    <b>{s.num} · {s.name}</b>
-                    <em>{s.shift} · {s.employee || "unassigned"}</em>
-                  </button>
-                ))}
-                <button className="pbtn small" onClick={() => setAddOpen(false)}>Cancel</button>
-              </div>
-            )}
-            <small>First schedule gets General Clean automatically; extra schedules pick up remaining tasks (e.g. High Dusting for someone else). Rooms on two schedules show striped on the map.</small>
-          </div>
-        );
-      })()}
+      <AddToScheduleBlock space={space} rules={rules} schedules={schedules}
+        cov={cov} req={req} commit={commit} addOpen={addOpen} setAddOpen={setAddOpen} />
     </aside>
+  );
+}
+
+/**
+ * "＋ Add to schedule" — ALWAYS there when a room is open (the old version
+ * vanished when no schedules existed yet, which read as "there's nowhere to
+ * add a schedule"). Tap an existing schedule to add the room instantly, or
+ * make a brand-new schedule right here — name, shift, color — and the room
+ * lands on it in the same tap.
+ */
+function AddToScheduleBlock({ space, rules, schedules, cov, req, commit, addOpen, setAddOpen }: {
+  space: ClassicSpace;
+  rules: Rules;
+  schedules: ClassicSchedule[];
+  cov: { scheduleId: string; primary: boolean; tasks: string[] }[];
+  req: string[];
+  commit: (mut: (d: ClassicData) => void) => void;
+  addOpen: boolean;
+  setAddOpen: (v: boolean) => void;
+}) {
+  const available = schedules.filter((s) => !cov.some((c) => c.scheduleId === s.id));
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState(() => ({ name: "", shift: "1st Shift", color: "" }));
+  const usedColors = schedules.map((s) => String(s.color ?? ""));
+  const nextColor = SCHED_COLORS.find((c) => !usedColors.includes(c)) ?? SCHED_COLORS[0];
+
+  const addTo = (schedId: string) => {
+    commit((d) => {
+      const hasPrimary = coverageForSpace(d, space.id).some((c) => c.primary);
+      const u = uncovered(d, rules, d.v7.spaces!.find((x) => x.id === space.id)!);
+      // instant add: base clean if unclaimed, else the leftover tasks — and
+      // even with nothing left, the row appears so tasks can be picked here
+      setCoverage(d, space.id, schedId, !hasPrimary, hasPrimary ? u.tasks : req, true);
+    });
+    setAddOpen(false);
+    setCreating(false);
+  };
+
+  return (
+    <div className="pfield big">
+      {!addOpen ? (
+        <button className="pbtn primary wide" onClick={() => setAddOpen(true)}>＋ Add to schedule</button>
+      ) : (
+        <div className="addlist">
+          {available.length > 0 && <span>Tap a schedule — it's added instantly, then pick its tasks above:</span>}
+          {available.map((s) => (
+            <button key={s.id} className="addrow" style={{ borderLeftColor: String(s.color) }}
+              onClick={() => addTo(s.id)}>
+              <i style={{ background: String(s.color) }} />
+              <b>{s.num} · {s.name}</b>
+              <em>{s.shift} · {s.employee || "unassigned"}</em>
+            </button>
+          ))}
+          {!creating ? (
+            <button className="addrow newsched" onClick={() => { setDraft({ name: "", shift: "1st Shift", color: nextColor }); setCreating(true); }}>
+              <i className="dashed" />
+              <b>＋ Make a new schedule…</b>
+            </button>
+          ) : (
+            <div className="newschedform">
+              <input autoFocus placeholder="Schedule name (e.g. East Wing — Days)" value={draft.name}
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+              <select value={draft.shift} onChange={(e) => setDraft({ ...draft, shift: e.target.value })}>
+                <option>1st Shift</option><option>2nd Shift</option><option>3rd Shift</option>
+              </select>
+              <div className="colorrow">
+                <span>Color:</span>
+                {SCHED_COLORS.map((c) => (
+                  <button key={c} className={"colordot" + (draft.color === c ? " on" : "")}
+                    style={{ background: c }} aria-label={"color " + c}
+                    onClick={() => setDraft({ ...draft, color: c })} />
+                ))}
+              </div>
+              <button className="pbtn primary" disabled={!draft.name.trim()} onClick={() => {
+                let newId = "";
+                commit((d) => {
+                  const s = createSchedule(d, draft.name.trim(), draft.shift, "", draft.color || nextColor);
+                  newId = s.id;
+                  const hasPrimary = coverageForSpace(d, space.id).some((c) => c.primary);
+                  const u = uncovered(d, rules, d.v7.spaces!.find((x) => x.id === space.id)!);
+                  setCoverage(d, space.id, s.id, !hasPrimary, hasPrimary ? u.tasks : req, true);
+                });
+                void newId;
+                setAddOpen(false);
+                setCreating(false);
+              }}>Create schedule + add this room</button>
+            </div>
+          )}
+          <button className="pbtn small" onClick={() => { setAddOpen(false); setCreating(false); }}>Cancel</button>
+        </div>
+      )}
+      <small>First schedule gets General Clean automatically; extra schedules pick up remaining tasks (e.g. High Dusting for someone else). Rooms on two schedules show striped on the map.</small>
+    </div>
   );
 }
 
 // ── Spaces tab sidebar: the room's OWN details + required tasks ─────────────
 
-function SpaceSidebar({ space, rules, onClose, onChange }: {
+function SpaceSidebar({ space, rules, onClose, onChange, onOpenEditor }: {
   space: ClassicSpace;
   rules: Rules;
   onClose: () => void;
   onChange: (patch: Partial<ClassicSpace>) => void;
+  onOpenEditor: () => void;
 }) {
   const typeId = typeIdFromLabel(rules, space.roomType ?? "");
   const carpet = isCarpet(space.floorType);
   const req = requiredTasks(rules, space);
   const issues = spaceIncomplete(space);
-  const breakdown = computeMinutes(rules, space);
 
   return (
     <aside className="pro-side">
@@ -906,6 +864,10 @@ function SpaceSidebar({ space, rules, onClose, onChange }: {
         <button className="pbtn ghost" onClick={onClose}>✕</button>
       </div>
       {issues.length > 0 && <p className="warntext">⚠ Missing: {issues.join(", ")}</p>}
+      <p className="pnote">
+        {[space.building, space.floor, space.department].map((v) => String(v ?? "").trim()).filter(Boolean).join(" · ") || " "}
+        {" "}<button className="plink" onClick={onOpenEditor}>open the full editor →</button>
+      </p>
 
       <div className="prow">
         <label className="pfield">Room number
@@ -938,15 +900,21 @@ function SpaceSidebar({ space, rules, onClose, onChange }: {
             onChange={(e) => onChange({ squareFeet: Number(e.target.value) || 0 })} />
         </label>
       </div>
-      <div className="pfield"><span>How urgent is this room?</span>
+      <div className="pfield"><span>Priority</span>
         <div className="prio">
           {PRIORITIES.map((p) => (
             <button key={p} className={"priobtn " + p.toLowerCase() + (spacePriority(space) === p ? " on" : "")}
-              onClick={() => onChange({ priority: p })}>{p}</button>
+              onClick={() => onChange({ priority: p })}>{PRIORITY_WORD[p]}</button>
           ))}
         </div>
         <small>Prints on every schedule this room appears on, so the worker knows what cannot wait.</small>
       </div>
+
+      <label className="pfield checkline">
+        <input type="checkbox" checked={spaceCleanability(rules, space) !== "Non-cleanable"}
+          onChange={(e) => onChange({ cleanability: e.target.checked ? "Cleanable" : "Non-cleanable" })} />
+        <span>Cleanable — counts toward EVS workload</span>
+      </label>
 
       <div className="prow">
         <label className="pfield">Fixtures
@@ -978,13 +946,6 @@ function SpaceSidebar({ space, rules, onClose, onChange }: {
         <small>• = automatic for this room type. Who does each task is decided on the Map tab — different tasks can go to different schedules.</small>
       </div>
 
-      <div className="pbreak">
-        <span>Full clean, all tasks</span>
-        {breakdown.lines.map((l, i) => (
-          <div key={i} className="pline"><em>{l.label}</em><b>{l.minutes.toFixed(1)}m</b></div>
-        ))}
-        <div className="pline total"><em>Total per visit</em><b>{breakdown.total} min</b></div>
-      </div>
     </aside>
   );
 }
@@ -1000,8 +961,10 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
   onOpenOnMap: (id: string) => void;
   onPrint: (id: string) => void;
 }) {
-  const [draft, setDraft] = useState({ name: "", shift: "1st Shift", employeeId: "" });
+  const [draft, setDraft] = useState({ name: "", shift: "1st Shift", employeeId: "", color: "" });
   const spaces = data.v7.spaces ?? [];
+  const usedColors = schedules.map((s) => String(s.color ?? ""));
+  const nextColor = SCHED_COLORS.find((c) => !usedColors.includes(c)) ?? SCHED_COLORS[0];
 
   return (
     <div className="pro-list">
@@ -1011,13 +974,21 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
         <select value={draft.shift} onChange={(e) => setDraft({ ...draft, shift: e.target.value })}>
           <option>1st Shift</option><option>2nd Shift</option><option>3rd Shift</option>
         </select>
-        <select value={draft.employeeId} onChange={(e) => setDraft({ ...draft, employeeId: e.target.value })}>
-          <option value="">— assign later —</option>
+        <select value={draft.employeeId} onChange={(e) => setDraft({ ...draft, employeeId: e.target.value })}
+          title="Optional — you can hand the schedule to a worker any time">
+          <option value="">Worker — add later (optional)</option>
           {(employees ?? []).map((e) => <option key={e.id} value={e.id}>{String(e.displayName ?? "")}</option>)}
         </select>
+        <span className="colorrow" title="Schedule color — how it shows on the map">
+          {SCHED_COLORS.map((c) => (
+            <button key={c} className={"colordot" + ((draft.color || nextColor) === c ? " on" : "")}
+              style={{ background: c }} aria-label={"color " + c}
+              onClick={() => setDraft({ ...draft, color: c })} />
+          ))}
+        </span>
         <button className="pbtn primary" disabled={!draft.name.trim()} onClick={() => {
-          commit((d) => { createSchedule(d, draft.name.trim(), draft.shift, draft.employeeId); });
-          setDraft({ name: "", shift: "1st Shift", employeeId: "" });
+          commit((d) => { createSchedule(d, draft.name.trim(), draft.shift, draft.employeeId, draft.color || nextColor); });
+          setDraft({ name: "", shift: "1st Shift", employeeId: "", color: "" });
         }}>Create schedule</button>
       </div>
 
@@ -1031,6 +1002,7 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
         return (
           <div key={s.id} className="schedcard" style={{ borderLeftColor: String(s.color) }}>
             <div className="schedhead">
+              <SchedColorDot sched={s} commit={commit} />
               <b>{s.num} · {s.name}</b>
               <span>{s.shift} · {s.employee || "unassigned"}</span>
               <em className={mins > target ? "over" : ""}>{mins}m of {target}m</em>
@@ -1085,6 +1057,155 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** the schedule's color, changeable in place — tap the dot, pick a new one */
+function SchedColorDot({ sched, commit }: {
+  sched: ClassicSchedule;
+  commit: (mut: (d: ClassicData) => void) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="colordot-wrap">
+      <button className="colordot big" style={{ background: String(sched.color) }}
+        title="Change this schedule's color" onClick={() => setOpen(!open)} />
+      {open && (
+        <span className="colorpop">
+          {SCHED_COLORS.map((c) => (
+            <button key={c} className={"colordot" + (c === sched.color ? " on" : "")} style={{ background: c }}
+              aria-label={"color " + c}
+              onClick={() => {
+                commit((d) => {
+                  const t = (d.v7.schedules ?? []).find((x) => x.id === sched.id);
+                  if (t) t.color = c;
+                });
+                setOpen(false);
+              }} />
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
+// ── Rooms tab: schedule from a list, not just the map ───────────────────────
+// Josh's ask (2026-08-28): "I want to be able to schedule both ways." Every
+// room in one table — what it needs, who has it — with the same instant
+// add-to-schedule as the map sidebar.
+
+function RoomsScheduleTab({ data, rules, schedules, commit, onNewSchedule }: {
+  data: ClassicData;
+  rules: Rules;
+  schedules: ClassicSchedule[];
+  commit: (mut: (d: ClassicData) => void) => void;
+  onNewSchedule: () => void;
+}) {
+  const spaces = data.v7.spaces ?? [];
+  const [q, setQ] = useState("");
+  const [fB, setFB] = useState("");
+  const [fF, setFF] = useState("");
+  const [onlyUnscheduled, setOnlyUnscheduled] = useState(false);
+
+  const opts = (get: (sp: ClassicSpace) => unknown, pred?: (sp: ClassicSpace) => boolean) =>
+    [...new Set(spaces.filter(pred ?? (() => true)).map((sp) => String(get(sp) ?? "").trim()).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+  const rows = spaces.filter((sp) => {
+    if (fB && String(sp.building ?? "").trim() !== fB) return false;
+    if (fF && String(sp.floor ?? "").trim() !== fF) return false;
+    if (onlyUnscheduled && !uncovered(data, rules, sp).baseUncovered) return false;
+    if (q && !`${sp.roomNumber} ${sp.roomName} ${sp.department}`.toLowerCase().includes(q.toLowerCase())) return false;
+    return true;
+  });
+
+  const addTo = (sp: ClassicSpace, schedId: string) => commit((d) => {
+    const hasPrimary = coverageForSpace(d, sp.id).some((c) => c.primary);
+    const u = uncovered(d, rules, d.v7.spaces!.find((x) => x.id === sp.id)!);
+    setCoverage(d, sp.id, schedId, !hasPrimary, hasPrimary ? u.tasks : requiredTasks(rules, sp), true);
+  });
+
+  return (
+    <div className="pro-list spaces">
+      <div className="pro-filters wrap">
+        <label className="psel"><span>Building</span>
+          <select value={fB} onChange={(e) => setFB(e.target.value)}>
+            <option value="">All</option>
+            {opts((s) => s.building).map((b) => <option key={b}>{b}</option>)}
+          </select>
+        </label>
+        <label className="psel"><span>Floor</span>
+          <select value={fF} onChange={(e) => setFF(e.target.value)}>
+            <option value="">All</option>
+            {opts((s) => s.floor, (s) => !fB || String(s.building ?? "").trim() === fB).map((b) => <option key={b}>{b}</option>)}
+          </select>
+        </label>
+        <label className="checkline psel">
+          <input type="checkbox" checked={onlyUnscheduled} onChange={(e) => setOnlyUnscheduled(e.target.checked)} />
+          <span>Only rooms nobody cleans yet</span>
+        </label>
+        <span className="grow" />
+        <button className="pbtn small" onClick={onNewSchedule}>＋ New schedule…</button>
+      </div>
+      <input className="wi-search wide" placeholder="🔎 Search rooms — number, name or department…"
+        value={q} onChange={(e) => setQ(e.target.value)} />
+      <p className="pnote counts">{rows.length} of {spaces.length} rooms{schedules.length === 0 ? " — make your first schedule with ＋ New schedule…" : ""}</p>
+      <div className="wi-tablewrap">
+        <table className="wi-table rooms">
+          <thead><tr>
+            <th>Room</th><th>Name</th><th>Department</th><th>Needs</th><th>On schedules</th><th>Add</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((sp) => {
+              const cov = coverageForSpace(data, sp.id);
+              const un = uncovered(data, rules, sp);
+              const req = requiredTasks(rules, sp);
+              const available = schedules.filter((s) => !cov.some((c) => c.scheduleId === s.id));
+              return (
+                <tr key={sp.id} className={un.baseUncovered ? "warn" : ""}>
+                  <td><b>{String(sp.roomNumber ?? "") || "—"}</b></td>
+                  <td>{String(sp.roomName ?? "")}</td>
+                  <td>{String(sp.department ?? "")}</td>
+                  <td className="needcell">
+                    <span className={"ptask sm" + (un.baseUncovered ? " warn" : " on")}>General Clean{un.baseUncovered ? " ⚠" : ""}</span>
+                    {req.map((t) => {
+                      const covd = cov.some((c) => c.tasks.includes(t));
+                      return <span key={t} className={"ptask sm" + (covd ? " on" : " warn")}>
+                        {rules.tasks.find((x) => x.id === t)?.label ?? t}{covd ? "" : " ⚠"}
+                      </span>;
+                    })}
+                  </td>
+                  <td className="covcell">
+                    {cov.length === 0 && <em className="dim">nobody yet</em>}
+                    {cov.map((c) => {
+                      const s = schedules.find((x) => x.id === c.scheduleId);
+                      if (!s) return null;
+                      return (
+                        <span key={c.scheduleId} className="covchip" style={{ borderColor: String(s.color) }}>
+                          <i style={{ background: String(s.color) }} />
+                          {s.num} {s.name}
+                          <button title="Take this room off the schedule"
+                            onClick={() => commit((d) => setCoverage(d, sp.id, c.scheduleId, false, []))}>✕</button>
+                        </span>
+                      );
+                    })}
+                  </td>
+                  <td>
+                    {available.length > 0 && (
+                      <select value="" onChange={(e) => { if (e.target.value) addTo(sp, e.target.value); }}>
+                        <option value="">＋ Add to…</option>
+                        {available.map((s) => <option key={s.id} value={s.id}>{s.num} · {s.name} ({s.shift})</option>)}
+                      </select>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {!rows.length && <tr><td colSpan={6}><p className="pnote">No rooms match.</p></td></tr>}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

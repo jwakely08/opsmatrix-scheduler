@@ -20,7 +20,11 @@ import {
   EQUIPMENT, DUST_MOP_SIZES, FLOORCARE_CATEGORY_OF_TASK, brandsFor, modelsFor,
   type FloorCareCategory
 } from "./equipment";
-import type { ClassicData, ClassicSpace } from "./classicStore";
+import {
+  rectifyForDisplay, pathFrom, centroidOf,
+  type ClassicData, type ClassicSpace
+} from "./classicStore";
+import { MapCanvas } from "./MapCanvas";
 
 const fmt = (n: number) => n.toLocaleString();
 const uid = (p: string) => p + "-" + Math.random().toString(36).slice(2, 9);
@@ -311,6 +315,34 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm }: {
   const eligible = useMemo(() => spaces.filter((sp) => fcEligible(rules, sp)), [spaces, rules]);
   const timing = fcTiming(rules, spaces, fc);
 
+  // ── map picking (Josh, 2026-08-28): the same map as Max Schedules, but only
+  // rooms with floor-care work are selectable — everything else is greyed out
+  const plans = data.plans ?? [];
+  const [planId, setPlanId] = useState<string | null>(plans[0]?.id ?? null);
+  const plan = plans.find((p) => p.id === planId) ?? plans[0] ?? null;
+  const [pickMode, setPickMode] = useState<"map" | "list">(() =>
+    plans.length && spaces.some((sp) => fcEligible(rules, sp) && (sp.visualPts?.length ?? 0) >= 3) ? "map" : "list");
+  const [pickRoom, setPickRoom] = useState<ClassicSpace | null>(null);
+  const mapSpaces = useMemo(
+    () => (plan ? spaces.filter((sp) => sp.visualPlanId === plan.id || !sp.visualPlanId) : []),
+    [spaces, plan]);
+  const shapes = useMemo(() => {
+    const out = new Map<string, { pts: { x: number; y: number }[]; path: string; c: { x: number; y: number } }>();
+    for (const sp of mapSpaces) {
+      if (!sp.visualPts || sp.visualPts.length < 3) continue;
+      const pts = rectifyForDisplay(sp.visualPts);
+      out.set(sp.id, { pts, path: pathFrom(pts), c: centroidOf(pts) });
+    }
+    return out;
+  }, [mapSpaces]);
+  const eligibleIds = useMemo(() => new Set(eligible.map((sp) => sp.id)), [eligible]);
+  const techColorOf = (spaceId: string): string | null => {
+    const stop = fc.stops.find((s) => s.spaceId === spaceId);
+    if (!stop) return null;
+    const i = fc.techs.findIndex((t) => t.key === stop.techKey);
+    return TECH_COLORS[i] ?? TECH_COLORS[0];
+  };
+
   const scheduledCount = (spaceId: string) => fc.stops.filter((s) => s.spaceId === spaceId).length;
   const leftForFilter = taskFilter
     ? eligible.filter((sp) => fcTasksForSpace(rules, sp).includes(taskFilter) &&
@@ -419,10 +451,66 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm }: {
             <option value="">All floor-care tasks</option>
             {fcTasks.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
           </select>
-          <input className="wi-search" placeholder="Search rooms…" value={q} onChange={(e) => setQ(e.target.value)} />
+          {plans.length > 0 && (
+            <nav className="ptabs">
+              <button className={pickMode === "map" ? "on" : ""} onClick={() => setPickMode("map")}>🗺 Map</button>
+              <button className={pickMode === "list" ? "on" : ""} onClick={() => setPickMode("list")}>☰ List</button>
+            </nav>
+          )}
+          {pickMode === "list" && (
+            <input className="wi-search" placeholder="Search rooms…" value={q} onChange={(e) => setQ(e.target.value)} />
+          )}
         </div>
 
-        <div className="fc-rooms">
+        {pickMode === "map" && plan && (
+          <div className="fc-mapwrap">
+            <MapCanvas
+              plan={plan} plans={plans} onPlan={setPlanId}
+              spaces={mapSpaces} shapes={shapes}
+              mode="floorcare"
+              fillFor={(sp) => {
+                if (!eligibleIds.has(sp.id)) return "#33404d"; // no floor-care work — not selectable
+                return techColorOf(sp.id) ?? "#475569";
+              }}
+              selectedId={pickRoom?.id ?? null}
+              onRoom={(sp) => {
+                if (!sp) { setPickRoom(null); return; }
+                if (!eligibleIds.has(sp.id)) return; // greyed-out rooms don't react
+                const options = fcTasksForSpace(rules, sp).filter((id) => !taskFilter || id === taskFilter);
+                if (options.length === 1) { addStop(sp.id, options[0]); return; }
+                setPickRoom(sp);
+              }}
+              legend={
+                <div className="pro-legend">
+                  {fc.techs.map((t, i) => (
+                    <span key={t.key}><i style={{ background: TECH_COLORS[i] }} />{t.name || `Tech ${i + 1}`}</span>
+                  ))}
+                  <span><i style={{ background: "#475569" }} />Has floor-care work</span>
+                  <span><i style={{ background: "#33404d" }} />No floor-care work (not selectable)</span>
+                </div>
+              }
+            />
+            {pickRoom && (
+              <div className="fc-mappick">
+                <b>{String(pickRoom.roomNumber ?? "")} {String(pickRoom.roomName ?? "")}</b>
+                {fcTasksForSpace(rules, pickRoom)
+                  .filter((id) => !taskFilter || id === taskFilter)
+                  .map((id) => (
+                    <button key={id} className="pbtn small" onClick={() => { addStop(pickRoom.id, id); setPickRoom(null); }}>
+                      + {taskLabel(rules, id)} · {stopMinutes(rules, pickRoom, id, fc.equipment)}m
+                    </button>
+                  ))}
+                <button className="pbtn small ghost" onClick={() => setPickRoom(null)}>✕</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {pickMode === "map" && (
+          <p className="pnote">Tap a colored room to add it as the next stop for the selected technician. Rooms are numbered in the order you tap.</p>
+        )}
+
+        {pickMode === "list" && <div className="fc-rooms">
           {rooms.map((sp) => {
             const options = fcTasksForSpace(rules, sp).filter((id) => !taskFilter || id === taskFilter);
             const n = scheduledCount(sp.id);
@@ -449,7 +537,7 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm }: {
             floor-care task in Scope (corridors and hallways come with Machine Scrubbing and Dust
             Mopping), or when you add a floor-care task to that room yourself in Max Space.
           </p>}
-        </div>
+        </div>}
       </div>
 
       <aside className="fc-rail">

@@ -41579,6 +41579,9 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
     hideClassicPlanUploadButtons();
     hideCloudManagedSettings();
     ensureNavLink();
+    fixArchivePages();
+    ensureBackButton();
+    wireMaxQuality();
   }
 
   // Max Schedules IS the consolidated hub now: the classic nav item opens it.
@@ -41587,6 +41590,33 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
     for (var i = 0; i < navBtns.length; i++) {
       var b = navBtns[i];
       var t = (b.textContent || "").trim();
+      // Max Space lives in the hub now (Explorer + Room List + Map View,
+      // rebuilt 2026-08-28 with every data point Josh asked for). The
+      // archive's own Max Space stays reachable ONLY for Floor Plans /
+      // calibration, via flags set before this button is clicked.
+      if (t === "Max Space" && !b.getAttribute("data-fusion-space-wired")) {
+        b.setAttribute("data-fusion-space-wired", "1");
+        b.addEventListener("click", function (e) {
+          if (/[?&]fp=1/.test(window.location.search)) return;           // deep link to Floor Plans
+          if (sessionStorage.getItem("fusion-goto-plans") === "1") return; // calibration flow
+          if (sessionStorage.getItem("fusion-goto-addplan") === "1") return;
+          e.preventDefault();
+          e.stopPropagation();
+          window.location.href = "./maps.html#spaces";
+        }, true);
+      }
+      // the archive's Explorer/Table strip buttons (visible on its Floor
+      // Plans screen) land on the rebuilt hub views
+      if ((t === "Explorer" || t === "Table") && !b.getAttribute("data-fusion-wired")) {
+        b.setAttribute("data-fusion-wired", "1");
+        (function (label) {
+          b.addEventListener("click", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.location.href = "./maps.html#spaces?view=" + (label === "Table" ? "list" : "explorer");
+          }, true);
+        })(t);
+      }
       if (t === "Max Schedules" && !b.getAttribute("data-fusion-wired")) {
         b.setAttribute("data-fusion-wired", "1");
         b.addEventListener("click", function (e) {
@@ -41703,24 +41733,219 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
         mapBtn.type = "button";
         mapBtn.className = anchor.className;
         mapBtn.textContent = "🗺 Map View";
-        mapBtn.addEventListener("click", function () { window.location.href = "./maps.html#spaces"; });
+        mapBtn.addEventListener("click", function () { window.location.href = "./maps.html#spaces?view=map"; });
         anchor.parentNode.insertBefore(mapBtn, anchor.nextSibling);
       }
-      // ⬆ Upload: ONE front door for bringing space data in, so nobody has to
-      // know which tab owns which file type before they can start
-      if (!document.getElementById("fusion-upload-any") && anchor.parentNode) {
-        var upBtn = document.createElement("button");
-        upBtn.id = "fusion-upload-any";
-        upBtn.type = "button";
-        upBtn.className = anchor.className;
-        upBtn.textContent = "⬆ Upload";
-        upBtn.addEventListener("click", showUploadHub);
-        anchor.parentNode.insertBefore(upBtn, anchor.parentNode.firstChild);
+      // NOTE (2026-08-28): the ⬆ Upload strip button is gone — Josh's call.
+      // The two entry points are ⬆ Import and ＋ Add Room, kept side by side.
+      // The archive's Floor Plans screen has neither, so it gets an Add Room
+      // that opens the hub's editor.
+      var hasArchiveAdd = false;
+      for (var k2 = 0; k2 < navBtns.length; k2++) {
+        if ((navBtns[k2].textContent || "").trim() === "Add Room") { hasArchiveAdd = true; break; }
+      }
+      var fAdd = document.getElementById("fusion-space-addroom");
+      if (!hasArchiveAdd && !fAdd && anchor.parentNode) {
+        fAdd = document.createElement("button");
+        fAdd.id = "fusion-space-addroom";
+        fAdd.type = "button";
+        fAdd.className = anchor.className;
+        fAdd.textContent = "＋ Add Room";
+        fAdd.addEventListener("click", function () { window.location.href = "./maps.html#spaces?view=list&add=1"; });
+        anchor.parentNode.appendChild(fAdd);
+      } else if (hasArchiveAdd && fAdd && fAdd.parentNode) {
+        fAdd.parentNode.removeChild(fAdd);
       }
       // undo the old hiding for anyone whose browser cached that build
       if (anchor.style.display === "none") anchor.style.display = "";
       openFloorPlansIfRequested(anchor);
+      openAddPlanIfRequested();
     }
+  }
+
+  /**
+   * The calibration flow (measure a room you know + border detection) is the
+   * archive's own Add Floor Plan path. Two flags drive the hop:
+   *   fusion-goto-plans   → click Floor Plans once it exists
+   *   fusion-goto-addplan → then click Add Floor Plan / Upload First Plan
+   */
+  var addPlanTries = 0;
+  function openAddPlanIfRequested() {
+    if (sessionStorage.getItem("fusion-goto-addplan") !== "1") return;
+    if (addPlanTries++ > 40) { sessionStorage.removeItem("fusion-goto-addplan"); return; }
+    var btns = document.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) {
+      var t = (btns[i].textContent || "").trim();
+      if (t === "Add Floor Plan" || t === "Upload First Plan") {
+        sessionStorage.removeItem("fusion-goto-addplan");
+        btns[i].click();
+        return;
+      }
+    }
+  }
+
+  // ── the ONE back button + the shared navigation trail ─────────────────────
+  // classic.html and maps.html keep one back-stack in sessionStorage
+  // (om_nav_stack — see src/pro/nav.ts for the hub's twin). Tokens:
+  //   "classic:<sidebar label>"  a page inside classic
+  //   "hub:<view>"               a maps.html view
+  var NAV_KEY = "om_nav_stack";
+  function navStack() {
+    try {
+      var a = JSON.parse(sessionStorage.getItem(NAV_KEY) || "[]");
+      return Array.isArray(a) ? a : [];
+    } catch (e) { return []; }
+  }
+  function navSave(s) { try { sessionStorage.setItem(NAV_KEY, JSON.stringify(s.slice(-60))); } catch (e) { /* full */ } }
+  function navVisit(tok) {
+    if (!tok) return;
+    var s = navStack();
+    if (s[s.length - 1] === tok) return;
+    s.push(tok);
+    navSave(s);
+  }
+  function navBackTarget() {
+    var s = navStack();
+    s.pop();               // the page we are on
+    var t = s.pop() || null; // where back goes (it re-registers on arrival)
+    navSave(s);
+    return t;
+  }
+  function hubHash(tok) {
+    var v = tok.replace(/^hub:/, "");
+    if (v === "map") return "";
+    if (v === "schedules" || v === "rooms") return "#tab-" + v;
+    if (v.indexOf("spaces") === 0) return "#spaces?view=" + (v.split("/")[1] || "explorer");
+    return "#" + v;
+  }
+  function clickNav(label) {
+    var btns = document.querySelectorAll(".sidebar button, #fusion-bottomnav button");
+    for (var i = 0; i < btns.length; i++) {
+      if ((btns[i].textContent || "").trim() === label) { btns[i].click(); return true; }
+    }
+    return false;
+  }
+  function fusionGoBack() {
+    var t = navBackTarget();
+    if (!t) return;
+    if (t.indexOf("hub:") === 0) { window.location.href = "./maps.html" + hubHash(t); return; }
+    var label = t.split(":")[1] || "Dashboard";
+    if (!clickNav(label)) navVisit(t); // page vanished? put it back, do nothing
+  }
+  function ensureBackButton() {
+    var host = document.querySelector(".sidebar > div");
+    var show = navStack().length >= 2;
+    var btn = document.getElementById("fusion-back");
+    if (!btn) {
+      if (!host) return;
+      btn = document.createElement("button");
+      btn.id = "fusion-back";
+      btn.type = "button";
+      btn.textContent = "‹ Back";
+      btn.setAttribute("style",
+        "margin-top:8px;display:block;padding:6px 16px;border:none;border-radius:999px;" +
+        "background:#0d9488;color:#fff;font:600 12.5px 'Segoe UI',sans-serif;cursor:pointer;");
+      btn.addEventListener("click", fusionGoBack);
+      host.appendChild(btn);
+    }
+    btn.style.display = show ? "" : "none";
+  }
+
+  // fresh-session goto: the hub's back button (or a rewire) names the classic
+  // page to land on after the reload
+  var gotoTries = 0;
+  function ensureGotoPage() {
+    var label = sessionStorage.getItem("fusion-goto-page");
+    if (!label) return;
+    if (gotoTries++ > 30) { sessionStorage.removeItem("fusion-goto-page"); return; }
+    if (clickNav(label)) sessionStorage.removeItem("fusion-goto-page");
+  }
+
+  // ── archive page fixes that must stay DOM-side (the archive is read-only) ──
+  function fixArchivePages() {
+    var btns = document.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) {
+      var t = (btns[i].textContent || "").trim();
+      // Dashboard: "Manage Training" led to Admin Settings — confusing, gone
+      if (t === "Manage Training" && btns[i].style.display !== "none") {
+        btns[i].style.display = "none";
+      }
+      // Max Calendar project tiles: the "Schedules" button duplicated what
+      // already happens automatically, and projects carry NO priority level
+      if (t === "Schedules" && btns[i].parentElement) {
+        var col = btns[i].parentElement;
+        var sibs = col.querySelectorAll("button");
+        var hasNote = false;
+        for (var j = 0; j < sibs.length; j++) {
+          if ((sibs[j].textContent || "").trim() === "Note") hasNote = true;
+        }
+        if (hasNote && sibs.length === 2) {
+          if (btns[i].style.display !== "none") btns[i].style.display = "none";
+          hideProjectPriorityBadge(col);
+        }
+      }
+    }
+  }
+  function hideProjectPriorityBadge(actionsCol) {
+    var card = actionsCol;
+    for (var up = 0; up < 4 && card; up++) {
+      card = card.parentElement;
+      if (card && card.textContent && card.textContent.indexOf("Assigned schedule") >= 0) break;
+    }
+    if (!card || !card.querySelectorAll) return;
+    var words = { medium: 1, normal: 1, high: 1, low: 1, critical: 1 };
+    var spans = card.querySelectorAll("span,div");
+    for (var i = 0; i < spans.length; i++) {
+      var tx = (spans[i].textContent || "").trim().toLowerCase();
+      if (words[tx] && spans[i].children.length === 0 && spans[i].style.display !== "none") {
+        spans[i].style.display = "none";
+      }
+    }
+  }
+
+  // ── Max reply quality: full answers, real dates, prompt caching ───────────
+  // The archive clamped every reply to 90 characters + "…" (maxCleanReply)
+  // and 320/420 output tokens — that's the truncation Josh saw. It also never
+  // told the model today's date, so "tomorrow night" earned a lecture about
+  // YYYY-MM-DD. Both fixed here; the archive stays untouched.
+  function wireMaxQuality() {
+    if (window.__fusionMaxQuality) return;
+    if (typeof window.maxFetchMessage !== "function" || typeof window.maxCleanReply !== "function") return;
+    window.__fusionMaxQuality = true;
+
+    window.maxCleanReply = function (text, fallback) {
+      var s = String(text || "").replace(/```[\s\S]*?```/g, "").trim();
+      return s || fallback || "Done.";
+    };
+
+    var origFetchMsg = window.maxFetchMessage;
+    window.maxFetchMessage = function (key, settings, body) {
+      var b = Object.assign({}, body || {});
+      // room to finish a sentence — the callers asked for 320/420
+      b.max_tokens = Math.max(Number(b.max_tokens) || 0, 1000);
+      var now = new Date();
+      var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+      var iso = function (d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); };
+      var tomorrow = new Date(now.getTime() + 86400000);
+      var extra = "\n\nCURRENT DATE & TIME: " +
+        now.toLocaleString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }) +
+        ". Today is " + iso(now) + "; tomorrow is " + iso(tomorrow) +
+        ". Resolve relative dates (today, tonight, tomorrow, next Tuesday) yourself — never ask the user to spell a date out." +
+        "\nYour whole reply is shown to the user. Keep answers short but COMPLETE — full sentences, never cut off.";
+      if (typeof b.system === "string") {
+        // block form + cache_control: the big fixed prompt (system + tools)
+        // is cached between the tool-loop's round trips — most of the 45s
+        // Josh measured was re-reading it on every hop
+        b.system = [{ type: "text", text: b.system + extra, cache_control: { type: "ephemeral" } }];
+      }
+      if (Array.isArray(b.tools) && b.tools.length) {
+        b.tools = b.tools.slice();
+        var lastT = Object.assign({}, b.tools[b.tools.length - 1]);
+        lastT.cache_control = { type: "ephemeral" };
+        b.tools[b.tools.length - 1] = lastT;
+      }
+      return origFetchMsg(key, settings, b);
+    };
   }
 
   // ── ⬆ Upload: route by what the user has, not by which screen owns it ──────
@@ -41774,6 +41999,11 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
    */
   var deepLinked = false;
   function openFloorPlansIfRequested(floorPlansBtn) {
+    if (sessionStorage.getItem("fusion-goto-plans") === "1") {
+      sessionStorage.removeItem("fusion-goto-plans");
+      floorPlansBtn.click();
+      return;
+    }
     if (deepLinked || !/[?&]fp=1/.test(window.location.search)) return;
     deepLinked = true;
     floorPlansBtn.click();
@@ -41786,15 +42016,17 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
   // lands ON the rooms, not the dashboard).
   var spaceTries = 0;
   function ensureSpaceScreen() {
+    // roads into the ARCHIVE's Max Space (Floor Plans / calibration only):
+    // ?fp=1 deep link, or the calibration flags. Room lists live in the hub.
     var wantSpace = /[?&]fp=1/.test(window.location.search) ||
-      sessionStorage.getItem("fusion-goto-space") === "1";
+      sessionStorage.getItem("fusion-goto-plans") === "1";
     if (!wantSpace || deepLinked) return;
     if (spaceTries++ > 20) { deepLinked = true; return; }
     var btns = document.querySelectorAll("button");
     for (var i = 0; i < btns.length; i++) {
       if ((btns[i].textContent || "").trim() === "Max Space") {
+        navVisit("classic:Max Space");
         btns[i].click();
-        sessionStorage.removeItem("fusion-goto-space");
         return;
       }
     }
@@ -41963,11 +42195,22 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
       "border-radius:8px;font-size:14px;font-weight:600;cursor:pointer'>Choose floor plan (image or PDF)</button>" +
       "<input id='fusion-plan-file' type='file' accept='image/*,application/pdf,.pdf' style='display:none'/>" +
       "<div id='fusion-smart-status' style='min-height:18px;font-size:12.5px;color:#0f6b62;margin-top:10px'></div>" +
+      // the calibration road back (Josh, 2026-08-28): plans with no readable
+      // sizes get the original measure-a-known-room + border-detection flow
+      "<p style='margin:10px 0 0;font-size:12.5px;color:#5b7083'>No sizes printed on the plan? " +
+      "<button id='fusion-smart-calibrate' type='button' style='border:none;background:none;padding:0;" +
+      "color:#0f6b62;text-decoration:underline;cursor:pointer;font-size:12.5px'>📐 Calibrate it yourself instead</button>" +
+      " — trace a room you know the square footage of, and OpsMatrix measures the rest (border detection included).</p>" +
       "<div style='text-align:right;margin-top:4px'>" +
       "<button id='fusion-smart-cancel' type='button' style='padding:7px 14px;border:none;background:none;" +
       "font-size:12.5px;color:#8fa3b0;cursor:pointer'>Cancel</button></div>";
     wrap.appendChild(card);
     document.body.appendChild(wrap);
+
+    document.getElementById("fusion-smart-calibrate").addEventListener("click", function () {
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+      goToCalibrate();
+    });
 
     renderKeyRow(getApiKey());
 
@@ -42036,6 +42279,17 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
         goWithProxy(null);
       }
     });
+  }
+
+  /** hop into the archive's own Add Floor Plan flow (trace + calibrate) */
+  function goToCalibrate() {
+    sessionStorage.setItem("fusion-goto-plans", "1");
+    sessionStorage.setItem("fusion-goto-addplan", "1");
+    // if we're already on the archive's Max Space, the observer takes it from
+    // here; otherwise click the nav (the rewire lets it through on the flags)
+    if (!clickNav("Max Space")) {
+      window.location.href = "./classic.html?calibrate=1";
+    }
   }
 
   function setSmartStatus(msg, isErr) {
@@ -42187,10 +42441,9 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
       "border-radius:8px;font-size:13px;font-weight:600;cursor:pointer'>Open the rooms</button></div>";
     wrap.appendChild(card);
     document.body.appendChild(wrap);
-    // land ON the rooms after the reload — not the dashboard
+    // land ON the rooms — the hub's Room List is where they live now
     document.getElementById("fusion-rl-ok").addEventListener("click", function () {
-      sessionStorage.setItem("fusion-goto-space", "1");
-      window.location.reload();
+      window.location.href = "./maps.html#spaces?view=list";
     });
   }
 
@@ -42336,11 +42589,37 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
         return s.num + " — " + (s.name || "") + " (" + (s.shift || "") + ")";
       }).join("; ") || "none yet";
     }
-    function findRoom(cx, roomNumber) {
+    /**
+     * Room lookup a person would recognize: exact number first, then
+     * suffix match ("1230" finds "C-1230"), narrowed by building/campus
+     * when given ("room 1230 in Crawfordsville" resolves itself).
+     */
+    function findRoom(cx, roomNumber, buildingHint) {
       var rn = String(roomNumber || "").trim().toLowerCase();
-      return (cx.spaces || []).find(function (s) {
+      if (!rn) return null;
+      var all = cx.spaces || [];
+      var strip = function (s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, ""); };
+      var pick = all.filter(function (s) {
         return String(s.roomNumber || "").trim().toLowerCase() === rn;
-      }) || null;
+      });
+      if (!pick.length) {
+        var rs = strip(rn);
+        if (rs) {
+          pick = all.filter(function (s) {
+            var v = strip(s.roomNumber);
+            return v && (v === rs || (v.length > rs.length && v.slice(-rs.length) === rs));
+          });
+        }
+      }
+      if (pick.length > 1 && buildingHint) {
+        var bh = String(buildingHint).trim().toLowerCase();
+        var byB = pick.filter(function (s) {
+          return String(s.building || "").toLowerCase().indexOf(bh) >= 0 ||
+            String(s.campus || "").toLowerCase().indexOf(bh) >= 0;
+        });
+        if (byB.length) pick = byB;
+      }
+      return pick[0] || null;
     }
     /** any floor wording → the fusion trio; "" when it can't be told */
     function fusionFloor(value) {
@@ -42507,6 +42786,7 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
             hours: { type: "number", description: "estimated duration, 1–8" },
             team_members: { type: "number", description: "how many people, 1–8" },
             room_number: { type: "string", description: "the room it happens in (any room)" },
+            building: { type: "string", description: "building or campus the room is in — include it when the user names one" },
             note: { type: "string" }
           }
         }
@@ -42871,7 +43151,7 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
         var hours = Math.max(1, Math.min(8, parseInt(inp.hours) || 0));
         var team = Math.max(1, Math.min(8, parseInt(inp.team_members) || 0));
         if (!hours || !team) return { success: false, error: "Hours and team members must each be 1–8." };
-        var room = inp.room_number ? findRoom(cx, inp.room_number) : null;
+        var room = inp.room_number ? findRoom(cx, inp.room_number, inp.building) : null;
         if (inp.room_number && !room) return { success: false, error: "Space " + inp.room_number + " not found" };
         var manHours = hours * team;
         var noteId = uid2("fcnote");
@@ -43130,6 +43410,7 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
     }
   }
   wireMaxFusionTools();
+  wireMaxQuality();
 
   // ── the Claude proxy bridge for the ARCHIVE's own Max assistant ────────────
   // On cloud builds, the archive's chat/voice assistant must not need (or
@@ -43251,6 +43532,13 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
     if (host.getAttribute("data-sig") === sig) return;
     host.setAttribute("data-sig", sig);
     host.innerHTML = "";
+    // the universal back button rides the phone strip too, always first
+    var backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.textContent = "‹ Back";
+    backBtn.style.color = "#2dd4bf";
+    backBtn.addEventListener("click", fusionGoBack);
+    host.appendChild(backBtn);
     sidebarBtns.forEach(function (b) {
       var btn = document.createElement("button");
       btn.type = "button";
@@ -43262,9 +43550,58 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
 
   // the classic app re-renders constantly; keep our button present cheaply
   // (demo seeding lives in fusion-seed.js, injected BEFORE the app's script)
-  var mo = new MutationObserver(function () { ensureSpaceScreen(); ensureButton(); ensureMobileNav(); });
+  var mo = new MutationObserver(function () { ensureSpaceScreen(); ensureGotoPage(); ensureButton(); ensureMobileNav(); });
   function boot() {
+    // ?calibrate=1 (from the hub's plan-upload dialog): straight into the
+    // archive's Add Floor Plan flow — trace a known room, calibrate, detect
+    if (/[?&]calibrate=1/.test(window.location.search)) {
+      sessionStorage.setItem("fusion-goto-plans", "1");
+      sessionStorage.setItem("fusion-goto-addplan", "1");
+    }
+    // the navigation trail: classic always boots on the Dashboard unless a
+    // goto flag immediately moves it (those pushes happen on arrival)
+    if (!sessionStorage.getItem("fusion-goto-page") &&
+        !/[?&](fp|calibrate)=1/.test(window.location.search) &&
+        sessionStorage.getItem("fusion-goto-plans") !== "1") {
+      navVisit("classic:Dashboard");
+    }
+    // record every sidebar navigation (capture — before React re-renders);
+    // pages that leave for the hub push their own token on arrival instead
+    document.addEventListener("click", function (e) {
+      var el = e.target;
+      while (el && el.nodeName !== "BUTTON") el = el.parentElement;
+      if (!el) return;
+      var p = el, inNav = false;
+      while (p && p !== document.body) {
+        var cn = String(p.className || "");
+        if (cn.indexOf("sidebar") >= 0 || p.id === "fusion-bottomnav") { inNav = true; break; }
+        p = p.parentElement;
+      }
+      if (!inNav) return;
+      var label = (el.textContent || "").trim();
+      if (!label || label === "‹ Back") return;
+      if (label.indexOf("Ask Max") >= 0 || label === "Sign out") return;
+      if (label === "Max Schedules" || label === "Max Floor Care" || label === "Max Space") return; // hub pages
+      navVisit("classic:" + label);
+    }, true);
+    // Dashboard's "Schedule Reminders" tile belongs to Max Calendar (Josh:
+    // "clicking it takes you to Max Team, which doesn't make sense")
+    document.addEventListener("click", function (e) {
+      var el = e.target;
+      while (el && el !== document.body) {
+        if (String(el.className || "").indexOf("ops-tile") >= 0) {
+          if ((el.textContent || "").indexOf("Schedule Reminders") >= 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            clickNav("Max Calendar");
+          }
+          return;
+        }
+        el = el.parentElement;
+      }
+    }, true);
     ensureSpaceScreen();
+    ensureGotoPage();
     ensureButton();
     ensureMobileNav();
     // cloud builds only (all no-ops on local/demo builds):
