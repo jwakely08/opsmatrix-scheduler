@@ -83,8 +83,12 @@ install of the CLI is not supported — npx fetches it on demand). One-time:
 
 ```bash
 npx supabase@latest functions deploy claude-proxy --no-verify-jwt --project-ref <PROJECT_REF>
-# enter the key with a hidden prompt so it never lands in shell history:
+# enter the key with a hidden prompt so it never lands in shell history;
+# the tr strips invisible characters (a Windows carriage return smuggled in
+# by a hidden paste once broke every request with "failed to parse header
+# value" — the proxy also sanitizes on read, but clean at the source too):
 read -r -s -p "Anthropic API key for this environment: " AK; echo
+AK=$(printf '%s' "$AK" | tr -d '[:space:]')
 npx supabase@latest secrets set --project-ref <PROJECT_REF> \
   ANTHROPIC_API_KEY="$AK" \
   ALLOWED_ORIGINS=<that environment's page origins, comma-separated> \

@@ -40,6 +40,17 @@ function reply(status: number, body: unknown, cors: Record<string, string>): Res
   });
 }
 
+/**
+ * Secrets pasted through terminals pick up invisible characters — a Windows
+ * carriage return survived a hidden `read` prompt and made every upstream
+ * call throw "failed to parse header value" (the entire first staging AI
+ * outage). Strip ALL whitespace/control characters on read so no paste can
+ * ever poison a header again.
+ */
+function sanitizeSecret(v: string): string {
+  return v.replace(/[\s\r\n\t]+/g, "");
+}
+
 Deno.serve(async (req) => {
   const origin = req.headers.get("origin") ?? "";
   const allowed = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
@@ -56,12 +67,14 @@ Deno.serve(async (req) => {
   // Anthropic and reports the outcome — status + a short error/reply sample
   // — so "can the server reach Claude?" is answerable without a browser.
   if (req.method === "GET") {
-    const key = Deno.env.get("ANTHROPIC_API_KEY");
+    const rawKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+    const key = sanitizeSecret(rawKey);
     const model = (Deno.env.get("FORCE_MODEL") ?? "claude-fable-5").trim() || "claude-fable-5";
     const out: Record<string, unknown> = {
       ok: true,
-      has_anthropic_key: typeof key === "string" && key.length > 0,
-      anthropic_key_length: key ? key.length : 0,
+      has_anthropic_key: key.length > 0,
+      anthropic_key_length: key.length,
+      key_had_stray_characters: rawKey.length !== key.length,
       allowed_origins: allowed,
       force_model: model,
       monthly_token_budget: Number(Deno.env.get("AI_MONTHLY_TOKEN_BUDGET") ?? "20000000")
@@ -133,7 +146,7 @@ Deno.serve(async (req) => {
       body = JSON.stringify(j);
     } catch { /* unparseable — forward as-is; Anthropic will reject it anyway */ }
   }
-  const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
+  const anthropicKey = sanitizeSecret(Deno.env.get("ANTHROPIC_API_KEY") ?? "");
   if (!anthropicKey) {
     console.error("claude-proxy: ANTHROPIC_API_KEY secret is missing or empty");
     return reply(502, { error: { message: "The AI service is not configured yet (missing server key). Contact OpsMatrix." } }, cors);
