@@ -8,7 +8,7 @@ const WALL_STROKE = 13;
 
 // ── the map canvas (shared by Map + Spaces tabs, and Floor Care's builder) ──
 
-export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, selectedId, onRoom, legend, mode }: {
+export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, flagFor, selectedId, onRoom, legend, mode }: {
   plan: NonNullable<ClassicData["plans"][0]>;
   plans: ClassicData["plans"];
   onPlan: (id: string) => void;
@@ -17,6 +17,8 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
   fillFor: (sp: ClassicSpace) => string;
   /** second schedule's color → the room renders two-tone striped */
   overlayFor?: (sp: ClassicSpace) => string | null;
+  /** a small marker on the room (e.g. ⚠ when its tasks aren't all scheduled) */
+  flagFor?: (sp: ClassicSpace) => string | null;
   selectedId: string | null;
   onRoom: (sp: ClassicSpace | null) => void;
   legend: React.ReactNode;
@@ -185,6 +187,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
             const mins = Number(sp.estimatedCleaningMinutes) || 0;
             return (
               <g key={"l" + sp.id} className="prolabel" transform={`translate(${sh.c.x} ${sh.c.y}) scale(${1 / Math.max(0.6, view.k)})`}>
+                {flagFor?.(sp) && <text className="proflag" y={-22}>{flagFor(sp)}</text>}
                 <text y={-4}>{sp.roomNumber || sp.roomName}</text>
                 <text className="sub" y={12}>{Math.round(Number(sp.squareFeet) || 0)} ft² · {mins}m</text>
               </g>

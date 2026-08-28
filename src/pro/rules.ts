@@ -303,6 +303,26 @@ export function requiredTasks(rules: Rules, space: SpaceLike): string[] {
   return autoTasksFor(rules, typeIdFromLabel(rules, space.roomType ?? ""));
 }
 
+/** is this task the floor crew's (scheduled ONLY in Max Floor Care)? */
+export function isFloorCareTask(rules: Rules, taskId: string): boolean {
+  return Boolean(rules.tasks.find((t) => t.id === taskId)?.floorCare);
+}
+
+/**
+ * A room's required tasks split by WHO schedules them (Josh's rule,
+ * 2026-08-28: floor-care work — machine scrubbing, dust mopping, burnishing,
+ * machine sweeping, machine carpet cleaning, and anything a manager flags as
+ * floor care in Scope — can never be put on a schedule in Max Schedules;
+ * it belongs to Max Floor Care exclusively).
+ */
+export function splitRequiredTasks(rules: Rules, space: SpaceLike): { cleaning: string[]; floorCare: string[] } {
+  const req = requiredTasks(rules, space);
+  return {
+    cleaning: req.filter((id) => !isFloorCareTask(rules, id)),
+    floorCare: req.filter((id) => isFloorCareTask(rules, id))
+  };
+}
+
 export interface MinuteOptions {
   /** compute only these extra tasks (default: the space's required tasks) */
   tasks?: string[];

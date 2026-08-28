@@ -744,3 +744,31 @@ em.dim { color: #64748b; font-style: normal; }
   .expltiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .fc-mapwrap { height: 360px; }
 }
+
+/* ── 2026-08-28 evening batch ── */
+/* the not-fully-scheduled marker on map rooms */
+.proflag { font-size: 16px; text-anchor: middle; paint-order: stroke; stroke: #0f1a2e; stroke-width: 3px; }
+
+/* floor-care task chips: visibly a different crew's work */
+.ptask.fc { border-style: dashed; }
+
+/* Scope per-section save */
+.scopesave { display: flex; justify-content: flex-end; margin: 6px 0 22px; }
+.scopesave .pbtn[disabled] { opacity: .55; cursor: default; }
+
+/* calibrate-with-Max: the known-rooms list */
+.callist {
+  max-height: 300px; overflow-y: auto; border: 1px solid rgba(148,163,184,.18);
+  border-radius: 10px; padding: 6px 10px; margin-bottom: 12px;
+}
+.calrow {
+  display: flex; align-items: center; gap: 10px; padding: 6px 2px;
+  border-bottom: 1px solid rgba(148,163,184,.08);
+}
+.calrow:last-child { border-bottom: none; }
+.calrow b { color: #e2e8f0; font-size: 13px; min-width: 90px; }
+.calrow span { flex: 1; color: #94a3b8; font-size: 12px; }
+.calrow input {
+  width: 90px; background: #0f1a2e; border: 1px solid rgba(148,163,184,.25);
+  border-radius: 7px; color: #e2e8f0; padding: 6px 8px; font-size: 13px;
+}
