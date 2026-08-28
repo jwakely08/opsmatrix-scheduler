@@ -83,17 +83,28 @@ install of the CLI is not supported — npx fetches it on demand). One-time:
 
 ```bash
 npx supabase@latest functions deploy claude-proxy --no-verify-jwt --project-ref <PROJECT_REF>
-# enter the key with a hidden prompt so it never lands in shell history;
-# the tr strips invisible characters (a Windows carriage return smuggled in
-# by a hidden paste once broke every request with "failed to parse header
-# value" — the proxy also sanitizes on read, but clean at the source too):
+# THE KEY RITUAL — learned the hard way on staging. Anthropic shows a key
+# exactly ONCE at creation; a bad copy at that moment is unrecoverable, so:
+# mint the key fresh in the console, use the dialog's COPY BUTTON, and paste
+# it here while the dialog is open. This block sanitizes the paste to
+# printable ASCII (clipboards smuggle invisible characters), VERIFIES the
+# key against Anthropic, and stores it ONLY on success — never trust an
+# unverified paste:
 read -r -s -p "Anthropic API key for this environment: " AK; echo
-AK=$(printf '%s' "$AK" | tr -d '[:space:]')
-npx supabase@latest secrets set --project-ref <PROJECT_REF> \
-  ANTHROPIC_API_KEY="$AK" \
-  ALLOWED_ORIGINS=<that environment's page origins, comma-separated> \
-  AI_MONTHLY_TOKEN_BUDGET=20000000
-unset AK
+AK=$(printf '%s' "$AK" | tr -cd '\41-\176')
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api.anthropic.com/v1/messages \
+  -H "x-api-key: $AK" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+  -d '{"model":"claude-fable-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}')
+echo "key check: $STATUS"
+if [ "$STATUS" = "200" ]; then
+  npx supabase@latest secrets set --project-ref <PROJECT_REF> \
+    ANTHROPIC_API_KEY="$AK" \
+    ALLOWED_ORIGINS=<that environment's page origins, comma-separated> \
+    AI_MONTHLY_TOKEN_BUDGET=20000000
+else
+  echo "NOT STORED (status $STATUS) — mint a fresh key and run this block again"
+fi
+unset AK STATUS
 ```
 
 The proxy PINS the model server-side (default `claude-fable-5`) — users
