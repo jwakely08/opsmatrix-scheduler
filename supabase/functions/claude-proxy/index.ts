@@ -49,6 +49,20 @@ Deno.serve(async (req) => {
 
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
   if (!originOk) return reply(403, { error: { message: "This origin may not use the OpsMatrix AI service." } }, cors);
+
+  // GET = health/config sanity check (booleans and lengths ONLY — never
+  // secret values). `curl <url>` answers "is this function configured?"
+  if (req.method === "GET") {
+    const key = Deno.env.get("ANTHROPIC_API_KEY");
+    return reply(200, {
+      ok: true,
+      has_anthropic_key: typeof key === "string" && key.length > 0,
+      anthropic_key_length: key ? key.length : 0,
+      allowed_origins: allowed,
+      force_model: (Deno.env.get("FORCE_MODEL") ?? "claude-fable-5").trim(),
+      monthly_token_budget: Number(Deno.env.get("AI_MONTHLY_TOKEN_BUDGET") ?? "20000000")
+    }, cors);
+  }
   if (req.method !== "POST") return reply(405, { error: { message: "POST only." } }, cors);
 
   // ── who is asking, and which organization do they belong to ──
@@ -101,18 +115,25 @@ Deno.serve(async (req) => {
       body = JSON.stringify(j);
     } catch { /* unparseable — forward as-is; Anthropic will reject it anyway */ }
   }
+  const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
+  if (!anthropicKey) {
+    console.error("claude-proxy: ANTHROPIC_API_KEY secret is missing or empty");
+    return reply(502, { error: { message: "The AI service is not configured yet (missing server key). Contact OpsMatrix." } }, cors);
+  }
   let upstream: Response;
   try {
     upstream = await fetch(ANTHROPIC_URL, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY")!,
+        "x-api-key": anthropicKey,
         "anthropic-version": req.headers.get("anthropic-version") ?? "2023-06-01"
       },
       body
     });
-  } catch {
+  } catch (e) {
+    // reason only — never request/response contents
+    console.error("claude-proxy: upstream fetch failed:", String((e as Error)?.message ?? e));
     return reply(502, { error: { message: "Could not reach Claude. Try again in a moment." } }, cors);
   }
 
