@@ -370,6 +370,20 @@
 
     renderKeyRow(getApiKey());
 
+    // cloud accounts: AI reading is included — the server holds the key
+    var proxy = null;
+    if (window.OpsMatrixFusion && typeof window.OpsMatrixFusion.aiProxy === "function") {
+      window.OpsMatrixFusion.aiProxy().then(function (p) {
+        if (!p) return;
+        proxy = p;
+        var row = document.getElementById("fusion-keyrow");
+        if (row) {
+          row.innerHTML = "<p style='margin:0 0 10px;font-size:12.5px;color:#0f6b62'>" +
+            "✓ AI reading is included with your OpsMatrix account.</p>";
+        }
+      }).catch(function () { /* direct mode still works */ });
+    }
+
     function renderKeyRow(key) {
       var row = document.getElementById("fusion-keyrow");
       if (!row) return;
@@ -403,7 +417,7 @@
 
     var fileInput = document.getElementById("fusion-plan-file");
     document.getElementById("fusion-smart-go").addEventListener("click", function () {
-      if (!getApiKey()) { setSmartStatus("Save the API key above first — one time only.", true); return; }
+      if (!getApiKey() && !proxy) { setSmartStatus("Save the API key above first — one time only.", true); return; }
       fileInput.click();
     });
     fileInput.addEventListener("change", function () {
@@ -412,7 +426,7 @@
       if (!file) return;
       var building = (document.getElementById("fusion-plan-building").value || "").trim();
       var floor = (document.getElementById("fusion-plan-floor").value || "").trim();
-      runSmartImport(file, building, floor, getApiKey(), close);
+      runSmartImport(file, building, floor, getApiKey(), close, proxy);
     });
   }
 
@@ -421,13 +435,14 @@
     if (el) { el.textContent = msg; el.style.color = isErr ? "#c34444" : "#0f6b62"; }
   }
 
-  function runSmartImport(file, building, floor, key, closeOverlay) {
+  function runSmartImport(file, building, floor, key, closeOverlay, proxy) {
     var go = document.getElementById("fusion-smart-go");
     if (go) { go.disabled = true; go.textContent = "Working…"; }
     setSmartStatus("Opening " + file.name + "…");
     fileToPlanImage(file).then(function (picture) {
       return window.OpsMatrixFusion.importPlanFromImage({
         apiKey: key,
+        proxy: proxy || null,
         imageDataUrl: picture.dataUrl,
         imageWidth: picture.width,
         imageHeight: picture.height,
@@ -1507,6 +1522,48 @@
   }
   wireMaxFusionTools();
 
+  // ── the Claude proxy bridge for the ARCHIVE's own Max assistant ────────────
+  // On cloud builds with a signed-in account, the archive's chat/voice
+  // assistant must not need (or expose) a browser API key: its calls to
+  // api.anthropic.com are re-routed to the server-side claude-proxy, which
+  // holds the organization's key and meters usage. The archive is untouched
+  // — only this page's fetch to that ONE exact URL is redirected, with a
+  // fresh session token per call. Local builds and signed-out sessions:
+  // nothing is wrapped, direct mode works exactly as always.
+  function wireAiProxy() {
+    if (window.__fusionAiProxyWired) return;
+    var F = window.OpsMatrixFusion;
+    if (!F || typeof F.aiProxy !== "function" || !F.cloudConfigured) return;
+    window.__fusionAiProxyWired = true;
+    F.aiProxy().then(function (probe) {
+      if (!probe) return; // signed out → direct mode, untouched
+      var origFetch = window.fetch.bind(window);
+      window.fetch = function (input, init) {
+        var url = typeof input === "string" ? input : (input && input.url) || "";
+        if (url !== "https://api.anthropic.com/v1/messages") return origFetch(input, init);
+        return F.aiProxy().then(function (p) {
+          if (!p) return origFetch(input, init); // session gone → let direct mode try
+          var headers = new Headers((init && init.headers) || {});
+          headers.delete("x-api-key");
+          headers.delete("anthropic-dangerous-direct-browser-access");
+          headers.set("authorization", "Bearer " + p.token);
+          headers.set("x-opsmatrix-feature", "max-chat");
+          return origFetch(p.url, Object.assign({}, init, { headers: headers }));
+        });
+      };
+      // The archive hides its Max features until a key is saved. Under the
+      // proxy the ACCOUNT is the key, so satisfy that check with a marker
+      // value that never reaches Anthropic (auth is swapped on every call).
+      if (!getApiKey()) {
+        setApiKey("managed-by-opsmatrix-cloud");
+        if (!sessionStorage.getItem("fusion-proxy-reloaded")) {
+          sessionStorage.setItem("fusion-proxy-reloaded", "1");
+          window.location.reload();
+        }
+      }
+    }).catch(function () { /* proxy probe failed → direct mode, untouched */ });
+  }
+
   // ── phone bottom nav: one strip that slides, EVERY destination on it ───────
   // Classic's own mobile bar shows four items plus a "More" grid; on a phone
   // that hid Max Floor Care (and made everything two taps). This replaces it
@@ -1562,6 +1619,12 @@
     ensureSpaceScreen();
     ensureButton();
     ensureMobileNav();
+    // cloud builds only: mirror this page's data to the organization (no-op
+    // on the demo/local builds and when nobody is signed in — see fusionEntry)
+    if (window.OpsMatrixFusion && typeof window.OpsMatrixFusion.startCloudSync === "function") {
+      try { window.OpsMatrixFusion.startCloudSync(); } catch (e) { /* stays local */ }
+    }
+    wireAiProxy();
     // characterData too: React swaps some labels (e.g. the plan picker's) by
     // rewriting the text node in place, which is not a childList mutation.
     // Our relabels are guarded by an exact-match test, so this cannot loop.

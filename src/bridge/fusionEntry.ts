@@ -354,3 +354,20 @@ export {
   loadFloorCare, saveFloorCare, fcTiming, floorCareTasks, FC_PROJECT_TASKS
 } from "../pro/floorcare";
 export { EQUIPMENT, DUST_MOP_SIZES, brandsFor, modelsFor } from "../pro/equipment";
+
+// Cloud sync for classic.html: mirrors this page's workspace to the org when
+// the build is cloud-configured AND a fully-verified session exists (people
+// sign in on the hub; same origin, shared session). Local/demo builds and
+// signed-out sessions: silent no-op — classic behaves exactly as always.
+import { startBackgroundSync } from "../pro/syncEngine";
+import { cloud as cloudClient, cloudConfigured as isCloudConfigured } from "../pro/cloud";
+export const cloudConfigured = isCloudConfigured;
+export function startCloudSync(): void {
+  if (!isCloudConfigured) return;
+  void startBackgroundSync({ cloud: cloudClient }).catch(() => undefined);
+}
+
+// AI transport for classic.html: null in local builds or signed-out sessions
+// (→ the direct user-key mode, unchanged), or {url, token} for the
+// server-side claude-proxy on cloud builds (fresh token per call).
+export { aiProxy } from "../pro/aiTransport";

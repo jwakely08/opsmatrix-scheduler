@@ -2,11 +2,12 @@
 // let Claude Fable 5 turn it into a real OpsMatrix plan: rooms traced, room
 // numbers and printed areas captured, and the whole thing redrawn in the app's
 // own style so it looks like every other plan in the system.
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { importPlanFromImage, AiPlanError } from "../bridge/aiPlanImport";
 import { attachPlanToRooms } from "./roomListImport";
 import { planFileToImage, isPdf } from "./planFile";
 import { loadApiKey, saveApiKey } from "./classicStore";
+import { aiProxy } from "./aiTransport";
 import type { ClassicData } from "./classicStore";
 
 type Phase = "form" | "working" | "done" | "error";
@@ -30,7 +31,11 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ rooms: number; printed: number; scaled: boolean } | null>(null);
+  // cloud accounts: AI reading is included — the server holds the key
+  const [proxied, setProxied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { void aiProxy().then((p) => setProxied(Boolean(p))); }, []);
 
   const close = () => { setPhase("form"); setError(""); setStatus(""); setResult(null); onClose(); };
 
@@ -43,9 +48,11 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
 
       const key = apiKey.trim();
       if (key && key !== loadApiKey()) saveApiKey(key);
+      const proxy = await aiProxy();
 
       const imported = await importPlanFromImage({
         apiKey: key,
+        proxy,
         imageDataUrl: picture.dataUrl,
         imageWidth: picture.width,
         imageHeight: picture.height,
@@ -111,7 +118,9 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
                   </label>
                 </div>
 
-                {keySaved ? (
+                {proxied ? (
+                  <p className="pnote keysaved">✓ AI reading is included with your OpsMatrix account.</p>
+                ) : keySaved ? (
                   <p className="pnote keysaved">
                     ✓ API key saved on this device{apiKey.length > 4 ? ` (…${apiKey.slice(-4)})` : ""} ·{" "}
                     <button className="plink" onClick={() => { setKeySaved(false); setApiKey(""); }}>change</button>
@@ -135,11 +144,11 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
 
                 {error && <p className="warntext">⚠ {error}</p>}
 
-                <button className="pbtn primary wide" disabled={!keySaved}
+                <button className="pbtn primary wide" disabled={!keySaved && !proxied}
                   onClick={() => fileRef.current?.click()}>
                   Choose floor plan (image or PDF)
                 </button>
-                {!keySaved && <small className="pnote">Save the API key above first — one time only.</small>}
+                {!keySaved && !proxied && <small className="pnote">Save the API key above first — one time only.</small>}
 
                 <input ref={fileRef} type="file" style={{ display: "none" }}
                   accept="image/*,application/pdf,.pdf"

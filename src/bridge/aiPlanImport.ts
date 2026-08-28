@@ -182,21 +182,53 @@ export function padBox(box: DrawingBox, pad = 0.02): DrawingBox {
   };
 }
 
+/**
+ * How a request reaches Claude. Two transports, decided per call:
+ *   • DIRECT (default, unchanged): the user's own key from this device,
+ *     straight to api.anthropic.com — the standalone/demo mode.
+ *   • PROXY (cloud builds, signed-in): the server-side claude-proxy edge
+ *     function — the ORG's key lives on the server, the browser sends only
+ *     its session token, usage is metered per organization.
+ */
+export interface AiProxy { url: string; token: string }
+
+export function anthropicRequest(apiKey: string, proxy?: AiProxy | null, feature?: string): {
+  url: string; headers: Record<string, string>;
+} {
+  if (proxy && proxy.url) {
+    return {
+      url: proxy.url,
+      headers: {
+        "content-type": "application/json",
+        "authorization": "Bearer " + proxy.token,
+        "anthropic-version": "2023-06-01",
+        ...(feature ? { "x-opsmatrix-feature": feature } : {})
+      }
+    };
+  }
+  return {
+    url: API_URL,
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey.trim(),
+      "anthropic-version": "2023-06-01",
+      // required for calling the API straight from a browser page
+      "anthropic-dangerous-direct-browser-access": "true"
+    }
+  };
+}
+
 /** ask where the drawing is; null (never a throw) when it cannot say */
 export async function locateDrawing(
-  opts: Pick<ReadPlanOptions, "apiKey" | "imageDataUrl" | "model" | "signal">
+  opts: Pick<ReadPlanOptions, "apiKey" | "imageDataUrl" | "model" | "signal" | "proxy">
 ): Promise<DrawingBox | null> {
   try {
     const { mediaType, data } = splitDataUrl(opts.imageDataUrl);
-    const res = await fetch(API_URL, {
+    const t = anthropicRequest(opts.apiKey, opts.proxy, "plan-locate");
+    const res = await fetch(t.url, {
       method: "POST",
       signal: opts.signal,
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": opts.apiKey.trim(),
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
+      headers: t.headers,
       body: JSON.stringify({
         model: opts.model || AI_MODEL,
         max_tokens: 2000,
@@ -232,6 +264,8 @@ export interface PlanPicture {
 
 export interface ReadPlanOptions {
   apiKey: string;
+  /** cloud builds: route through the server-side proxy instead of the key */
+  proxy?: AiProxy | null;
   /** the plan picture, as a data URL (PNG/JPEG) */
   imageDataUrl: string;
   /** pixel size of that picture — lets pixel-scale answers be undone exactly */
@@ -257,7 +291,7 @@ function splitDataUrl(dataUrl: string): { mediaType: string; data: string } {
 /** Ask Fable 5 to read the plan. Network only — no drawing happens here. */
 export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReading> {
   const key = (opts.apiKey || "").trim();
-  if (!key) {
+  if (!key && !opts.proxy) {
     throw new AiPlanError(
       "No Anthropic API key saved yet. Add one under Admin Settings → Max AI, then try again."
     );
@@ -265,18 +299,13 @@ export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReadi
   const { mediaType, data } = splitDataUrl(opts.imageDataUrl);
   opts.onProgress?.("Max is reading your floor plan…");
 
+  const t = anthropicRequest(key, opts.proxy, "plan-read");
   let res: Response;
   try {
-    res = await fetch(API_URL, {
+    res = await fetch(t.url, {
       method: "POST",
       signal: opts.signal,
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-        // required for calling the API straight from a browser page
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
+      headers: t.headers,
       body: JSON.stringify({
         model: opts.model || AI_MODEL,
         max_tokens: 16000,

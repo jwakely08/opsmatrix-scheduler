@@ -26,12 +26,11 @@ or medical information, and no database column to hold them.
 | Path | What it is |
 |---|---|
 | `src/` | The production app — Vite + React + TypeScript |
-| `supabase/migrations/0001_init.sql` | Full database schema + row-level security + RPCs |
-| `opsmatrix-scheduler.html` | Phase A single-file version (works by double-clicking; same features, localStorage only) |
+| `supabase/migrations/` | Full database schema + row-level security + RPCs |
 | `opsmatrix-v5-maxplans.html` | Josh's original OpsMatrix — **untouched archive** |
-| `files/` | Original importer + phase specs (archive) |
 | `test-fixtures/` | magicplan-format test files + generator (see note below) |
-| `vercel.json` | Vercel deploy configuration |
+| `archive/` | Historical artifacts (phase-A single-file app, original importer, old prompts) — not part of the product |
+| `SETUP_PRODUCTION.md` | The production activation runbook (Cloudflare + Supabase + secrets) |
 
 > **Test-fixture note:** `test-fixtures/` contains Josh's REAL magicplan
 > exports (added 2026-08-04) — they are read-only ground truth. The whole test
@@ -105,9 +104,9 @@ every push to `main`. The published site has no Supabase keys, so it runs in
 `…/?demo=1` to open it pre-seeded with the sample building (generated from the
 test-file data). One-time setup lives in the checklist below.
 
-**Vercel (optional, later — needed for the multi-user backend):** import the
-repo in Vercel (framework auto-detected via `vercel.json`), add the two env
-vars, deploy. Use this when you want login/roles/shared data on the internet.
+**Cloudflare Pages (production/staging):** the customer-facing environments
+deploy to Cloudflare Pages via `.github/workflows/` — see `SETUP_PRODUCTION.md`
+for the one-time account, secrets, and domain setup.
 
 ---
 
@@ -149,11 +148,11 @@ redeploys the site automatically; no further manual steps ever.
 
 Note: GitHub Pages on a free account requires the repo to be **public**.
 
-### (Optional, later) Vercel — for the multi-user backend
+### (Later) Cloudflare Pages — the production hosting
 
-When you want login/roles/shared data hosted: import the repo at
-https://vercel.com, add `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` in
-project settings, deploy. `vercel.json` is already in place.
+The staged production setup (three environments, secrets, headers, custom
+domain) is fully written out in `SETUP_PRODUCTION.md` — follow it top to
+bottom when it's time to launch.
 
 ### 3. When you get the real magicplan exports
 

@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-08-24 (cleanup session: ONE upload flow §12, Floor Care eligibility + industry-real machine times §12c, API key that survives everything §4, React/Tailwind vendored — zero CDN on classic.html). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -97,7 +97,7 @@ The user's Anthropic API key lives in TWO slots (fixed 2026-08-24 — Josh's key
 4. Face↔room assignment: one-to-one, by contained label text (fuzzy `matchLabel`) ranked by CSV-area agreement — survives duplicate names (real scan has 3 rooms named "Bedroom"). Unique-area rescue for missing labels; `hullClosureStrips` (inward-biased) for open scan sides.
 - Real-scan results (locked in tests): Bedroom 420.25→421.41 (0.28%), Bedroom 141.53→141.46, Bedroom 71.84→71.96, Other 20.60→18.11 (magicplan counts doorway-threshold floor; tolerance = 5% OR 3 sq ft absolute, documented).
 - `mergeShapes` unions rooms through their doorways (door patches as bridges; refuses if no connecting door); walls between merged rooms survive as holes.
-- **Ground truth fixtures**: `test-fixtures/Test_project_-_1st_Floor.dxf` + `Test_project_Statistics.csv` are **Josh's REAL magicplan exports (READ-ONLY — never regenerate/substitute)**. History note: earlier fixtures were synthetic stand-ins I generated (fully disclosed + audited on 2026-08-05); Josh then provided the real files and everything was rebuilt/validated against them. **172 vitest tests green (`npm test`)**: parsers, geometry (incl. damaged-scan robustness), compute engine of the old React app, schedule-doc generation (§10), the AI plan reader (§11), and the CAD room-list importer + workload engine (§12a).
+- **Ground truth fixtures**: `test-fixtures/Test_project_-_1st_Floor.dxf` + `Test_project_Statistics.csv` are **Josh's REAL magicplan exports (READ-ONLY — never regenerate/substitute)**. History note: earlier fixtures were synthetic stand-ins I generated (fully disclosed + audited on 2026-08-05); Josh then provided the real files and everything was rebuilt/validated against them. **193 vitest tests green (`npm test`)**: parsers, geometry (incl. damaged-scan robustness), compute engine of the old React app, schedule-doc generation (§10), the AI plan reader (§11), and the CAD room-list importer + workload engine (§12a).
 
 ## 9. DEMO SEED (critical for Josh's client demos)
 
@@ -180,10 +180,21 @@ Every hub view (Map, Schedules, #spaces, #scope, #workload, #floorcare) now has 
 - Verified at iPhone viewport (393×852, touch): 13/13 — no horizontal overflow on any view, sheet interactions, zoom buttons, stacked builder.
 - **Real-device fixes (Josh's iPhone testing)**: (1) tap slop — a fingertip wobbles, so touch taps get a 14px total-travel budget before counting as a drag (mouse keeps 5px); without it real thumbs couldn't select rooms. (2) During legend-assign mode on phones the room sheet stays CLOSED so rooms can be tapped rapid-fire (recolor = feedback); a plain tap still opens the sheet. (3) Classic's mobile bottom bar (4 items + "More" grid) is hidden on ≤767px and replaced by `#fusion-bottomnav` (fusion-ui `ensureMobileNav`): one horizontally sliding strip built FROM the sidebar's buttons, so every destination — fusion additions like Max Floor Care included — is one thumb-slide away, and anything added to the sidebar later appears automatically.
 
+## 12e. PRODUCTION CLOUD MODE (added 2026-08-26 — dormant until activated)
+
+**The mode rule:** a build with no `VITE_SUPABASE_*` env vars is LOCAL mode — exactly the app described everywhere above, demo included, verified bit-identical (no login, no cloud code even downloaded). Cloud mode exists only in builds made with those vars (staging/production pipelines). Activation is human steps in **`SETUP_PRODUCTION.md`** — nothing is live yet.
+
+- **Data**: `src/pro/workspaceStore.ts` defines THE workspace (7 localStorage stores; the API key is stripped from anything that leaves the device — tested). Scope page has a **Data backup** card (download/restore one file). `src/pro/syncEngine.ts` mirrors the workspace to org-scoped `workspaces` rows (migration `0002_production.sql`) with `state_rev` optimistic concurrency, delta pushes, pure-truth-table decisions (unit-tested), honest conflict prompts, staff=view-only, audit rows per push. localStorage stays the working copy — the app itself is untouched.
+- **Auth**: `AuthGate`/`CloudGate` (lazy chunk) — sign in, org create / 24-char-invite join (RPCs), **TOTP MFA required for directors** (QR enroll, native Supabase). classic.html shares the session (same origin) and syncs via `OpsMatrixFusion.startCloudSync()`; sign-out clears the workspace from the device.
+- **AI**: `anthropicRequest()` in aiPlanImport picks DIRECT (user key, unchanged, test-locked) or PROXY per call. `supabase/functions/claude-proxy` holds the org key server-side, checks session→org, enforces `AI_MONTHLY_TOKEN_BUDGET`, meters into `ai_usage` (service-role-only writes), CORS via `ALLOWED_ORIGINS`. All call sites wired incl. the archive's Max via a one-URL fetch bridge in fusion-ui (cloud+signed-in only; placeholder key marker `managed-by-opsmatrix-cloud` satisfies the archive's key check).
+- **RLS proof**: `supabase/tests/rls-isolation.test.sql` — 10 cross-tenant assertions, PASSED against real Postgres 16 with both migrations in this session.
+- **Pipelines**: `deploy-staging.yml` (`staging` branch) / `deploy-production.yml` (`main`, GitHub environment approval) → Cloudflare Pages, cloud-mode builds; old `deploy.yml` (GitHub Pages) stays the LOCAL demo. `public/_headers` ships security headers + report-only CSP. `initMonitoring()` (logger) lazy-loads Sentry only when `VITE_SENTRY_DSN` is set.
+- **xlsx security**: SheetJS 0.18.5→0.20.3 via npm alias `@e965/xlsx`; `copy-xlsx.cjs` refuses <0.20.2; `verify-xlsx.yml` proves the republish byte-identical to cdn.sheetjs.com on every dep change + weekly.
+
 ## 13. BUILD & DEPLOY WORKFLOW
 
 ```
-npm test                                      # 172 tests must stay green
+npm test                                      # 193 tests must stay green
 npm run build:classic                         # rebuild public/classic.html (after fusion/bridge/rules changes!)
 npm run build                                 # MPA: index.html + maps.html
 git add -A && git commit && git push          # Pages deploys automatically (~35s)

@@ -3,7 +3,7 @@
 // most server-side examples omit — both fail at runtime, in front of a client,
 // so they are pinned here instead.
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { readPlanWithAI, importPlanFromImage, AiPlanError, AI_MODEL } from "./aiPlanImport";
+import { readPlanWithAI, importPlanFromImage, anthropicRequest, AiPlanError, AI_MODEL } from "./aiPlanImport";
 
 const IMAGE = "data:image/png;base64,AAAA";
 
@@ -51,6 +51,45 @@ describe("the request we send", () => {
     expect(body.model).toBe(AI_MODEL);
     expect(body.output_config.format.type).toBe("json_schema");
     expect(body.output_config.effort).toBe("high");
+  });
+
+  it("proxy mode: Bearer session token to the proxy URL — never a key, never the browser header", async () => {
+    const spy = mockFetch(goodReply);
+    await readPlanWithAI({
+      apiKey: "",
+      proxy: { url: "https://proj.supabase.co/functions/v1/claude-proxy", token: "session-jwt" },
+      imageDataUrl: IMAGE
+    });
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe("https://proj.supabase.co/functions/v1/claude-proxy");
+    const headers = init.headers as Record<string, string>;
+    expect(headers["authorization"]).toBe("Bearer session-jwt");
+    expect(headers["x-opsmatrix-feature"]).toBe("plan-read");
+    expect(headers["x-api-key"]).toBeUndefined();
+    expect(headers["anthropic-dangerous-direct-browser-access"]).toBeUndefined();
+    // the request BODY is identical either way — the proxy is a transport,
+    // not a behavior change
+    const body = JSON.parse(init.body as string);
+    expect(body.model).toBe(AI_MODEL);
+    expect(body.output_config.format.type).toBe("json_schema");
+  });
+
+  it("anthropicRequest: direct shape is byte-for-byte the pre-proxy shape", () => {
+    const t = anthropicRequest("sk-ant-test");
+    expect(t.url).toBe("https://api.anthropic.com/v1/messages");
+    expect(t.headers).toEqual({
+      "content-type": "application/json",
+      "x-api-key": "sk-ant-test",
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    });
+  });
+
+  it("no key and no proxy is a plain-English error before any network call", async () => {
+    const spy = mockFetch(goodReply);
+    await expect(readPlanWithAI({ apiKey: "", imageDataUrl: IMAGE }))
+      .rejects.toThrow(/No Anthropic API key saved yet/);
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("sends no parameter Fable 5 would reject", async () => {
