@@ -17,7 +17,7 @@ import {
 
 const fmt = (n: number) => Math.round(n).toLocaleString();
 
-export type SpacesView = "explorer" | "list" | "map";
+export type SpacesView = "explorer" | "list" | "map" | "studio";
 
 // ── shared helpers ──────────────────────────────────────────────────────────
 

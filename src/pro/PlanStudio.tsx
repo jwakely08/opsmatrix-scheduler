@@ -1,21 +1,28 @@
-// PLAN STUDIO — the one tool for turning a plan with no readable sizes into
-// a real OpsMatrix floor plan (Josh's spec, 2026-08-28 night):
+// THE CALIBRATION EDITOR (Josh's 16-step spec, 2026-08-28 late night).
+// One tool, one sequence, every time:
 //
-//   1. The plan is ON SCREEN the whole time. Trace a room you know with
-//      rough corner taps — the ported snap engine (planSnap.ts, the exact
-//      code Josh likes) pulls the shape onto the walls. Type its square
-//      footage: that's the calibration. 1 room works, 2–3 are better.
-//   2. THEN "✨ Max draws the rest" — the AI reads the same picture, its
-//      shapes arrive auto-snapped and stay SELECTABLE: drag any of them,
-//      nudge with arrow keys, hit ⌖ Snap again, or delete and retrace.
-//      Every room's square footage comes from the calibration. Max never
-//      runs before the calibration exists.
-//   3. "✓ Create floor plan" rebuilds everything matrix-style (the same
-//      buildPlanFromRooms every import uses) — the scan is never the
-//      product, the OpsMatrix drawing is.
+//   DRAW PHASE — the plan is on screen. Trace a room you know (rough corner
+//   taps; the ported snap engine seats it on the walls), THEN type its
+//   square footage: that's a calibration anchor. Repeat for as many rooms
+//   as you like — every anchor feeds the eventual measuring. Only then does
+//   "✨ Max draws the rest" arm: Max mimics the plan with drawn boxes laid
+//   over it. Those boxes are NOT data yet — the user confirms them: click
+//   to select, SHIFT-click to select several, "Select all of Max's boxes",
+//   drag the puzzle pieces into place, and ⌖ Snap again as the double-check.
 //
-// Undo (↩ / Ctrl+Z) covers every shape operation; while tracing, ⌫ removes
-// the last point. Clicking a finished room re-opens its details.
+//   ✓ CONFIRM MATRIX — the boxes lock, every square footage is computed
+//   from the calibration, and the canvas switches to the FINAL matrix-style
+//   rendering (the same drawing every other import produces).
+//
+//   DETAILS PHASE — still in the editor: select each room and enter what
+//   Max Space needs — room number, name, room type, floor type, fixtures,
+//   and DEPARTMENT (account/building/floor were set at upload; department
+//   is chosen here, per room). Then 🚀 SHIP TO MAX SPACE files everything
+//   into the hierarchy: account → building → floor → department → room.
+//
+// Every set ships as an editable CALIBRATION SET (studioSets.ts): reopen it
+// any time from Max Space → Calibration Editor, move boxes after a remodel,
+// re-ship — and the SAME rooms update, schedules intact.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -23,24 +30,20 @@ import {
 } from "./planSnap";
 import { calibrateFromKnownRooms } from "./planCalibrate";
 import {
-  readPlanWithAI, buildPlanFromRooms, AiPlanError, AI_ROOM_TYPES,
-  type ImportResult
+  buildPlanFromRooms, readPlanWithAI, AiPlanError, type ImportResult
 } from "../bridge/aiPlanImport";
-import { loadApiKey } from "./classicStore";
+import {
+  saveStudioSet, loadStudioSets, deleteStudioSet, applyStudioShip, applyStudioUpdate,
+  type StudioSet, type StudioShapeData
+} from "./studioSets";
+import { loadApiKey, loadClassic, saveClassic, FLOOR_TYPES, type ClassicData } from "./classicStore";
 import { aiProxy } from "./aiTransport";
+import type { Rules } from "./rules";
 
 export interface StudioPicture { dataUrl: string; width: number; height: number; aspect: number }
 
-interface Shape {
-  id: string;
-  pts: XY[];              // picture pixels
-  roomNumber: string;
-  roomName: string;
-  roomType: string;
-  /** the manager's typed square footage — a calibration anchor */
-  knownSqFt: number | null;
-  source: "traced" | "ai";
-}
+type Shape = StudioShapeData;
+type Phase = "draw" | "details";
 
 const uid = () => "shape-" + Math.random().toString(36).slice(2, 9);
 const TRACED = "#14b8a6";
@@ -55,19 +58,26 @@ function pointIn(pts: XY[], x: number, y: number): boolean {
   return inside;
 }
 
-export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
+export function PlanStudio({ picture, account, building, floor, rules, existingSet, onShipped, onCancel }: {
   picture: StudioPicture;
+  account: string;
   building: string;
   floor: string;
-  onDone: (result: ImportResult) => void;
+  rules: Rules;
+  /** re-editing a saved calibration set (remodels) — ships onto the SAME rooms */
+  existingSet?: StudioSet;
+  onShipped: (roomCount: number, setSaved: boolean) => void;
   onCancel: () => void;
 }) {
   const W = picture.width, H = picture.height;
-  const [shapes, setShapes] = useState<Shape[]>([]);
-  const [selId, setSelId] = useState<string | null>(null);
-  const [tool, setTool] = useState<"select" | "trace">("trace");
+  const [shapes, setShapes] = useState<Shape[]>(() =>
+    existingSet ? JSON.parse(JSON.stringify(existingSet.shapes)) : []);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [phase, setPhase] = useState<Phase>("draw");
+  const [tool, setTool] = useState<"select" | "trace">(existingSet ? "select" : "trace");
   const [tracePts, setTracePts] = useState<XY[]>([]);
   const [gray, setGray] = useState<Gray | null>(null);
+  const [matrix, setMatrix] = useState<{ img: string; w: number; h: number } | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [err, setErr] = useState("");
@@ -75,10 +85,19 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
   const undoStack = useRef<Shape[][]>([]);
   const svgRef = useRef<SVGSVGElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ kind: "none" | "pan" | "shape"; id?: string; x: number; y: number; moved: boolean }>(
+  const drag = useRef<{ kind: "none" | "pan" | "shape"; x: number; y: number; moved: boolean }>(
     { kind: "none", x: 0, y: 0, moved: false });
 
-  // wall detection grid, built once from the picture
+  // datalist options come straight from what the account already holds
+  const deptOptions = useMemo(() => {
+    try {
+      const v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") ?? "{}") ?? {};
+      return [...new Set(((v7.spaces ?? []) as { department?: string }[])
+        .map((s) => String(s.department ?? "").trim()).filter(Boolean))].sort();
+    } catch { return []; }
+  }, []);
+
+  // wall grid from the picture
   useEffect(() => {
     const img = new Image();
     img.onload = () => {
@@ -92,22 +111,23 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
     img.src = picture.dataUrl;
   }, [picture.dataUrl]);
 
-  // fit the plan into the viewport
+  // fit whichever surface is showing (scan in draw phase, matrix in details)
+  const surfW = phase === "details" && matrix ? matrix.w : W;
+  const surfH = phase === "details" && matrix ? matrix.h : H;
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const fit = () => {
       const w = el.clientWidth || 1000, h = el.clientHeight || 640;
-      const k = Math.min(w / W, h / H) * 0.94;
-      setView({ k, tx: (w - W * k) / 2, ty: (h - H * k) / 2 });
+      const k = Math.min(w / surfW, h / surfH) * 0.94;
+      setView({ k, tx: (w - surfW * k) / 2, ty: (h - surfH * k) / 2 });
     };
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [W, H]);
+  }, [surfW, surfH]);
 
-  // gray in image-native resolution vs picture px: buildGray may downscale.
   const graySc = gray ? gray.w / W : 1;
   const snapPx = useCallback((pts: XY[]): XY[] => {
     if (!gray) return pts;
@@ -115,7 +135,7 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
     return snapToWalls(gray, scaled).map((p) => ({ x: p.x / graySc, y: p.y / graySc }));
   }, [gray, graySc]);
 
-  // ── calibration: the shapes whose square footage the manager TYPED ────────
+  // ── calibration ────────────────────────────────────────────────────────────
   const calRooms = useMemo(() => shapes.map((s) => ({ id: s.id, visualPts: s.pts })), [shapes]);
   const anchors = useMemo(() =>
     shapes.filter((s) => (s.knownSqFt ?? 0) > 0).map((s) => ({ id: s.id, sqft: s.knownSqFt! })),
@@ -137,12 +157,11 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
   }, []);
   const undo = useCallback(() => {
     const prev = undoStack.current.pop();
-    if (prev) { setShapes(prev); setSelId(null); }
+    if (prev) setShapes(prev);
   }, []);
   const patchShape = (id: string, patch: Partial<Shape>) =>
     setShapes((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
 
-  // ── coordinates ────────────────────────────────────────────────────────────
   const toPic = (e: { clientX: number; clientY: number }): XY => {
     const r = svgRef.current!.getBoundingClientRect();
     return { x: (e.clientX - r.left - view.tx) / view.k, y: (e.clientY - r.top - view.ty) / view.k };
@@ -164,68 +183,80 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
     return () => svg.removeEventListener("wheel", onWheel);
   }, []);
 
-  // ── tracing ────────────────────────────────────────────────────────────────
   const finishTrace = useCallback(() => {
     if (tracePts.length < 3) return;
     const snapped = snapPx(tracePts);
     const id = uid();
     mutate((prev) => [...prev, {
       id, pts: snapped, roomNumber: "", roomName: "", roomType: "",
+      floorType: "", fixtureCount: 0, department: "",
       knownSqFt: null, source: "traced"
     }]);
     setTracePts([]);
-    setSelId(id);
+    setSel(new Set([id]));
     setTool("select");
     setErr("");
   }, [tracePts, snapPx, mutate]);
 
-  // ── keyboard ───────────────────────────────────────────────────────────────
+  // keyboard: undo point / finish / cancel / nudge selection / global undo
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const inField = /INPUT|TEXTAREA|SELECT/.test((e.target as Element)?.tagName ?? "");
       if (inField) return;
-      if (e.key === "Escape") { setTracePts([]); setSelId(null); }
+      if (e.key === "Escape") { setTracePts([]); setSel(new Set()); }
       else if (e.key === "Enter" && tool === "trace") { e.preventDefault(); finishTrace(); }
       else if ((e.key === "Backspace" || e.key === "Delete") && tool === "trace") {
         e.preventDefault();
         setTracePts((p) => p.slice(0, -1));
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault(); undo();
-      } else if (selId && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+      } else if (phase === "draw" && sel.size && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
         e.preventDefault();
         const d = e.shiftKey ? 8 : 1.5;
         const dx = e.key === "ArrowLeft" ? -d : e.key === "ArrowRight" ? d : 0;
         const dy = e.key === "ArrowUp" ? -d : e.key === "ArrowDown" ? d : 0;
-        mutate((prev) => prev.map((s) => s.id === selId
-          ? { ...s, pts: s.pts.map((p) => ({ x: p.x + dx / 1, y: p.y + dy / 1 })) } : s));
+        mutate((prev) => prev.map((s) => sel.has(s.id)
+          ? { ...s, pts: s.pts.map((p) => ({ x: p.x + dx, y: p.y + dy })) } : s));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tool, selId, finishTrace, undo, mutate]);
+  }, [tool, sel, phase, finishTrace, undo, mutate]);
 
-  // ── pointer interactions ───────────────────────────────────────────────────
+  // ── pointer: trace taps, select/shift-select, drag the whole selection ────
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture?.(e.pointerId);
     const p = toPic(e);
-    if (tool === "trace") {
+    if (phase === "draw" && tool === "trace") {
       setTracePts((prev) => [...prev, p]);
       return;
     }
-    // select tool: hit-test shapes (smallest wins so nested picks work)
     let hit: Shape | null = null, hitArea = Infinity;
+    const sx = phase === "details" && matrix ? matrix.w / W : 1;
     for (const s of shapes) {
-      if (pointIn(s.pts, p.x, p.y)) {
-        const a = shoelacePx(s.pts);
+      const pts = sx === 1 ? s.pts : s.pts.map((q) => ({ x: q.x * sx, y: q.y * sx }));
+      if (pointIn(pts, p.x, p.y)) {
+        const a = shoelacePx(pts);
         if (a < hitArea) { hit = s; hitArea = a; }
       }
     }
     if (hit) {
-      setSelId(hit.id);
-      undoStack.current.push(shapes); // move is undoable as one step
-      drag.current = { kind: "shape", id: hit.id, x: e.clientX, y: e.clientY, moved: false };
+      setSel((prev) => {
+        if (e.shiftKey) {
+          const next = new Set(prev);
+          if (next.has(hit!.id)) next.delete(hit!.id); else next.add(hit!.id);
+          return next;
+        }
+        return prev.has(hit.id) ? prev : new Set([hit.id]);
+      });
+      if (phase === "draw") {
+        undoStack.current.push(shapes); // one undo step per drag
+        drag.current = { kind: "shape", x: e.clientX, y: e.clientY, moved: false };
+      } else {
+        drag.current = { kind: "none", x: 0, y: 0, moved: false };
+      }
     } else {
-      setSelId(null);
+      if (!e.shiftKey) setSel(new Set());
       drag.current = { kind: "pan", x: e.clientX, y: e.clientY, moved: false };
     }
   };
@@ -236,20 +267,20 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
     if (Math.hypot(dx, dy) > 2) d.moved = true;
     if (d.kind === "pan") {
       setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }));
-    } else if (d.kind === "shape" && d.id) {
+    } else if (d.kind === "shape") {
       const px = dx / view.k, py = dy / view.k;
-      setShapes((prev) => prev.map((s) => s.id === d.id
+      setShapes((prev) => prev.map((s) => sel.has(s.id)
         ? { ...s, pts: s.pts.map((q) => ({ x: q.x + px, y: q.y + py })) } : s));
     }
     d.x = e.clientX; d.y = e.clientY;
   };
   const onPointerUp = () => {
     const d = drag.current;
-    if (d.kind === "shape" && !d.moved) undoStack.current.pop(); // plain click — no move to undo
+    if (d.kind === "shape" && !d.moved) undoStack.current.pop(); // click, not a move
     drag.current = { kind: "none", x: 0, y: 0, moved: false };
   };
 
-  // ── Max draws the rest (only AFTER calibration) ───────────────────────────
+  // ── Max draws the rest (only after calibration) ───────────────────────────
   async function maxDrawRest() {
     if (!cal || aiBusy) return;
     setAiBusy(true);
@@ -257,24 +288,20 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
     try {
       const proxy = await aiProxy();
       const reading = await readPlanWithAI({
-        apiKey: loadApiKey(),
-        proxy,
-        imageDataUrl: picture.dataUrl,
-        imageWidth: W, imageHeight: H,
-        building, floor,
-        onProgress: setNotice
+        apiKey: loadApiKey(), proxy,
+        imageDataUrl: picture.dataUrl, imageWidth: W, imageHeight: H,
+        building, floor, onProgress: setNotice
       });
       const existing = shapes;
       const added: Shape[] = [];
       for (const r of reading.rooms) {
         const pts = r.polygon.map((q) => ({ x: q[0] * W, y: q[1] * H }));
         const c = centroid(pts);
-        // don't double-draw a room the manager already traced
         if (existing.some((s) => pointIn(s.pts, c.x, c.y))) continue;
         added.push({
-          id: uid(),
-          pts: snapPx(pts), // arrive pre-snapped; still draggable + re-snappable
-          roomNumber: r.roomNumber, roomName: r.name, roomType: r.roomType,
+          id: uid(), pts: snapPx(pts),
+          roomNumber: r.roomNumber, roomName: r.name, roomType: "",
+          floorType: "", fixtureCount: 0, department: "",
           knownSqFt: null, source: "ai"
         });
       }
@@ -282,7 +309,8 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
         setErr("Max found no rooms beyond the ones you traced. Trace the rest by hand, or try a sharper file.");
       } else {
         mutate((prev) => [...prev, ...added]);
-        setNotice(`✓ Max drew ${added.length} more room${added.length === 1 ? "" : "s"} — sized from your calibration. Drag any shape that sits off its walls, then ⌖ Snap it.`);
+        setSel(new Set(added.map((s) => s.id)));
+        setNotice(`✓ Max drew ${added.length} box${added.length === 1 ? "" : "es"} over the plan — they're all selected. Line up any that sit off like a puzzle piece (drag, or arrows), then ⌖ Snap selected as the double-check.`);
       }
     } catch (e) {
       setErr(e instanceof AiPlanError ? e.message : String((e as Error)?.message ?? e));
@@ -291,62 +319,111 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
     }
   }
 
-  // ── create the OpsMatrix plan ──────────────────────────────────────────────
-  function createPlan() {
+  const buildReading = () => ({
+    buildingName: "", floorName: "",
+    rooms: shapes.map((s) => ({
+      name: s.roomName.trim() || s.roomNumber.trim() || "Room",
+      roomNumber: s.roomNumber.trim(),
+      squareFeet: sqftOf(s) ?? 0,
+      roomType: s.roomType,
+      polygon: s.pts.map((p) => [p.x / W, p.y / H])
+    }))
+  });
+
+  // ── ✓ Confirm Matrix: lock the boxes, compute every ft², show the render ──
+  function confirmMatrix() {
     if (!shapes.length) { setErr("Trace at least one room first."); return; }
-    if (!cal) { setErr("Type the square footage of at least one room you traced — that's the calibration everything is measured from."); return; }
-    const nameless = shapes.filter((s) => !s.roomNumber.trim() && !s.roomName.trim());
-    if (nameless.length) {
-      setSelId(nameless[0].id);
-      setErr(`${nameless.length} room${nameless.length === 1 ? " still needs" : "s still need"} a number or a name — tap the highlighted one.`);
-      return;
-    }
-    const result = buildPlanFromRooms({
-      buildingName: "", floorName: "",
-      rooms: shapes.map((s) => ({
-        name: s.roomName.trim() || s.roomNumber.trim(),
-        roomNumber: s.roomNumber.trim(),
-        squareFeet: sqftOf(s) ?? 0,
-        roomType: s.roomType,
-        polygon: s.pts.map((p) => [p.x / W, p.y / H])
-      }))
-    }, { building, floor, aspect: W / H });
-    onDone(result);
+    if (!cal) { setErr("Type the square footage of a room you traced — that's the calibration everything is measured from."); return; }
+    const preview = buildPlanFromRooms(buildReading(), { building, floor, aspect: W / H });
+    const plan = preview.plan as { img: string; w: number; h: number };
+    setMatrix({ img: plan.img, w: plan.w, h: plan.h });
+    setTracePts([]);
+    setTool("select");
+    setSel(new Set());
+    setErr("");
+    setNotice("");
+    setPhase("details");
   }
 
-  const sel = shapes.find((s) => s.id === selId) ?? null;
+  // ── 🚀 Ship to Max Space ───────────────────────────────────────────────────
+  function ship() {
+    const nameless = shapes.filter((s) => !s.roomNumber.trim() && !s.roomName.trim());
+    if (nameless.length) {
+      setSel(new Set([nameless[0].id]));
+      setErr(`${nameless.length} room${nameless.length === 1 ? " still needs" : "s still need"} a number or a name — it's selected, fill it in.`);
+      return;
+    }
+    const result = buildPlanFromRooms(buildReading(), { building, floor, aspect: W / H });
+    const shapesData: StudioShapeData[] = JSON.parse(JSON.stringify(shapes));
+    // shipping writes the stores DIRECTLY (the same separate-document rule
+    // every importer follows) and the host reloads — no in-memory races,
+    // and the id-map lands in the saved set synchronously
+    const d: ClassicData = loadClassic();
+    const map = existingSet
+      ? applyStudioUpdate(d, existingSet, result, shapesData, rules)
+      : applyStudioShip(d, result, shapesData, account, rules);
+    saveClassic(d);
+    try { localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans)); } catch { /* quota */ }
+    const saved = saveStudioSet(existingSet
+      ? {
+        ...existingSet, shapes: shapesData, spaceIdByShape: map,
+        account, building, floor, updatedAt: new Date().toISOString()
+      }
+      : {
+        id: "set-" + Math.random().toString(36).slice(2, 9),
+        account, building, floor,
+        picture: { dataUrl: picture.dataUrl, width: W, height: H, aspect: picture.aspect },
+        shapes: shapesData,
+        spaceIdByShape: map,
+        planId: String((result.plan as { id?: string }).id ?? ""),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+    onShipped(shapes.length, saved);
+  }
+
+  const selShapes = shapes.filter((s) => sel.has(s.id));
+  const one = selShapes.length === 1 ? selShapes[0] : null;
+  const detailScale = phase === "details" && matrix ? matrix.w / W : 1;
+  const aiCount = shapes.filter((s) => s.source === "ai").length;
 
   return createPortal(
     <div className="studio">
       <header className="studio-head">
-        <button className="pbtn ghost" onClick={onCancel}>‹ Cancel</button>
-        <h1>Plan Studio <span>{[building, floor].filter(Boolean).join(" · ") || "New floor plan"}</span></h1>
+        <button className="pbtn ghost" onClick={onCancel}>‹ {existingSet ? "Back" : "Cancel"}</button>
+        <h1>Calibration Editor <span>{[account, building, floor].filter(Boolean).join(" · ") || "New floor plan"}</span></h1>
         <span className="grow" />
-        <button className="pbtn" disabled={!undoStack.current.length} onClick={undo}>↩ Undo</button>
+        {phase === "details" && (
+          <button className="pbtn" onClick={() => { setMatrix(null); setPhase("draw"); }}>‹ Back to adjusting</button>
+        )}
+        <button className="pbtn" disabled={!undoStack.current.length || phase === "details"} onClick={undo}>↩ Undo</button>
       </header>
 
       <div className="studio-body">
         <div className="studio-canvaswrap" ref={wrapRef}>
-          <svg ref={svgRef} className={"studio-canvas tool-" + tool}
+          <svg ref={svgRef} className={"studio-canvas tool-" + (phase === "draw" ? tool : "select")}
             onPointerDown={onPointerDown} onPointerMove={onPointerMove}
             onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
             onDoubleClick={(e) => {
-              if (tool !== "trace") return;
+              if (phase !== "draw" || tool !== "trace") return;
               e.preventDefault();
               finishTrace();
             }}>
             <g transform={`translate(${view.tx} ${view.ty}) scale(${view.k})`}>
-              <image href={picture.dataUrl} width={W} height={H} />
+              {phase === "details" && matrix
+                ? <image href={matrix.img} width={matrix.w} height={matrix.h} />
+                : <image href={picture.dataUrl} width={W} height={H} />}
               {shapes.map((s) => {
                 const col = s.source === "ai" ? AI : TRACED;
-                const on = s.id === selId;
-                const c = centroid(s.pts);
+                const on = sel.has(s.id);
+                const pts = detailScale === 1 ? s.pts : s.pts.map((q) => ({ x: q.x * detailScale, y: q.y * detailScale }));
+                const c = centroid(pts);
                 const sq = sqftOf(s);
                 return (
                   <g key={s.id}>
-                    <polygon points={s.pts.map((p) => `${p.x},${p.y}`).join(" ")}
-                      fill={col} fillOpacity={on ? 0.4 : 0.24}
-                      stroke={on ? "#ffffff" : col} strokeWidth={on ? 3 / view.k : 2 / view.k}
+                    <polygon points={pts.map((p) => `${p.x},${p.y}`).join(" ")}
+                      fill={col} fillOpacity={phase === "details" ? (on ? 0.32 : 0.10) : on ? 0.4 : 0.24}
+                      stroke={on ? "#ffffff" : col} strokeWidth={(on ? 3 : 2) / view.k}
                       strokeDasharray={on ? `${6 / view.k} ${4 / view.k}` : undefined} />
                     <g className="studio-label" transform={`translate(${c.x} ${c.y}) scale(${1 / Math.max(0.5, view.k)})`}>
                       <text y={-3}>{s.roomNumber || s.roomName || "?"}</text>
@@ -357,7 +434,7 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
                   </g>
                 );
               })}
-              {tracePts.length > 0 && (
+              {tracePts.length > 0 && phase === "draw" && (
                 <g>
                   <polyline points={tracePts.map((p) => `${p.x},${p.y}`).join(" ")}
                     fill="none" stroke="#2dd4bf" strokeWidth={2.5 / view.k} strokeDasharray={`${7 / view.k} ${5 / view.k}`} />
@@ -369,8 +446,7 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
             </g>
           </svg>
 
-          {/* trace controls float on the plan, exactly where the eyes are */}
-          {tool === "trace" && (
+          {phase === "draw" && tool === "trace" && (
             <div className="studio-tracebar">
               <b>{tracePts.length === 0
                 ? "Tap roughly at each corner of a room — the snap pulls it onto the walls."
@@ -380,6 +456,16 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
               <button className="pbtn small primary" disabled={tracePts.length < 3}
                 onClick={finishTrace}>✓ Finish room</button>
               <button className="pbtn small ghost" onClick={() => { setTracePts([]); setTool("select"); }}>✕</button>
+            </div>
+          )}
+
+          {phase === "draw" && selShapes.length > 1 && (
+            <div className="studio-tracebar">
+              <b>{selShapes.length} boxes selected — drag them together, arrows nudge</b>
+              <button className="pbtn small primary" onClick={() => {
+                mutate((prev) => prev.map((s) => sel.has(s.id) ? { ...s, pts: snapPx(s.pts) } : s));
+              }}>⌖ Snap selected</button>
+              <button className="pbtn small ghost" onClick={() => setSel(new Set())}>✕ Clear</button>
             </div>
           )}
 
@@ -396,86 +482,228 @@ export function PlanStudio({ picture, building, floor, onDone, onCancel }: {
         </div>
 
         <aside className="studio-rail">
-          <div className={"studio-calbox" + (cal ? " ok" : "")}>
-            {cal
-              ? <><b>✓ Calibrated</b><span>{anchors.length} known room{anchors.length === 1 ? "" : "s"} set the scale{anchors.length < 3 ? " — 2–3 is even better" : ""}. Every other room is measured from it.</span></>
-              : <><b>1 · Calibrate first</b><span>Trace a room you KNOW, then type its square footage below. Max can't measure anything until you do.</span></>}
-          </div>
+          {phase === "draw" ? (
+            <>
+              <div className={"studio-calbox" + (cal ? " ok" : "")}>
+                {cal
+                  ? <><b>✓ Calibrated</b><span>{anchors.length} known room{anchors.length === 1 ? "" : "s"} set the scale — every anchor you add sharpens the eventual measuring.</span></>
+                  : <><b>1 · Calibrate first</b><span>Trace a room you KNOW, snap it into place, then type its square footage. Max can't draw or measure anything until you do.</span></>}
+              </div>
 
-          <div className="prow">
-            <button className={"pbtn" + (tool === "trace" ? " primary" : "")}
-              onClick={() => { setTool("trace"); setSelId(null); }}>✏ Trace a room</button>
-            <button className="pbtn" disabled={!cal || aiBusy} onClick={maxDrawRest}
-              title={cal ? "Max reads the plan and draws every room you haven't traced" : "Calibrate a room first"}>
-              {aiBusy ? "✨ Max is drawing…" : "✨ Max draws the rest"}
-            </button>
-          </div>
+              <div className="prow">
+                <button className={"pbtn" + (tool === "trace" ? " primary" : "")}
+                  onClick={() => { setTool("trace"); setSel(new Set()); }}>✏ Trace a room</button>
+                <button className="pbtn" disabled={!cal || aiBusy} onClick={maxDrawRest}
+                  title={cal ? "Max mimics the plan: drawn boxes over every room you haven't traced" : "Calibrate a room first"}>
+                  {aiBusy ? "✨ Max is drawing…" : "✨ Max draws the rest"}
+                </button>
+              </div>
+              {aiCount > 0 && (
+                <button className="pbtn small" onClick={() => {
+                  setSel(new Set(shapes.filter((s) => s.source === "ai").map((s) => s.id)));
+                  setTool("select");
+                }}>▣ Select all of Max's boxes ({aiCount})</button>
+              )}
+            </>
+          ) : (
+            <div className="studio-calbox ok">
+              <b>✓ Matrix confirmed</b>
+              <span>The boxes are locked in and every square footage is measured from your calibration.
+                Select each room and enter its details, then ship it.</span>
+            </div>
+          )}
           {notice && <p className="pnote">{notice}</p>}
           {err && <p className="warntext">⚠ {err}</p>}
 
-          {sel && (
+          {one && (
             <div className="studio-info">
-              <div className="pshead"><h2>{sel.source === "ai" ? "Max's drawing" : "Your room"}</h2>
-                <button className="pbtn ghost" onClick={() => setSelId(null)}>✕</button></div>
+              <div className="pshead"><h2>{one.source === "ai" ? "Max's box" : "Your room"}</h2>
+                <button className="pbtn ghost" onClick={() => setSel(new Set())}>✕</button></div>
               <div className="prow">
                 <label className="pfield">Room number
-                  <input value={sel.roomNumber} placeholder="e.g. 1230"
-                    onChange={(e) => patchShape(sel.id, { roomNumber: e.target.value })} />
+                  <input value={one.roomNumber} placeholder="e.g. 1230"
+                    onChange={(e) => patchShape(one.id, { roomNumber: e.target.value })} />
                 </label>
                 <label className="pfield">Room name
-                  <input value={sel.roomName} placeholder="e.g. Patient Room"
-                    onChange={(e) => patchShape(sel.id, { roomName: e.target.value })} />
+                  <input value={one.roomName} placeholder="e.g. Patient Room"
+                    onChange={(e) => patchShape(one.id, { roomName: e.target.value })} />
                 </label>
               </div>
-              <label className="pfield">Room type <small>optional — refine it later in Max Space</small>
-                <select value={sel.roomType} onChange={(e) => patchShape(sel.id, { roomType: e.target.value })}>
-                  <option value="">— pick later —</option>
-                  {AI_ROOM_TYPES.map((t) => <option key={t}>{t}</option>)}
-                </select>
-              </label>
-              <label className="pfield">Square feet
-                <input type="number" min={0}
-                  value={sel.knownSqFt ?? ""}
-                  placeholder={cal ? `measured: ${sqftOf(sel) ?? "—"}` : "type it if you KNOW it"}
-                  onChange={(e) => patchShape(sel.id, { knownSqFt: Number(e.target.value) > 0 ? Number(e.target.value) : null })} />
-                <small>{(sel.knownSqFt ?? 0) > 0
-                  ? "⚓ You set this — it anchors the calibration."
-                  : cal ? "Measured from your calibration. Type a number only if you KNOW this room." : ""}</small>
-              </label>
-              <div className="prow">
-                <button className="pbtn small" onClick={() => {
-                  mutate((prev) => prev.map((s) => s.id === sel.id ? { ...s, pts: snapPx(s.pts) } : s));
-                }}>⌖ Snap to walls</button>
-                <button className="pbtn small danger" onClick={() => {
-                  mutate((prev) => prev.filter((s) => s.id !== sel.id));
-                  setSelId(null);
-                }}>✕ Delete</button>
-              </div>
-              <small className="pnote">Drag the shape to move it; arrow keys nudge it; then ⌖ Snap seats it on the walls.</small>
+
+              {phase === "draw" ? (
+                <>
+                  <label className="pfield">Square feet
+                    <input type="number" min={0}
+                      value={one.knownSqFt ?? ""}
+                      placeholder={cal ? `measured: ${sqftOf(one) ?? "—"}` : "type it if you KNOW it"}
+                      onChange={(e) => patchShape(one.id, { knownSqFt: Number(e.target.value) > 0 ? Number(e.target.value) : null })} />
+                    <small>{(one.knownSqFt ?? 0) > 0
+                      ? "⚓ You set this — it anchors the calibration."
+                      : cal ? "Measured from your calibration. Type a number only if you KNOW this room." : ""}</small>
+                  </label>
+                  <div className="prow">
+                    <button className="pbtn small" onClick={() => {
+                      mutate((prev) => prev.map((s) => s.id === one.id ? { ...s, pts: snapPx(s.pts) } : s));
+                    }}>⌖ Snap to walls</button>
+                    <button className="pbtn small danger" onClick={() => {
+                      mutate((prev) => prev.filter((s) => s.id !== one.id));
+                      setSel(new Set());
+                    }}>✕ Delete</button>
+                  </div>
+                  <small className="pnote">Drag to move it; arrow keys nudge; SHIFT-click to select several at once.</small>
+                </>
+              ) : (
+                <>
+                  <div className="prow">
+                    <label className="pfield grow">Room type
+                      <select value={typeIdOf(rules, one.roomType)} onChange={(e) => {
+                        const rt = rules.roomTypes.find((x) => x.id === e.target.value);
+                        patchShape(one.id, { roomType: rt?.label ?? "" });
+                      }}>
+                        <option value="">— pick room type —</option>
+                        {rules.roomTypes.map((rt) => <option key={rt.id} value={rt.id}>{rt.label}</option>)}
+                      </select>
+                    </label>
+                    <label className="pfield">Floor type
+                      <select value={one.floorType} onChange={(e) => patchShape(one.id, { floorType: e.target.value })}>
+                        <option value="">— pick —</option>
+                        {FLOOR_TYPES.map((f) => <option key={f}>{f}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="prow">
+                    <label className="pfield">Fixtures
+                      <input type="number" min={0} value={one.fixtureCount || 0}
+                        onChange={(e) => patchShape(one.id, { fixtureCount: Number(e.target.value) || 0 })} />
+                    </label>
+                    <label className="pfield grow">Department
+                      <input list="studio-depts" value={one.department}
+                        placeholder="e.g. Oncology (7 East)"
+                        onChange={(e) => patchShape(one.id, { department: e.target.value })} />
+                      <datalist id="studio-depts">{deptOptions.map((d) => <option key={d} value={d} />)}</datalist>
+                    </label>
+                  </div>
+                  <p className="pnote">Measured: <b>{sqftOf(one) ?? "—"} ft²</b>{(one.knownSqFt ?? 0) > 0 ? " (⚓ your number)" : ""}</p>
+                </>
+              )}
             </div>
           )}
 
           <div className="studio-list">
             {shapes.map((s) => (
-              <button key={s.id} className={"studio-row" + (s.id === selId ? " on" : "")}
-                onClick={() => { setSelId(s.id); setTool("select"); }}>
+              <button key={s.id} className={"studio-row" + (sel.has(s.id) ? " on" : "")}
+                onClick={(e) => {
+                  if (e.shiftKey) {
+                    setSel((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(s.id)) next.delete(s.id); else next.add(s.id);
+                      return next;
+                    });
+                  } else setSel(new Set([s.id]));
+                  if (phase === "draw") setTool("select");
+                }}>
                 <i style={{ background: s.source === "ai" ? AI : TRACED }} />
                 <b>{s.roomNumber || s.roomName || "(no name yet)"}</b>
+                {phase === "details" && !s.department && <em className="miss">dept?</em>}
                 <em>{(s.knownSqFt ?? 0) > 0 ? `⚓ ${s.knownSqFt}` : sqftOf(s) ?? "—"} ft²</em>
               </button>
             ))}
             {!shapes.length && <p className="pnote">No rooms yet — tap ✏ Trace a room and start with one you know the size of.</p>}
           </div>
 
-          <button className="pbtn primary wide" onClick={createPlan}>
-            ✓ Create floor plan
-          </button>
+          {phase === "draw" ? (
+            <button className="pbtn primary wide" onClick={confirmMatrix}>
+              ✓ Confirm Matrix
+            </button>
+          ) : (
+            <button className="pbtn primary wide" onClick={ship}>
+              🚀 Ship to Max Space
+            </button>
+          )}
           <small className="pnote">
-            OpsMatrix redraws everything in its own clean style — the scan is only the guide, never the product.
+            {phase === "draw"
+              ? "Confirm locks the boxes in, measures every room from your calibration, and shows the final OpsMatrix rendering."
+              : `Ships into ${[account, building, floor].filter(Boolean).join(" → ") || "your account"} → department → room. ${existingSet ? "Same rooms update — schedules stay intact." : ""}`}
           </small>
         </aside>
       </div>
     </div>,
     document.body
+  );
+}
+
+function typeIdOf(rules: Rules, label: string): string {
+  return rules.roomTypes.find((rt) => rt.label === label)?.id ?? "";
+}
+
+// ── the Calibration Editor HOME (reached from Max Space's navigation) ──────
+// Every plan built through the editor lives here as an editable set: reopen
+// it after a remodel, move the boxes, fix details, re-ship — the SAME rooms
+// in Max Space update.
+
+export function CalibrationEditorHome({ rules }: {
+  rules: Rules;
+}) {
+  const [sets, setSets] = useState<StudioSet[]>(() => loadStudioSets());
+  const [editing, setEditing] = useState<StudioSet | null>(null);
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    const m = sessionStorage.getItem("fusion-studio-updated");
+    if (m) { setMsg(m); sessionStorage.removeItem("fusion-studio-updated"); }
+  }, []);
+
+  if (editing) {
+    return (
+      <PlanStudio
+        picture={editing.picture}
+        account={editing.account} building={editing.building} floor={editing.floor}
+        rules={rules} existingSet={editing}
+        onShipped={(n, saved) => {
+          // the stores were written directly — reload so every view (map,
+          // lists, schedules) sees the remodel; the message survives it
+          sessionStorage.setItem("fusion-studio-updated",
+            `✓ ${editing.building || "The plan"}${editing.floor ? " · " + editing.floor : ""} updated — ${n} rooms, same rooms in Max Space, schedules intact.` +
+            (saved ? "" : " (The editable set could not be re-saved — storage is full — but Max Space is updated.)"));
+          window.location.reload();
+        }}
+        onCancel={() => setEditing(null)} />
+    );
+  }
+
+  return (
+    <div className="pro-list spaces">
+      <p className="pnote">
+        Every floor plan built in the Calibration Editor stays editable here. Reopen one after a
+        remodel — move the boxes, re-snap, fix the details — and shipping the update lands on the
+        SAME rooms in Max Space, so schedules and history never break.
+      </p>
+      {msg && <p className="pnote keysaved">{msg}</p>}
+      {!sets.length && (
+        <p className="pnote">
+          Nothing here yet. Build one with <b>⬆ Import → 🗺 Floor plan → "No — it's just the floor
+          plan, no sizes"</b> — that opens this editor on your file.
+        </p>
+      )}
+      <div className="studio-sets">
+        {[...sets].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((s) => (
+          <div key={s.id} className="studio-set">
+            <img src={s.picture.dataUrl} alt="" />
+            <div className="studio-setinfo">
+              <b>{[s.building, s.floor].filter(Boolean).join(" · ") || "Floor plan"}</b>
+              <span>{s.account || "—"} · {s.shapes.length} room{s.shapes.length === 1 ? "" : "s"}</span>
+              <span>edited {new Date(s.updatedAt).toLocaleDateString()}</span>
+            </div>
+            <span className="studio-setacts">
+              <button className="pbtn small primary" onClick={() => { setMsg(""); setEditing(s); }}>✏ Edit</button>
+              <button className="pbtn small danger" onClick={() => {
+                if (!confirm("Delete this calibration set? The floor plan and rooms STAY in Max Space — only the editable set goes away.")) return;
+                deleteStudioSet(s.id);
+                setSets(loadStudioSets());
+              }}>✕</button>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

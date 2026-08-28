@@ -18,22 +18,36 @@ import { loadApiKey, saveApiKey } from "./classicStore";
 import { aiProxy } from "./aiTransport";
 import { PlanStudio, type StudioPicture } from "./PlanStudio";
 import type { ClassicData } from "./classicStore";
+import type { Rules } from "./rules";
 
 type Phase = "form" | "working" | "done" | "error";
 type ReadMode = "read" | "calibrate";
 
-export function AiPlanImport({ commit, onImported, open, onClose, defaultMode }: {
+export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, rules }: {
   commit: (mut: (d: ClassicData) => void) => void;
   onImported: () => void;
   open: boolean;
   onClose: () => void;
   /** open straight into one mode (e.g. classic's "no sizes" tile) */
   defaultMode?: ReadMode;
+  rules: Rules;
 }) {
   const [phase, setPhase] = useState<Phase>("form");
   const [step, setStep] = useState<"choice" | "form">(defaultMode ? "form" : "choice");
   const [mode, setMode] = useState<ReadMode>(defaultMode ?? "read");
   const [studioPic, setStudioPic] = useState<StudioPicture | null>(null);
+  // the hierarchy is entered UP FRONT (Josh: account → building → floor,
+  // departments are chosen per room later): account prefills from what the
+  // device already knows
+  const [account, setAccount] = useState(() => {
+    try {
+      const v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") ?? "{}") ?? {};
+      const systems = [...new Set(((v7.spaces ?? []) as { system?: string }[])
+        .map((sp) => String(sp.system ?? "").trim()).filter(Boolean))];
+      if (systems.length === 1) return systems[0];
+      return String((v7.settings ?? {}).orgName ?? (v7.settings ?? {}).campus ?? "").trim();
+    } catch { return ""; }
+  });
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [apiKey, setApiKey] = useState<string>(() => loadApiKey());
@@ -56,8 +70,9 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode }:
     onClose();
   };
 
-  /** write an imported plan into the stores (shared by both modes) */
+  /** write a READ-mode import into the stores (the Studio ships itself) */
   function persist(imported: ImportResult, calibrated: boolean) {
+    for (const sp of imported.spaces) (sp as { system?: string }).system = account;
     commit((d) => {
       // rooms already imported from a room list get the GEOMETRY attached
       // to them — a later floor plan never duplicates existing rooms
@@ -133,11 +148,18 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode }:
 
   if (!open) return null;
 
-  // the Studio is full-screen and owns the whole calibrate experience
+  // the Calibration Editor is full-screen and owns the whole flow —
+  // including shipping to Max Space and saving the editable set
   if (studioPic) {
     return (
-      <PlanStudio picture={studioPic} building={building} floor={floor}
-        onDone={(r) => persist(r, true)}
+      <PlanStudio picture={studioPic} account={account} building={building} floor={floor}
+        rules={rules}
+        onShipped={(rooms, setSaved) => {
+          setStudioPic(null);
+          setResult({ rooms, printed: rooms, scaled: true, calibrated: true });
+          if (!setSaved) setStatus("Note: the editable calibration set could not be saved (storage full) — the floor plan itself is in.");
+          setPhase("done");
+        }}
         onCancel={() => setStudioPic(null)} />
     );
   }
@@ -170,7 +192,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode }:
                 <button className="upltile" onClick={() => { setMode("calibrate"); setStep("form"); }}>
                   <b>📐 No — it's just the floor plan, no sizes</b>
                   <span>
-                    The Plan Studio opens on your file: trace a room you KNOW (the snap pulls it
+                    The Calibration Editor opens on your file: trace a room you KNOW (the snap pulls it
                     onto the walls), type its square footage — that's the calibration — then Max
                     draws the rest, measured from YOUR numbers. Adjust any shape before it becomes
                     the floor plan.
@@ -183,17 +205,23 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode }:
               <>
                 <p className="pnote">
                   {mode === "calibrate"
-                    ? "Pick the file — picture, PDF, or CAD (DXF). It opens in the Plan Studio, where you calibrate before anything is read."
+                    ? "Pick the file — picture, PDF, or CAD (DXF). It opens in the Calibration Editor, where you calibrate before anything is read."
                     : "Pick the file — picture, PDF, or CAD (DXF). Max reads the rooms, their numbers and the stated square footage, then OpsMatrix redraws the plan in its own style."}
                 </p>
 
+                {/* the hierarchy, up front: account → building → floor.
+                    Departments are picked per room later, in the editor. */}
                 <div className="prow">
-                  <label className="pfield">Building <small>optional</small>
-                    <input value={building} placeholder="read from the plan if left blank"
+                  <label className="pfield">Account <small>your hospital system</small>
+                    <input value={account} placeholder="e.g. Summa Health"
+                      onChange={(e) => setAccount(e.target.value)} />
+                  </label>
+                  <label className="pfield">Building
+                    <input value={building} placeholder="e.g. Crawfordsville"
                       onChange={(e) => setBuilding(e.target.value)} />
                   </label>
-                  <label className="pfield">Floor <small>optional</small>
-                    <input value={floor} placeholder="e.g. 4 East"
+                  <label className="pfield">Floor
+                    <input value={floor} placeholder="e.g. 2nd Floor"
                       onChange={(e) => setFloor(e.target.value)} />
                   </label>
                 </div>
@@ -225,11 +253,13 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode }:
                 {error && <p className="warntext">⚠ {error}</p>}
 
                 <button className="pbtn primary wide"
-                  disabled={mode === "read" && !keySaved && !proxied}
+                  disabled={!account.trim() || !building.trim() || !floor.trim() || (mode === "read" && !keySaved && !proxied)}
                   onClick={() => fileRef.current?.click()}>
-                  {mode === "calibrate" ? "Choose the file — open the Plan Studio" : "Choose floor plan (image, PDF or DXF)"}
+                  {mode === "calibrate" ? "Choose the file — open the Calibration Editor" : "Choose floor plan (image, PDF or DXF)"}
                 </button>
-                {mode === "read" && !keySaved && !proxied &&
+                {(!account.trim() || !building.trim() || !floor.trim()) &&
+                  <small className="pnote">Fill in account, building and floor first — that's where this plan files itself.</small>}
+                {!(!account.trim() || !building.trim() || !floor.trim()) && mode === "read" && !keySaved && !proxied &&
                   <small className="pnote">Save the API key above first — one time only.</small>}
                 <p className="pnote">
                   <button className="plink" onClick={() => setStep("choice")}>‹ Back to the question</button>
@@ -260,7 +290,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode }:
                 <p className="pnote big">✓ {result.rooms} rooms on the new floor plan.</p>
                 <p className="pnote">
                   {result.calibrated
-                    ? "Drawn in OpsMatrix's own style, every room measured from your calibration. It's saved with your other floor plans."
+                    ? "Shipped to Max Space — drawn in OpsMatrix's own style, every room measured from your calibration and filed under " + [account, building, floor].filter(Boolean).join(" → ") + ". The set stays editable in Max Space → Calibration Editor."
                     : (result.printed > 0
                       ? `${result.printed} of them had a square footage stated in the file, so those areas were used as-is`
                       : "No square footage was stated in the file, so the rooms were measured from the drawing") +
