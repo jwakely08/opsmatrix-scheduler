@@ -149,6 +149,12 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
                   Choose floor plan (image or PDF)
                 </button>
                 {!keySaved && !proxied && <small className="pnote">Save the API key above first — one time only.</small>}
+                <p className="pnote">
+                  No sizes printed on the plan?{" "}
+                  <a className="plink" href="./classic.html?calibrate=1">📐 Calibrate it yourself instead →</a>{" "}
+                  Trace a room you know the square footage of, and OpsMatrix measures the rest
+                  (border detection included).
+                </p>
 
                 <input ref={fileRef} type="file" style={{ display: "none" }}
                   accept="image/*,application/pdf,.pdf"

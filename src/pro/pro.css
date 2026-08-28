@@ -610,3 +610,137 @@ body {
   .fc-rail { width: 260px; }
   .wi-charts { grid-template-columns: 1fr; }
 }
+
+/* ── 2026-08-28 staging punch list: back button, Max Space hub views, colors ── */
+
+/* the ONE back button — same blue bubble everywhere */
+.pbtn.backbtn { border-radius: 999px; padding: 7px 16px; flex: none; }
+
+/* Floor Plans lives in classic — the tab that is really a link */
+.ptab-link {
+  padding: 7px 13px; border-radius: 9px; font-size: 12.5px; font-weight: 600;
+  color: #94a3b8; text-decoration: none;
+}
+.ptab-link:hover { color: #e2e8f0; background: rgba(148,163,184,.1); }
+
+/* priority spoken Josh's way: 1 / 2 / 3 */
+.priochip {
+  display: inline-block; min-width: 22px; text-align: center; padding: 2px 7px;
+  border-radius: 999px; font-size: 11.5px; font-weight: 700;
+}
+.priochip.high { background: rgba(239,68,68,.18); color: #f87171; border: 1px solid rgba(239,68,68,.4); }
+.priochip.medium { background: rgba(59,130,246,.15); color: #93c5fd; border: 1px solid rgba(59,130,246,.35); }
+.priochip.low { background: rgba(148,163,184,.12); color: #94a3b8; border: 1px solid rgba(148,163,184,.3); }
+
+/* checkbox rows (cleanable, only-unscheduled) */
+.checkline { display: flex; align-items: center; gap: 8px; flex-direction: row !important; }
+.checkline input[type="checkbox"] { width: 17px; height: 17px; accent-color: #0d9488; }
+.checkline span { font-size: 12.5px; color: #cbd5e1; letter-spacing: 0; text-transform: none; }
+
+/* the room's note, surfaced while scheduling */
+.roomnote {
+  background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.3);
+  border-radius: 9px; padding: 8px 10px; margin: 0 0 12px;
+}
+.roomnote p { margin: 0; font-size: 12.5px; color: #fcd34d; line-height: 1.45; }
+.roomnote p + p { margin-top: 4px; }
+
+/* schedule colors: pickable at creation, changeable on the card */
+.colorrow { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.colorrow > span { font-size: 11.5px; color: #94a3b8; }
+.colordot {
+  width: 18px; height: 18px; border-radius: 50%; border: 2px solid transparent;
+  cursor: pointer; padding: 0; flex: none;
+}
+.colordot.on, .colordot:hover { border-color: #fff; }
+.colordot.big { width: 16px; height: 16px; }
+.colordot-wrap { position: relative; display: inline-flex; align-items: center; }
+.colorpop {
+  position: absolute; top: 22px; left: -6px; z-index: 30; display: flex; gap: 6px;
+  background: #1a2740; border: 1px solid rgba(148,163,184,.25); border-radius: 10px;
+  padding: 8px 10px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
+
+/* inline "make a new schedule" inside the room sidebar */
+.addrow.newsched i.dashed { background: none; border: 2px dashed #64748b; }
+.newschedform {
+  display: flex; flex-direction: column; gap: 8px; padding: 10px;
+  background: #1a2740; border: 1px solid rgba(148,163,184,.2); border-radius: 10px;
+}
+.newschedform input, .newschedform select {
+  background: #0f1a2e; border: 1px solid rgba(148,163,184,.25); border-radius: 8px;
+  color: #e2e8f0; padding: 8px 10px; font-size: 13px;
+}
+
+/* Max Space hub: Explorer + Room List */
+.pro-list.spaces { max-width: 1200px; }
+.pro-filters.wrap { position: static; border: none; padding: 0 0 10px; background: none; flex-wrap: wrap; }
+.wi-search.wide { width: 100%; max-width: none; margin: 2px 0 10px; box-sizing: border-box; }
+.pnote.counts { margin: 0 0 8px; }
+.explbar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
+.crumbs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.crumbs em { color: #475569; font-style: normal; }
+.crumbs .plink { font-size: 13px; }
+.crumbs .plink.here { color: #e2e8f0; font-weight: 700; cursor: default; }
+.expltiles {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px;
+}
+.expltile {
+  text-align: left; background: #1a2740; border: 1px solid rgba(148,163,184,.18);
+  border-radius: 12px; padding: 16px; cursor: pointer;
+  transition: transform .18s ease, border-color .18s ease;
+}
+.expltile:hover { border-color: #2dd4bf; transform: translateY(-2px); }
+.expltile b { display: block; color: #e2e8f0; font-size: 14.5px; }
+.expltile span { display: block; color: #94a3b8; font-size: 12px; margin-top: 5px; }
+.expltile em.warn { display: block; color: #fbbf24; font-style: normal; font-size: 11.5px; margin-top: 5px; }
+
+.wi-table.rooms td { vertical-align: middle; }
+.wi-table.rooms .rowacts { white-space: nowrap; text-align: right; }
+.wi-table.rooms .rowacts .pbtn { padding: 3px 8px; margin-left: 4px; }
+.wi-table.rooms .misscell { color: #f87171; font-weight: 600; }
+.wi-table.rooms .misscell:empty::after { content: "—"; }
+.wi-table.rooms .cleancell { text-align: center; }
+.wi-table.rooms .cleancell input { width: 16px; height: 16px; accent-color: #0d9488; }
+.wi-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.wi-table th.sortable:hover { color: #e2e8f0; }
+.noteflag { font-size: 11px; }
+em.dim { color: #64748b; font-style: normal; }
+
+/* Rooms tab (list scheduling) */
+.needcell, .covcell { max-width: 320px; }
+.needcell .ptask, .covcell .covchip { margin: 1px 3px 1px 0; }
+.covchip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px;
+  border: 1px solid; border-radius: 999px; font-size: 11.5px; color: #e2e8f0;
+}
+.covchip i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.covchip button {
+  background: none; border: none; color: #94a3b8; cursor: pointer; padding: 0 0 0 2px; font-size: 11px;
+}
+.covchip button:hover { color: #f87171; }
+
+/* room editor modal */
+.pro-modal.roomedit { width: 640px; }
+.pro-modal.roomedit textarea {
+  background: #0f1a2e; border: 1px solid rgba(148,163,184,.25); border-radius: 8px;
+  color: #e2e8f0; padding: 8px 10px; font-size: 13px; width: 100%; box-sizing: border-box; resize: vertical;
+}
+.prow.endrow { justify-content: flex-end; margin-top: 14px; }
+
+/* Floor Care map picking */
+.fc-mapwrap { position: relative; height: 460px; border: 1px solid rgba(148,163,184,.18); border-radius: 12px; overflow: hidden; margin-bottom: 8px; }
+.fc-mapwrap .pro-mapwrap { position: absolute; inset: 0; }
+.fc-mappick {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 20;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: 92%;
+  background: #1a2740; border: 1px solid rgba(148,163,184,.3); border-radius: 12px;
+  padding: 10px 12px; box-shadow: 0 12px 40px rgba(0,0,0,.5);
+}
+.fc-mappick b { color: #e2e8f0; font-size: 13px; }
+
+@media (max-width: 640px) {
+  .pro-modal.roomedit { width: 100%; }
+  .expltiles { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .fc-mapwrap { height: 360px; }
+}
