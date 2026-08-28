@@ -52,16 +52,34 @@ Deno.serve(async (req) => {
 
   // GET = health/config sanity check (booleans and lengths ONLY — never
   // secret values). `curl <url>` answers "is this function configured?"
+  // Add ?selftest=1 and the function performs ONE tiny server-side call to
+  // Anthropic and reports the outcome — status + a short error/reply sample
+  // — so "can the server reach Claude?" is answerable without a browser.
   if (req.method === "GET") {
     const key = Deno.env.get("ANTHROPIC_API_KEY");
-    return reply(200, {
+    const model = (Deno.env.get("FORCE_MODEL") ?? "claude-fable-5").trim() || "claude-fable-5";
+    const out: Record<string, unknown> = {
       ok: true,
       has_anthropic_key: typeof key === "string" && key.length > 0,
       anthropic_key_length: key ? key.length : 0,
       allowed_origins: allowed,
-      force_model: (Deno.env.get("FORCE_MODEL") ?? "claude-fable-5").trim(),
+      force_model: model,
       monthly_token_budget: Number(Deno.env.get("AI_MONTHLY_TOKEN_BUDGET") ?? "20000000")
-    }, cors);
+    };
+    if (new URL(req.url).searchParams.get("selftest") === "1" && key) {
+      try {
+        const r = await fetch(ANTHROPIC_URL, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+          body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] })
+        });
+        out.upstream_status = r.status;
+        out.upstream_sample = (await r.text()).slice(0, 250);
+      } catch (e) {
+        out.upstream_threw = String((e as Error)?.message ?? e).slice(0, 300);
+      }
+    }
+    return reply(200, out, cors);
   }
   if (req.method !== "POST") return reply(405, { error: { message: "POST only." } }, cors);
 
