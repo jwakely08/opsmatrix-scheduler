@@ -66,7 +66,8 @@ type FieldId =
   | "system" | "building" | "floor" | "roomNumber" | "roomName" | "roomType"
   | "department" | "departmentName" | "grossSqFt" | "netSqFt" | "areaSqFt"
   | "costCenter" | "costCenterDescription" | "floorType" | "fixtureCount"
-  | "sourceKey" | "spaceDefinition" | "ahu";
+  | "sourceKey" | "spaceDefinition" | "ahu"
+  | "priority" | "cleanability" | "notes";
 
 const HEADER_KWDS: Record<string, { field: FieldId; w: number }> = {
   site: { field: "system", w: 3 }, campus: { field: "system", w: 4 },
@@ -132,7 +133,14 @@ const HEADER_KWDS: Record<string, { field: FieldId; w: number }> = {
   recordid: { field: "sourceKey", w: 3 }, guid: { field: "sourceKey", w: 4 },
 
   spacedefinition: { field: "spaceDefinition", w: 5 },
-  ahu: { field: "ahu", w: 5 }, airhandler: { field: "ahu", w: 4 }
+  ahu: { field: "ahu", w: 5 }, airhandler: { field: "ahu", w: 4 },
+
+  // OpsMatrix's own export round-trip (§12g) — also picked up from any
+  // customer sheet that happens to carry them
+  priority: { field: "priority", w: 4 }, prioritylevel: { field: "priority", w: 5 },
+  priority123: { field: "priority", w: 5 }, priority13: { field: "priority", w: 5 },
+  cleanable: { field: "cleanability", w: 4 }, cleanability: { field: "cleanability", w: 5 },
+  notes: { field: "notes", w: 4 }, roomnotes: { field: "notes", w: 5 }
 };
 
 export interface HeaderMatch {
@@ -381,9 +389,33 @@ export function normalizeFloorType(aliases: AliasStore, sourceValue: string): st
   if (!raw) return "";
   const key = norm(raw);
   if (key in aliases.floorTypes) return aliases.floorTypes[key];
+  // OpsMatrix's own three labels round-trip exactly (an exported file must
+  // re-import losslessly; test "unfinished" first — it contains "finished")
+  if (key === "hardfloorunfinished" || key === "unfinishedfloors") return "Hard floor — unfinished";
+  if (key === "hardfloorfinished" || key === "finishedfloors") return "Hard floor — finished";
   if (/carpet/i.test(raw)) return "Carpet";
   if (/vinyl|lvt|vct|tile|linoleum|terrazzo|rubber|epoxy|wood|laminate/i.test(raw)) return "Hard floor — finished";
   if (/concrete|unfinished|bare/i.test(raw)) return "Hard floor — unfinished";
+  return "";
+}
+
+/** a Priority cell → Josh's 1/2/3 stored as High/Medium/Low; "" = not stated */
+export function parsePriorityCell(v: string): "" | "High" | "Medium" | "Low" {
+  const s = norm(v);
+  if (!s) return "";
+  if (["1", "high", "critical", "top", "toppriority", "1toppriority", "p1", "must", "mustclean"].includes(s)) return "High";
+  if (["2", "medium", "standard", "normal", "2standard", "p2"].includes(s)) return "Medium";
+  if (["3", "low", "3low", "p3"].includes(s)) return "Low";
+  return "";
+}
+
+/** a Cleanable cell → the explicit override; "" = not stated (room type rules) */
+export function parseCleanableCell(v: string): "" | "Cleanable" | "Non-cleanable" | "Needs review" {
+  const s = norm(v);
+  if (!s) return "";
+  if (["yes", "y", "true", "1", "cleanable"].includes(s)) return "Cleanable";
+  if (["no", "n", "false", "0", "noncleanable", "notcleanable", "non"].includes(s)) return "Non-cleanable";
+  if (["needsreview", "review"].includes(s)) return "Needs review";
   return "";
 }
 
@@ -591,6 +623,12 @@ export function importRoomList(
       importedAt: now, applied: {}
     };
 
+    const fixtures = match.columns.fixtureCount !== undefined
+      ? parseNum(raw[match.columns.fixtureCount]) : null;
+    const priority = parsePriorityCell(cell(ri, "priority"));
+    const cleanability = parseCleanableCell(cell(ri, "cleanability"));
+    const noteVal = cell(ri, "notes");
+
     // the operational values this row wants to set. Blanks stay blank —
     // a null/"" here never overwrites something the manager typed.
     const wanted: Record<string, unknown> = {
@@ -599,7 +637,11 @@ export function importRoomList(
       departmentKey: dept.key ?? "",
       roomType: roomType ?? "",
       floorType,
-      squareFeet: sqft !== null && sqft > 0 ? sqft : undefined
+      squareFeet: sqft !== null && sqft > 0 ? sqft : undefined,
+      fixtureCount: fixtures !== null && fixtures >= 0 ? Math.round(fixtures) : undefined,
+      priority: priority || undefined,
+      cleanability: cleanability || undefined,
+      notes: noteVal || undefined
     };
 
     // match by stable source key first; the composite fallback only applies

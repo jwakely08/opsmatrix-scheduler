@@ -164,6 +164,17 @@
           wiBtn.addEventListener("click", function () { window.location.href = "./maps.html#workload"; });
           b.parentNode.insertBefore(wiBtn, b.nextSibling);
         }
+        // …and Exporting (§12g): any slice of the inventory out as Excel —
+        // a readable report, or a file ⬆ Import takes back losslessly
+        if (!document.getElementById("fusion-admin-export") && b.parentNode) {
+          var exBtn = document.createElement("button");
+          exBtn.id = "fusion-admin-export";
+          exBtn.type = "button";
+          exBtn.className = b.className;
+          exBtn.textContent = "exporting";
+          exBtn.addEventListener("click", function () { window.location.href = "./maps.html#exporting"; });
+          b.parentNode.insertBefore(exBtn, b.nextSibling);
+        }
       }
     }
     // Max Space gains a Map View tab, but Floor Plans STAYS: it owns uploading
@@ -194,6 +205,14 @@
       }
       var fAdd = document.getElementById("fusion-space-addroom");
       if (!hasArchiveAdd && !fAdd && anchor.parentNode) {
+        // ⬆ Import and ＋ Add Room travel as a pair, here like everywhere
+        var fImp = document.createElement("button");
+        fImp.id = "fusion-space-import";
+        fImp.type = "button";
+        fImp.className = anchor.className;
+        fImp.textContent = "⬆ Import";
+        fImp.addEventListener("click", showUploadHub);
+        anchor.parentNode.appendChild(fImp);
         fAdd = document.createElement("button");
         fAdd.id = "fusion-space-addroom";
         fAdd.type = "button";
@@ -203,6 +222,8 @@
         anchor.parentNode.appendChild(fAdd);
       } else if (hasArchiveAdd && fAdd && fAdd.parentNode) {
         fAdd.parentNode.removeChild(fAdd);
+        var fImp2 = document.getElementById("fusion-space-import");
+        if (fImp2 && fImp2.parentNode) fImp2.parentNode.removeChild(fImp2);
       }
       // undo the old hiding for anyone whose browser cached that build
       if (anchor.style.display === "none") anchor.style.display = "";
@@ -625,11 +646,27 @@
     card.setAttribute("style",
       "background:#fff;border-radius:14px;max-width:520px;width:100%;padding:24px;" +
       "font-family:'Segoe UI',sans-serif;color:#1c2b33;box-shadow:0 18px 60px rgba(0,0,0,.35);");
+    // STEP 1 is an explicit question (Josh, 2026-08-28: the calibration path
+    // must be a real choice, not a footnote): does the plan state its sizes?
+    var choiceTile = function (id, title, sub) {
+      return "<button id='" + id + "' type='button' style='display:block;width:100%;text-align:left;margin-bottom:10px;" +
+        "padding:14px 16px;border:1px solid #d8e0e6;border-radius:10px;background:#fff;cursor:pointer'>" +
+        "<b style='font-size:14.5px;color:#1c2b33'>" + title + "</b>" +
+        "<span style='display:block;font-size:12.5px;color:#5b7083;margin-top:3px'>" + sub + "</span></button>";
+    };
     card.innerHTML =
       "<h3 style='margin:0 0 6px;font-size:17px'>🗺 Upload a floor plan</h3>" +
-      "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>Pick a picture or PDF. Max reads the rooms, " +
-      "their numbers and any square footage printed on the plan, then OpsMatrix redraws it in its own clean " +
-      "style. If the plan states its sizes, there is nothing to calibrate or measure.</p>" +
+      "<div id='fusion-smart-choice'>" +
+      "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>One question first: does the plan have readable " +
+      "measurements — room sizes or square footage printed on it?</p>" +
+      choiceTile("fusion-choice-read", "✨ Yes — the sizes are printed on the plan",
+        "Max reads the rooms, numbers and square footage, and the plan arrives already to scale. Nothing to measure.") +
+      choiceTile("fusion-choice-cal", "📐 No — it's just the floor plan, no sizes",
+        "Calibrate it yourself: trace 1–3 rooms you KNOW the square footage of, and OpsMatrix measures every other room from your calibration (border detection included).") +
+      "</div>" +
+      "<div id='fusion-smart-form' style='display:none'>" +
+      "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>Pick the picture or PDF. Max reads the rooms, " +
+      "their numbers and the printed square footage, then OpsMatrix redraws the plan in its own clean style.</p>" +
       "<div style='display:flex;gap:8px;margin-bottom:10px'>" +
       "<label style='flex:1;font-size:11px;letter-spacing:.05em;color:#8fa3b0;text-transform:uppercase'>Building" +
       "<input id='fusion-plan-building' type='text' placeholder='read from the plan if left blank' " +
@@ -643,19 +680,18 @@
       "border-radius:8px;font-size:14px;font-weight:600;cursor:pointer'>Choose floor plan (image or PDF)</button>" +
       "<input id='fusion-plan-file' type='file' accept='image/*,application/pdf,.pdf' style='display:none'/>" +
       "<div id='fusion-smart-status' style='min-height:18px;font-size:12.5px;color:#0f6b62;margin-top:10px'></div>" +
-      // the calibration road back (Josh, 2026-08-28): plans with no readable
-      // sizes get the original measure-a-known-room + border-detection flow
-      "<p style='margin:10px 0 0;font-size:12.5px;color:#5b7083'>No sizes printed on the plan? " +
-      "<button id='fusion-smart-calibrate' type='button' style='border:none;background:none;padding:0;" +
-      "color:#0f6b62;text-decoration:underline;cursor:pointer;font-size:12.5px'>📐 Calibrate it yourself instead</button>" +
-      " — trace a room you know the square footage of, and OpsMatrix measures the rest (border detection included).</p>" +
+      "</div>" +
       "<div style='text-align:right;margin-top:4px'>" +
       "<button id='fusion-smart-cancel' type='button' style='padding:7px 14px;border:none;background:none;" +
       "font-size:12.5px;color:#8fa3b0;cursor:pointer'>Cancel</button></div>";
     wrap.appendChild(card);
     document.body.appendChild(wrap);
 
-    document.getElementById("fusion-smart-calibrate").addEventListener("click", function () {
+    document.getElementById("fusion-choice-read").addEventListener("click", function () {
+      document.getElementById("fusion-smart-choice").style.display = "none";
+      document.getElementById("fusion-smart-form").style.display = "";
+    });
+    document.getElementById("fusion-choice-cal").addEventListener("click", function () {
       if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
       goToCalibrate();
     });

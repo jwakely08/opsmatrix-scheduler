@@ -5,14 +5,18 @@
 // lazily — only when someone actually picks an Excel file.
 import type { RawSheet } from "./roomListImport";
 
-interface SheetJs {
+export interface SheetJs {
   read(data: ArrayBuffer, opts: { type: "array" }): {
     SheetNames: string[];
     Sheets: Record<string, unknown>;
   };
   utils: {
     sheet_to_json(sheet: unknown, opts: { header: 1; defval: string; raw: boolean }): unknown[][];
+    aoa_to_sheet(rows: unknown[][]): Record<string, unknown>;
+    book_new(): unknown;
+    book_append_sheet(wb: unknown, ws: unknown, name: string): void;
   };
+  writeFile(wb: unknown, filename: string): void;
 }
 
 declare global {
@@ -21,7 +25,7 @@ declare global {
 
 let loading: Promise<SheetJs> | null = null;
 
-function loadSheetJs(): Promise<SheetJs> {
+export function loadSheetJs(): Promise<SheetJs> {
   if (window.XLSX) return Promise.resolve(window.XLSX);
   if (!loading) {
     loading = new Promise((resolve, reject) => {
