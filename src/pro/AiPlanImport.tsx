@@ -24,6 +24,9 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
   onClose: () => void;
 }) {
   const [phase, setPhase] = useState<Phase>("form");
+  // step 1 is an explicit question (Josh, 2026-08-28): sizes printed on the
+  // plan → Max reads it; no readable sizes → the calibrate/measure flow
+  const [step, setStep] = useState<"choice" | "form">("choice");
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [apiKey, setApiKey] = useState<string>(() => loadApiKey());
@@ -37,7 +40,7 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
 
   useEffect(() => { void aiProxy().then((p) => setProxied(Boolean(p))); }, []);
 
-  const close = () => { setPhase("form"); setError(""); setStatus(""); setResult(null); onClose(); };
+  const close = () => { setPhase("form"); setStep("choice"); setError(""); setStatus(""); setResult(null); onClose(); };
 
   async function handleFile(file: File) {
     setPhase("working");
@@ -99,7 +102,31 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
               {phase !== "working" && <button className="pbtn ghost" onClick={close}>✕</button>}
             </div>
 
-            {(phase === "form" || phase === "error") && (
+            {(phase === "form" || phase === "error") && step === "choice" && (
+              <>
+                <p className="pnote">
+                  One question first: does the plan have readable measurements — room sizes or
+                  square footage printed on it?
+                </p>
+                <button className="upltile" onClick={() => setStep("form")}>
+                  <b>✨ Yes — the sizes are printed on the plan</b>
+                  <span>
+                    Max reads the rooms, numbers and square footage, and the plan arrives already
+                    to scale. Nothing to measure.
+                  </span>
+                </button>
+                <a className="upltile" href="./classic.html?calibrate=1" style={{ display: "block", textDecoration: "none" }}>
+                  <b>📐 No — it's just the floor plan, no sizes</b>
+                  <span>
+                    Calibrate it yourself: trace 1–3 rooms you KNOW the square footage of, and
+                    OpsMatrix measures every other room from your calibration (border detection
+                    included).
+                  </span>
+                </a>
+              </>
+            )}
+
+            {(phase === "form" || phase === "error") && step === "form" && (
               <>
                 <p className="pnote">
                   Pick a picture or PDF of any floor plan. Max reads the rooms, their numbers and
@@ -150,10 +177,7 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
                 </button>
                 {!keySaved && !proxied && <small className="pnote">Save the API key above first — one time only.</small>}
                 <p className="pnote">
-                  No sizes printed on the plan?{" "}
-                  <a className="plink" href="./classic.html?calibrate=1">📐 Calibrate it yourself instead →</a>{" "}
-                  Trace a room you know the square footage of, and OpsMatrix measures the rest
-                  (border detection included).
+                  <button className="plink" onClick={() => setStep("choice")}>‹ No sizes on the plan after all? Go back</button>
                 </p>
 
                 <input ref={fileRef} type="file" style={{ display: "none" }}

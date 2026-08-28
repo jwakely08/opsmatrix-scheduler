@@ -12,6 +12,7 @@ import { MapCanvas } from "./MapCanvas";
 import {
   SpaceExplorerView, RoomListView, RoomEditor, notesForSpace, type SpacesView
 } from "./SpacesApp";
+import { ExportApp } from "./ExportApp";
 import { PrintSchedule } from "./PrintSchedule";
 import { AiPlanImport } from "./AiPlanImport";
 import { WorkloadApp, ImportResult } from "./WorkloadApp";
@@ -35,7 +36,7 @@ const RED = "#dc2626";
 
 function uid(p: string) { return p + "-" + Math.random().toString(36).slice(2, 9); }
 
-type Tab = "map" | "rooms" | "schedules" | "spaces" | "scope" | "workload" | "floorcare";
+type Tab = "map" | "rooms" | "schedules" | "spaces" | "scope" | "workload" | "floorcare" | "exporting";
 
 /**
  * The hash is the hub's single source of truth for WHICH view is on screen:
@@ -50,6 +51,7 @@ type Tab = "map" | "rooms" | "schedules" | "spaces" | "scope" | "workload" | "fl
 function parseHash(h: string): { tab: Tab; spacesView: SpacesView; autoAdd: boolean } {
   if (h === "#scope") return { tab: "scope", spacesView: "explorer", autoAdd: false };
   if (h === "#workload") return { tab: "workload", spacesView: "explorer", autoAdd: false };
+  if (h === "#exporting") return { tab: "exporting", spacesView: "explorer", autoAdd: false };
   if (h.indexOf("#floorcare") === 0) return { tab: "floorcare", spacesView: "explorer", autoAdd: false };
   if (h.indexOf("#spaces") === 0) {
     const m = /view=(explorer|list|map)/.exec(h);
@@ -225,6 +227,8 @@ export function MapsApp() {
         <button className="pbtn primary backbtn" onClick={goBack}>‹ Back</button>
         {tab === "scope" ? (
           <h1>Admin Settings — <span>Scope</span></h1>
+        ) : tab === "exporting" ? (
+          <h1>Admin Settings — <span>Exporting</span></h1>
         ) : tab === "workload" ? (
           <h1>Workload <span>Intelligence</span></h1>
         ) : tab === "floorcare" ? (
@@ -434,6 +438,10 @@ export function MapsApp() {
 
         {tab === "workload" && (
           <WorkloadApp data={data} rules={rules} commit={commit} commitRules={commitRules} />
+        )}
+
+        {tab === "exporting" && (
+          <ExportApp data={data} rules={rules} />
         )}
 
         {tab === "floorcare" && (
