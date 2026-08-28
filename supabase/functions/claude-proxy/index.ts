@@ -41,14 +41,24 @@ function reply(status: number, body: unknown, cors: Record<string, string>): Res
 }
 
 /**
- * Secrets pasted through terminals pick up invisible characters — a Windows
- * carriage return survived a hidden `read` prompt and made every upstream
- * call throw "failed to parse header value" (the entire first staging AI
- * outage). Strip ALL whitespace/control characters on read so no paste can
- * ever poison a header again.
+ * Secrets pasted through terminals pick up invisible characters — the first
+ * staging AI outage was an invisible non-ASCII character (zero-width space
+ * class) riding along with the key paste, throwing "failed to parse header
+ * value" on every upstream call. Real API keys are pure printable ASCII, so
+ * strip everything else on read; whatIsStripped() reports the junk (codes
+ * and positions only — never key material) through the health check.
  */
 function sanitizeSecret(v: string): string {
-  return v.replace(/[\s\r\n\t]+/g, "");
+  return v.replace(/[^\x21-\x7e]/g, "");
+}
+
+function whatIsStripped(v: string): { index: number; code: number }[] {
+  const out: { index: number; code: number }[] = [];
+  for (let i = 0; i < v.length && out.length < 8; i++) {
+    const c = v.codePointAt(i)!;
+    if (c < 0x21 || c > 0x7e) out.push({ index: i, code: c });
+  }
+  return out;
 }
 
 Deno.serve(async (req) => {
@@ -75,6 +85,7 @@ Deno.serve(async (req) => {
       has_anthropic_key: key.length > 0,
       anthropic_key_length: key.length,
       key_had_stray_characters: rawKey.length !== key.length,
+      stray_characters: whatIsStripped(rawKey),
       allowed_origins: allowed,
       force_model: model,
       monthly_token_budget: Number(Deno.env.get("AI_MONTHLY_TOKEN_BUDGET") ?? "20000000")
