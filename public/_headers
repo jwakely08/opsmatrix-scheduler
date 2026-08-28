@@ -12,4 +12,4 @@
   X-Frame-Options: DENY
   Permissions-Policy: camera=(), geolocation=(), microphone=(self)
   Strict-Transport-Security: max-age=31536000; includeSubDomains
-  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.anthropic.com https://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://api.anthropic.com https://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
