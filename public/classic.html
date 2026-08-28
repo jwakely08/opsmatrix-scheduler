@@ -41598,8 +41598,6 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
         b.setAttribute("data-fusion-space-wired", "1");
         b.addEventListener("click", function (e) {
           if (/[?&]fp=1/.test(window.location.search)) return;           // deep link to Floor Plans
-          if (sessionStorage.getItem("fusion-goto-plans") === "1") return; // calibration flow
-          if (sessionStorage.getItem("fusion-goto-addplan") === "1") return;
           e.preventDefault();
           e.stopPropagation();
           window.location.href = "./maps.html#spaces";
@@ -41780,30 +41778,12 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
       // undo the old hiding for anyone whose browser cached that build
       if (anchor.style.display === "none") anchor.style.display = "";
       openFloorPlansIfRequested(anchor);
-      openAddPlanIfRequested();
     }
   }
 
-  /**
-   * The calibration flow (measure a room you know + border detection) is the
-   * archive's own Add Floor Plan path. Two flags drive the hop:
-   *   fusion-goto-plans   → click Floor Plans once it exists
-   *   fusion-goto-addplan → then click Add Floor Plan / Upload First Plan
-   */
-  var addPlanTries = 0;
-  function openAddPlanIfRequested() {
-    if (sessionStorage.getItem("fusion-goto-addplan") !== "1") return;
-    if (addPlanTries++ > 40) { sessionStorage.removeItem("fusion-goto-addplan"); return; }
-    var btns = document.querySelectorAll("button");
-    for (var i = 0; i < btns.length; i++) {
-      var t = (btns[i].textContent || "").trim();
-      if (t === "Add Floor Plan" || t === "Upload First Plan") {
-        sessionStorage.removeItem("fusion-goto-addplan");
-        btns[i].click();
-        return;
-      }
-    }
-  }
+  // NOTE (2026-08-28 night): the archive's Add Floor Plan tracer is fully
+  // retired for NEW plans — the hub's Plan Studio owns tracing, snapping and
+  // calibration now. Floor Plans in classic remains the viewer of saved plans.
 
   // ── the ONE back button + the shared navigation trail ─────────────────────
   // classic.html and maps.html keep one back-stack in sessionStorage
@@ -42020,11 +42000,6 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
    */
   var deepLinked = false;
   function openFloorPlansIfRequested(floorPlansBtn) {
-    if (sessionStorage.getItem("fusion-goto-plans") === "1") {
-      sessionStorage.removeItem("fusion-goto-plans");
-      floorPlansBtn.click();
-      return;
-    }
     if (deepLinked || !/[?&]fp=1/.test(window.location.search)) return;
     deepLinked = true;
     floorPlansBtn.click();
@@ -42037,10 +42012,9 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
   // lands ON the rooms, not the dashboard).
   var spaceTries = 0;
   function ensureSpaceScreen() {
-    // roads into the ARCHIVE's Max Space (Floor Plans / calibration only):
-    // ?fp=1 deep link, or the calibration flags. Room lists live in the hub.
-    var wantSpace = /[?&]fp=1/.test(window.location.search) ||
-      sessionStorage.getItem("fusion-goto-plans") === "1";
+    // the ONE road into the ARCHIVE's Max Space (the Floor Plans viewer):
+    // the ?fp=1 deep link. Everything else lives in the hub.
+    var wantSpace = /[?&]fp=1/.test(window.location.search);
     if (!wantSpace || deepLinked) return;
     if (spaceTries++ > 20) { deepLinked = true; return; }
     var btns = document.querySelectorAll("button");
@@ -42214,10 +42188,7 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
       choiceTile("fusion-choice-read", "✨ Yes — the sizes are printed on the plan",
         "Max reads the rooms, numbers and square footage, and the plan arrives already to scale. Nothing to measure.") +
       choiceTile("fusion-choice-cal", "📐 No — it's just the floor plan, no sizes",
-        "Max still reads and draws every room. Then you type the square footage of 1–3 rooms you KNOW, and every other room is measured from your calibration.") +
-      "<p style='margin:0;font-size:12px;color:#8fa3b0'>Worst-case plan (too blurry for Max)? " +
-      "<button id='fusion-choice-trace' type='button' style='border:none;background:none;padding:0;" +
-      "color:#0f6b62;text-decoration:underline;cursor:pointer;font-size:12px'>Trace it by hand in the plan editor</button></p>" +
+        "The Plan Studio opens on your file: trace a room you KNOW (the snap pulls it onto the walls), type its square footage — that's the calibration — then Max draws the rest, measured from YOUR numbers.") +
       "</div>" +
       "<div id='fusion-smart-form' style='display:none'>" +
       "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>Pick the picture or PDF. Max reads the rooms, " +
@@ -42248,12 +42219,8 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
     });
     document.getElementById("fusion-choice-cal").addEventListener("click", function () {
       if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
-      // Max reads + user calibrates 1–3 known rooms — the hub owns that flow
+      // the Plan Studio (hub) owns the whole calibrate experience now
       window.location.href = "./maps.html#spaces?view=map&plancal=1";
-    });
-    document.getElementById("fusion-choice-trace").addEventListener("click", function () {
-      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
-      goToCalibrate(); // the archive's hand-tracing editor, for worst cases
     });
 
     renderKeyRow(getApiKey());
@@ -42323,17 +42290,6 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
         goWithProxy(null);
       }
     });
-  }
-
-  /** hop into the archive's own Add Floor Plan flow (trace + calibrate) */
-  function goToCalibrate() {
-    sessionStorage.setItem("fusion-goto-plans", "1");
-    sessionStorage.setItem("fusion-goto-addplan", "1");
-    // if we're already on the archive's Max Space, the observer takes it from
-    // here; otherwise click the nav (the rewire lets it through on the flags)
-    if (!clickNav("Max Space")) {
-      window.location.href = "./classic.html?calibrate=1";
-    }
   }
 
   function setSmartStatus(msg, isErr) {
@@ -43596,17 +43552,15 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
   // (demo seeding lives in fusion-seed.js, injected BEFORE the app's script)
   var mo = new MutationObserver(function () { ensureSpaceScreen(); ensureGotoPage(); ensureButton(); ensureMobileNav(); });
   function boot() {
-    // ?calibrate=1 (from the hub's plan-upload dialog): straight into the
-    // archive's Add Floor Plan flow — trace a known room, calibrate, detect
+    // legacy ?calibrate=1 links: the Plan Studio (hub) owns calibration now
     if (/[?&]calibrate=1/.test(window.location.search)) {
-      sessionStorage.setItem("fusion-goto-plans", "1");
-      sessionStorage.setItem("fusion-goto-addplan", "1");
+      window.location.replace("./maps.html#spaces?view=map&plancal=1");
+      return;
     }
     // the navigation trail: classic always boots on the Dashboard unless a
     // goto flag immediately moves it (those pushes happen on arrival)
     if (!sessionStorage.getItem("fusion-goto-page") &&
-        !/[?&](fp|calibrate)=1/.test(window.location.search) &&
-        sessionStorage.getItem("fusion-goto-plans") !== "1") {
+        !/[?&]fp=1/.test(window.location.search)) {
       navVisit("classic:Dashboard");
     }
     // record every sidebar navigation (capture — before React re-renders);

@@ -16,6 +16,8 @@
 //   • room type                      → drives cleaning rates
 import { guessType, estimateMinutes, type ImportResult } from "./fusionEntry";
 
+export type { ImportResult };
+
 export const AI_MODEL = "claude-fable-5";
 const API_URL = "https://api.anthropic.com/v1/messages";
 
