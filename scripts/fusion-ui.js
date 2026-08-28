@@ -25,6 +25,7 @@
 
   function ensureButton() {
     hideClassicPlanUploadButtons();
+    hideCloudManagedSettings();
     ensureNavLink();
   }
 
@@ -188,14 +189,23 @@
   }
 
   // bounded: the observer fires on every re-render, so give up rather than
-  // clicking forever if a future Classic build stops showing Floor Plans
+  // clicking forever if a future Classic build stops showing Floor Plans.
+  // Two ways in: ?fp=1 (deep link) or the one-shot fusion-goto-space flag
+  // (set by e.g. the room-list import's "Open the rooms" button so a reload
+  // lands ON the rooms, not the dashboard).
   var spaceTries = 0;
   function ensureSpaceScreen() {
-    if (!/[?&]fp=1/.test(window.location.search) || deepLinked) return;
+    var wantSpace = /[?&]fp=1/.test(window.location.search) ||
+      sessionStorage.getItem("fusion-goto-space") === "1";
+    if (!wantSpace || deepLinked) return;
     if (spaceTries++ > 20) { deepLinked = true; return; }
     var btns = document.querySelectorAll("button");
     for (var i = 0; i < btns.length; i++) {
-      if ((btns[i].textContent || "").trim() === "Max Space") { btns[i].click(); return; }
+      if ((btns[i].textContent || "").trim() === "Max Space") {
+        btns[i].click();
+        sessionStorage.removeItem("fusion-goto-space");
+        return;
+      }
     }
   }
 
@@ -426,7 +436,14 @@
       if (!file) return;
       var building = (document.getElementById("fusion-plan-building").value || "").trim();
       var floor = (document.getElementById("fusion-plan-floor").value || "").trim();
-      runSmartImport(file, building, floor, getApiKey(), close, proxy);
+      // resolve the proxy FRESH at the moment of use — never trust a stale
+      // capture (the staging smoke test caught exactly that race)
+      var goWithProxy = function (p) { runSmartImport(file, building, floor, getApiKey(), close, p || proxy); };
+      if (window.OpsMatrixFusion && typeof window.OpsMatrixFusion.aiProxy === "function") {
+        window.OpsMatrixFusion.aiProxy().then(goWithProxy, function () { goWithProxy(null); });
+      } else {
+        goWithProxy(null);
+      }
     });
   }
 
@@ -572,16 +589,17 @@
       "<h3 style='margin:0 0 2px;font-size:17px'>✓ Room list imported</h3>" +
       "<p style='margin:0 0 12px;font-size:13px;color:#5b7083'>" + s.rows + " rooms/spaces processed.</p>" +
       lines + warns +
-      "<div style='display:flex;gap:10px;justify-content:flex-end;margin-top:16px'>" +
-      "<button id='fusion-rl-wi' type='button' style='padding:9px 14px;border:1px solid #d8e0e6;background:#fff;" +
-      "border-radius:8px;font-size:13px;cursor:pointer;color:#39505c'>Open Workload Intelligence</button>" +
+      "<p style='margin:12px 0 0;font-size:12px;color:#8fa3b0'>Workload analysis for these rooms lives in " +
+      "Admin Settings → workload intelligence.</p>" +
+      "<div style='display:flex;gap:10px;justify-content:flex-end;margin-top:14px'>" +
       "<button id='fusion-rl-ok' type='button' style='padding:9px 16px;border:none;background:#0d9488;color:#fff;" +
       "border-radius:8px;font-size:13px;font-weight:600;cursor:pointer'>Open the rooms</button></div>";
     wrap.appendChild(card);
     document.body.appendChild(wrap);
-    document.getElementById("fusion-rl-ok").addEventListener("click", function () { window.location.reload(); });
-    document.getElementById("fusion-rl-wi").addEventListener("click", function () {
-      window.location.href = "./maps.html#workload";
+    // land ON the rooms after the reload — not the dashboard
+    document.getElementById("fusion-rl-ok").addEventListener("click", function () {
+      sessionStorage.setItem("fusion-goto-space", "1");
+      window.location.reload();
     });
   }
 
@@ -1523,45 +1541,84 @@
   wireMaxFusionTools();
 
   // ── the Claude proxy bridge for the ARCHIVE's own Max assistant ────────────
-  // On cloud builds with a signed-in account, the archive's chat/voice
-  // assistant must not need (or expose) a browser API key: its calls to
-  // api.anthropic.com are re-routed to the server-side claude-proxy, which
-  // holds the organization's key and meters usage. The archive is untouched
-  // — only this page's fetch to that ONE exact URL is redirected, with a
-  // fresh session token per call. Local builds and signed-out sessions:
-  // nothing is wrapped, direct mode works exactly as always.
+  // On cloud builds, the archive's chat/voice assistant must not need (or
+  // expose) a browser API key: this page's calls to api.anthropic.com are
+  // re-routed to the server-side claude-proxy, which holds the organization's
+  // key and meters usage. The archive is untouched — only fetches to that
+  // ONE exact URL are redirected.
+  //
+  // The wrapper installs SYNCHRONOUSLY at boot and resolves the proxy FRESH
+  // on every call. (The first version installed it asynchronously after a
+  // session probe — the staging smoke test proved that leaves a window where
+  // the placeholder key can leak to Anthropic as an "invalid API key". This
+  // design makes that impossible: with no session and no real key, the call
+  // is answered locally with a plain-English sign-in message.)
+  var CLOUD_KEY_PLACEHOLDER = "managed-by-opsmatrix-cloud";
+
   function wireAiProxy() {
     if (window.__fusionAiProxyWired) return;
     var F = window.OpsMatrixFusion;
     if (!F || typeof F.aiProxy !== "function" || !F.cloudConfigured) return;
     window.__fusionAiProxyWired = true;
-    F.aiProxy().then(function (probe) {
-      if (!probe) return; // signed out → direct mode, untouched
-      var origFetch = window.fetch.bind(window);
-      window.fetch = function (input, init) {
-        var url = typeof input === "string" ? input : (input && input.url) || "";
-        if (url !== "https://api.anthropic.com/v1/messages") return origFetch(input, init);
-        return F.aiProxy().then(function (p) {
-          if (!p) return origFetch(input, init); // session gone → let direct mode try
-          var headers = new Headers((init && init.headers) || {});
+
+    var origFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      var url = typeof input === "string" ? input : (input && input.url) || "";
+      if (url !== "https://api.anthropic.com/v1/messages") return origFetch(input, init);
+      return F.aiProxy().catch(function () { return null; }).then(function (p) {
+        var headers = new Headers((init && init.headers) || {});
+        if (p) {
           headers.delete("x-api-key");
           headers.delete("anthropic-dangerous-direct-browser-access");
           headers.set("authorization", "Bearer " + p.token);
-          headers.set("x-opsmatrix-feature", "max-chat");
+          if (!headers.get("x-opsmatrix-feature")) headers.set("x-opsmatrix-feature", "max-chat");
           return origFetch(p.url, Object.assign({}, init, { headers: headers }));
-        });
-      };
-      // The archive hides its Max features until a key is saved. Under the
-      // proxy the ACCOUNT is the key, so satisfy that check with a marker
-      // value that never reaches Anthropic (auth is swapped on every call).
-      if (!getApiKey()) {
-        setApiKey("managed-by-opsmatrix-cloud");
-        if (!sessionStorage.getItem("fusion-proxy-reloaded")) {
-          sessionStorage.setItem("fusion-proxy-reloaded", "1");
-          window.location.reload();
         }
+        var key = headers.get("x-api-key") || "";
+        if (key && key !== CLOUD_KEY_PLACEHOLDER) return origFetch(input, init); // a real personal key
+        // no proxy session and no real key: answer here, in plain English —
+        // the placeholder must NEVER reach Anthropic as an "invalid key"
+        return new Response(JSON.stringify({
+          error: {
+            type: "authentication_error",
+            message: "Sign in to OpsMatrix to use Max — open Max Schedules, sign in, then try again."
+          }
+        }), { status: 401, headers: { "content-type": "application/json" } });
+      });
+    };
+
+    // The archive enables its Max features only when a key is saved; under
+    // the proxy the ACCOUNT is the key. Seed the marker once a session is
+    // confirmed (the wrapper above guarantees it can never leak), with one
+    // guarded reload so the archive sees it at load time.
+    F.aiProxy().then(function (p) {
+      if (!p || getApiKey()) return;
+      setApiKey(CLOUD_KEY_PLACEHOLDER);
+      if (!sessionStorage.getItem("fusion-proxy-reloaded")) {
+        sessionStorage.setItem("fusion-proxy-reloaded", "1");
+        window.location.reload();
       }
-    }).catch(function () { /* proxy probe failed → direct mode, untouched */ });
+    }).catch(function () { /* stays keyless until sign-in — wrapper still guards */ });
+  }
+
+  // In cloud mode the API key and model are managed by OpsMatrix (the server
+  // holds the org key; the proxy pins the model) — the archive's "Max AI"
+  // settings block (key field + model picker) must not be shown to users.
+  // The administrator controls AI centrally, not per-browser.
+  function hideCloudManagedSettings() {
+    var F = window.OpsMatrixFusion;
+    if (!F || !F.cloudConfigured) return;
+    var input = document.querySelector("input[placeholder='sk-ant-api...']");
+    if (!input) return;
+    var el = input;
+    for (var i = 0; i < 8 && el; i++) {
+      el = el.parentElement;
+      if (el && el.textContent.indexOf("Max Operator Model") >= 0 &&
+          el.textContent.indexOf("Anthropic API Key") >= 0) {
+        if (el.style.display !== "none") el.style.display = "none";
+        return;
+      }
+    }
   }
 
   // ── phone bottom nav: one strip that slides, EVERY destination on it ───────
@@ -1619,8 +1676,13 @@
     ensureSpaceScreen();
     ensureButton();
     ensureMobileNav();
-    // cloud builds only: mirror this page's data to the organization (no-op
-    // on the demo/local builds and when nobody is signed in — see fusionEntry)
+    // cloud builds only (all no-ops on local/demo builds):
+    // 1. signed-out visitors go to the sign-in screen
+    // 2. mirror this page's data to the organization
+    // 3. the Claude proxy bridge (installed synchronously — see wireAiProxy)
+    if (window.OpsMatrixFusion && typeof window.OpsMatrixFusion.enforceCloudSignIn === "function") {
+      try { window.OpsMatrixFusion.enforceCloudSignIn(); } catch (e) { /* stay */ }
+    }
     if (window.OpsMatrixFusion && typeof window.OpsMatrixFusion.startCloudSync === "function") {
       try { window.OpsMatrixFusion.startCloudSync(); } catch (e) { /* stays local */ }
     }

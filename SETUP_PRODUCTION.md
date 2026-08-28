@@ -90,6 +90,12 @@ npx supabase@latest secrets set --project-ref <PROJECT_REF> \
 unset AK
 ```
 
+The proxy PINS the model server-side (default `claude-fable-5`) — users
+cannot pick a model; set the optional secret `FORCE_MODEL` to change it
+(empty string = allow client-selected models, not recommended). After any
+change to `supabase/functions/claude-proxy/index.ts`, redeploy with the
+same `functions deploy` command — secrets are kept across deploys.
+
 `ALLOWED_ORIGINS` — dev: `http://localhost:5173,http://localhost:4173`;
 staging/production BEFORE Cloudflare exists: set the deliberate placeholder
 `https://pending.invalid` (no browser can call the proxy until section 3

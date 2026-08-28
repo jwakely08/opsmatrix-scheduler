@@ -13,8 +13,11 @@ initMonitoring();
 
 // Any entrance can restore the demo: ?demo=1 seeds when the saved data is a
 // stale/absent demo (stamped — never touches real imported work).
+// CLOUD builds never seed: demo data must not sync itself into a customer's
+// organization (the demo is the public LOCAL deployment's job).
+import { cloudConfigured } from "./cloudConfig";
 const DEMO_STAMP_KEY = "opsmatrix_v7_demo_stamp";
-if (/[?&]demo=1/.test(window.location.search)) {
+if (!cloudConfigured && /[?&]demo=1/.test(window.location.search)) {
   try {
     const stamp = demoStamp();
     let isDemo = true;

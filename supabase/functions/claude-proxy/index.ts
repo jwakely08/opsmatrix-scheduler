@@ -87,9 +87,20 @@ Deno.serve(async (req) => {
     }
   }
 
-  // ── forward untouched; the key exists only here ──
+  // ── forward with the model PINNED; the key exists only here ──
+  // The administrator decides which model OpsMatrix runs on — clients cannot
+  // choose. FORCE_MODEL secret overrides the default; set it to "" to allow
+  // client-selected models (not recommended).
   const feature = (req.headers.get("x-opsmatrix-feature") ?? "messages").slice(0, 40);
-  const body = await req.text();
+  const forceModel = (Deno.env.get("FORCE_MODEL") ?? "claude-fable-5").trim();
+  let body = await req.text();
+  if (forceModel) {
+    try {
+      const j = JSON.parse(body);
+      j.model = forceModel;
+      body = JSON.stringify(j);
+    } catch { /* unparseable — forward as-is; Anthropic will reject it anyway */ }
+  }
   let upstream: Response;
   try {
     upstream = await fetch(ANTHROPIC_URL, {

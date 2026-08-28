@@ -31,7 +31,12 @@
   }
 
   try {
-    if (/[?&]demo=1/.test(window.location.search) &&
+    // cloud builds never seed the demo — it would sync itself into the
+    // signed-in organization's real data
+    var cloudBuild = false;
+    try { cloudBuild = !!(window.OpsMatrixFusion && window.OpsMatrixFusion.cloudConfigured); } catch (eC) { /* local */ }
+    if (!cloudBuild &&
+        /[?&]demo=1/.test(window.location.search) &&
         window.OpsMatrixFusion && window.OpsMatrixFusion.buildClassicDemo) {
       var stamp = window.OpsMatrixFusion.demoStamp();
       if (localStorage.getItem(DEMO_STAMP_KEY) !== stamp) {
