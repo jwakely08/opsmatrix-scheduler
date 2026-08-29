@@ -26,12 +26,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  buildGray, snapToWalls, shoelacePx, centroid, type Gray, type XY
+  buildGray, snapToWalls, shoelacePx, centroid, autoDetectRooms, type Gray, type XY
 } from "./planSnap";
 import { calibrateFromKnownRooms } from "./planCalibrate";
 import {
-  buildPlanFromRooms, readPlanWithAI, AiPlanError, type ImportResult
+  buildPlanFromRooms, readPlanMultiPass, AiPlanError,
+  type ImportResult, type AiRoom, type DrawingBox
 } from "../bridge/aiPlanImport";
+import { loadImageEl, cropClean } from "./planImagePrep";
 import {
   saveStudioSet, loadStudioSets, deleteStudioSet, applyStudioShip, applyStudioUpdate,
   type StudioSet, type StudioShapeData
@@ -281,16 +283,35 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   };
 
   // ── Max draws the rest (only after calibration) ───────────────────────────
+  // High-recall read: a cleaned copy of the plan is read as a whole AND in
+  // overlapping tiles (so small, dense tags resolve), the free local wall-tracer
+  // is folded in, and everything is merged. See readPlanMultiPass. Nothing here
+  // is data yet — every box is confirmed before it becomes a room.
   async function maxDrawRest() {
     if (!cal || aiBusy) return;
     setAiBusy(true);
     setErr("");
     try {
       const proxy = await aiProxy();
-      const reading = await readPlanWithAI({
+      const img = await loadImageEl(picture.dataUrl);
+      const cleanFull = cropClean(img, { x0: 0, y0: 0, x1: 1, y1: 1 }, 2000);
+      const renderTile = (box: DrawingBox) => Promise.resolve(cropClean(img, box, 1600));
+      // the free local detector: rooms straight from the plan's own wall lines.
+      // autoDetectRooms returns coords in the Gray grid's pixel space, so
+      // normalise straight off gray.w / gray.h into full 0..1, blank labels
+      // (the manager names them later).
+      const auto: AiRoom[] = gray
+        ? autoDetectRooms(gray).map((poly) => ({
+            name: "", roomNumber: "", squareFeet: 0, roomType: "",
+            polygon: poly.map((p) => [p.x / gray.w, p.y / gray.h])
+          }))
+        : [];
+      const reading = await readPlanMultiPass({
         apiKey: loadApiKey(), proxy,
-        imageDataUrl: picture.dataUrl, imageWidth: W, imageHeight: H,
-        building, floor, onProgress: setNotice
+        imageDataUrl: cleanFull.dataUrl, imageWidth: cleanFull.width, imageHeight: cleanFull.height,
+        building, floor, onProgress: setNotice,
+        renderTile, grid: { cols: 2, rows: 2, overlap: 0.12 },
+        extraRooms: auto
       });
       const existing = shapes;
       const added: Shape[] = [];

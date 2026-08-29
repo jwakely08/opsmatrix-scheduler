@@ -467,8 +467,17 @@ export function normalizeCoordinateScale(
   });
 }
 
-/** drop anything unusable; clamp coordinates into the image */
-export function sanitizeRooms(rooms: AiRoom[] | undefined): AiRoom[] {
+/**
+ * Drop anything unusable; clamp coordinates into the image. By default a room
+ * with neither a name nor a number is dropped (noise on a labelled AI read).
+ * `keepUnlabeled` keeps a blank-labelled room that still has a valid outline —
+ * used by the Calibration Editor, where the local wall-tracer legitimately
+ * finds rooms the manager names afterwards.
+ */
+export function sanitizeRooms(
+  rooms: AiRoom[] | undefined,
+  opts?: { keepUnlabeled?: boolean }
+): AiRoom[] {
   if (!Array.isArray(rooms)) return [];
   const out: AiRoom[] = [];
   for (const r of rooms) {
@@ -483,7 +492,7 @@ export function sanitizeRooms(rooms: AiRoom[] | undefined): AiRoom[] {
     // a plan with no printed numbers is normal: the number stays BLANK so the
     // manager can type their own later — it is never faked from the name
     const number = String(r.roomNumber ?? "").trim();
-    if (!name && !number) continue;
+    if (!name && !number && !opts?.keepUnlabeled) continue;
     const sqft = Number(r.squareFeet);
     out.push({
       name: name || number,
@@ -647,6 +656,163 @@ export function buildPlanFromRooms(
       ...(({ printedAreas: measured, pxPerFt }) as object)
     } as ImportResult["summary"]
   };
+}
+
+// ── high-recall multi-pass reading ─────────────────────────────────────────
+// One read of a dense or hand-drawn sheet finds only some rooms, and a
+// different run finds different ones — the small tags are a few pixels tall so
+// the model can't resolve them all at once. Recall is a coverage problem, so
+// the fix is coverage: read the whole sheet AND lean into overlapping tiles of
+// it (each tile fills the frame with a handful of rooms the model CAN resolve),
+// optionally fold in the free local wall-tracer, then merge everything and drop
+// the duplicates a room picks up from being seen in two tiles. Nothing is ever
+// discarded down to zero — whatever was found comes back.
+
+export interface Grid { cols: number; rows: number; overlap: number }
+
+/**
+ * Overlapping tile boxes (normalised 0..1) covering the whole sheet. `overlap`
+ * is the fraction of a tile's own size added onto each shared inner edge, so a
+ * room straddling a seam lands whole inside at least one tile.
+ */
+export function planTiles(grid: Grid): DrawingBox[] {
+  const cols = Math.max(1, Math.floor(grid.cols));
+  const rows = Math.max(1, Math.floor(grid.rows));
+  const ov = Math.max(0, Math.min(0.45, grid.overlap));
+  const tw = 1 / cols, th = 1 / rows;
+  const boxes: DrawingBox[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      boxes.push({
+        x0: Math.max(0, c * tw - (c > 0 ? ov * tw : 0)),
+        y0: Math.max(0, r * th - (r > 0 ? ov * th : 0)),
+        x1: Math.min(1, (c + 1) * tw + (c < cols - 1 ? ov * tw : 0)),
+        y1: Math.min(1, (r + 1) * th + (r < rows - 1 ? ov * th : 0))
+      });
+    }
+  }
+  return boxes;
+}
+
+/** map a polygon read from a tile crop back to full-plan 0..1 coordinates */
+export function remapPolygon(poly: number[][], box: DrawingBox): number[][] {
+  const bw = box.x1 - box.x0, bh = box.y1 - box.y0;
+  return poly.map((p) => [
+    box.x0 + (Number(p[0]) || 0) * bw,
+    box.y0 + (Number(p[1]) || 0) * bh
+  ]);
+}
+
+function roomCentroid01(r: AiRoom): [number, number] {
+  let x = 0, y = 0;
+  const n = r.polygon.length || 1;
+  for (const p of r.polygon) { x += p[0]; y += p[1]; }
+  return [x / n, y / n];
+}
+
+/**
+ * Merge rooms found across several passes (full sheet + tiles + the local
+ * tracer). Two entries are the SAME room when their centres sit within `eps`
+ * of each other and their areas are comparable — that's a room seen twice, not
+ * two neighbours. The survivor is the best version: a labelled room beats a
+ * blank one, then a richer outline beats a coarse one. Pure + deterministic.
+ */
+export function mergeRooms(
+  rooms: AiRoom[],
+  opts?: { centroidEps?: number; areaRatio?: number }
+): AiRoom[] {
+  const eps = opts?.centroidEps ?? 0.03;      // 3% of the plan's long edge
+  const minRatio = opts?.areaRatio ?? 0.4;
+  const quality = (r: AiRoom) =>
+    (r.roomNumber?.trim() || r.name?.trim() ? 1e6 : 0) + r.polygon.length;
+  const order = rooms
+    .map((r) => ({ r, a: Math.abs(polygonArea(r.polygon)), q: quality(r) }))
+    .sort((p, q) => (q.q - p.q) || (q.a - p.a));
+  const kept: AiRoom[] = [];
+  const cents: [number, number][] = [];
+  const areas: number[] = [];
+  for (const { r, a } of order) {
+    const [cx, cy] = roomCentroid01(r);
+    let dup = false;
+    for (let k = 0; k < kept.length; k++) {
+      if (Math.hypot(cx - cents[k][0], cy - cents[k][1]) > eps) continue;
+      const big = Math.max(a, areas[k]), small = Math.min(a, areas[k]);
+      if (big <= 0 || small / big >= minRatio) { dup = true; break; }
+    }
+    if (!dup) { kept.push(r); cents.push([cx, cy]); areas.push(a); }
+  }
+  return kept;
+}
+
+/**
+ * The high-recall read used by the Calibration Editor's "Max draws the rest".
+ * Always reads the whole sheet (the original behaviour, never lost); when the
+ * caller can crop, also reads each tile of `grid` and remaps its rooms back to
+ * the full plan; folds in any `extraRooms` (e.g. the local wall-tracer, already
+ * in full 0..1); then merges. A weak tile is caught and skipped — only a total
+ * wipe-out throws.
+ */
+export async function readPlanMultiPass(
+  opts: ReadPlanOptions & {
+    /** crisp crop of a normalised region of the source, for the tile passes */
+    renderTile?: (box: DrawingBox) => Promise<PlanPicture>;
+    grid?: Grid;
+    /** reads per tile; >1 recovers rooms a single stochastic pass drops */
+    samplesPerTile?: number;
+    /** rooms from a non-AI source (local wall-tracer), already in full 0..1 */
+    extraRooms?: AiRoom[];
+  }
+): Promise<AiPlanReading> {
+  const collected: AiRoom[] = [];
+  let building = (opts.building || "").trim();
+  let floor = (opts.floor || "").trim();
+  // remember why the whole-sheet pass failed (empty read vs. network/auth) so a
+  // total wipe-out can surface the informative message instead of a generic one
+  let baselineErr: unknown = null;
+
+  // baseline: the whole sheet, exactly as before — a zero-room or network
+  // failure here is NOT fatal while tiles or the local tracer can still deliver
+  try {
+    const full = await readPlanWithAI({ ...opts, onProgress: undefined });
+    building = building || full.buildingName;
+    floor = floor || full.floorName;
+    collected.push(...full.rooms);
+  } catch (e) {
+    baselineErr = e;
+  }
+
+  // tiles: lean in on each region so small/dense rooms resolve
+  if (opts.renderTile && opts.grid) {
+    const boxes = planTiles(opts.grid);
+    const samples = Math.max(1, opts.samplesPerTile ?? 1);
+    for (let i = 0; i < boxes.length; i++) {
+      opts.onProgress?.(`Reading the plan area by area… (${i + 1} of ${boxes.length})`);
+      for (let s = 0; s < samples; s++) {
+        try {
+          const pic = await opts.renderTile(boxes[i]);
+          const r = await readPlanWithAI({
+            ...opts, onProgress: undefined,
+            imageDataUrl: pic.dataUrl, imageWidth: pic.width, imageHeight: pic.height
+          });
+          for (const rm of r.rooms) collected.push({ ...rm, polygon: remapPolygon(rm.polygon, boxes[i]) });
+        } catch { /* one weak tile never sinks the whole read */ }
+      }
+    }
+  }
+
+  if (opts.extraRooms?.length) collected.push(...opts.extraRooms);
+
+  if (!collected.length) {
+    // nothing anywhere: if the only thing we tried was the whole sheet, surface
+    // its real error (rate limit, bad key, sharper-file); else say it plainly
+    if (baselineErr && !opts.renderTile && !opts.extraRooms?.length) throw baselineErr;
+    throw new AiPlanError(
+      "No rooms could be read from that plan. Try a sharper file, or trace the rooms by hand."
+    );
+  }
+  const merged = dropZoneWrappers(mergeRooms(sanitizeRooms(collected, { keepUnlabeled: true })));
+  opts.onProgress?.(`Found ${merged.length} rooms — drawing the plan…`);
+  return { buildingName: building.trim(), floorName: floor.trim(), rooms: merged };
 }
 
 /**
