@@ -54,7 +54,7 @@ describe("per-section save isolation", () => {
     const saved = defaultRules();
     const draft = clone(saved);
     draft.breaks = [];
-    draft.nonSpaceDefs.push({ id: "x", label: "Evening Route", defaultHours: 3 });
+    draft.nonSpaceDefs.push({ id: "x", label: "Evening Route", defaultHours: 3, minutes: 180, qualifierIds: [] });
     const nsOnly = saveSection(saved, draft, "nonSpace");
     expect(nsOnly.nonSpaceDefs.some((n) => n.label === "Evening Route")).toBe(true);
     expect((nsOnly.breaks ?? []).length).toBe((saved.breaks ?? []).length); // breaks untouched

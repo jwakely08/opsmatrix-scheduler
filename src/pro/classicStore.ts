@@ -94,9 +94,15 @@ export interface ClassicPlan {
 export interface NonSpaceTask {
   id: string;
   name: string;
+  /** total hours — legacy sizing, and kept in sync for counted tasks */
   hours: number;
   scheduleId: string;
   roomIds: string[];
+  /** counted (2026-08-31) model: which Scope def, how many occurrences */
+  defId?: string;
+  count?: number;
+  /** minutes per occurrence at add time (def minutes + qualifiers) */
+  minutesPer?: number;
 }
 
 const V7 = "opsmatrix_v7";
@@ -375,9 +381,17 @@ export function scheduleMinutes(data: ClassicData, rules: Rules, sched: ClassicS
     total += computeMinutes(rules, sp, { tasks, includeBase: primary }).total;
   }
   for (const t of data.nonSpace) {
-    if (t.scheduleId === sched.id) total += t.hours * 60;
+    if (t.scheduleId === sched.id) total += nonSpaceTaskMinutes(t);
   }
   return total;
+}
+
+/** one non-space entry's minutes: counted model when present, else the block */
+export function nonSpaceTaskMinutes(t: NonSpaceTask): number {
+  if (Number(t.count) > 0 && Number(t.minutesPer) > 0) {
+    return Number(t.count) * Number(t.minutesPer);
+  }
+  return (Number(t.hours) || 0) * 60;
 }
 
 // ── schedule CRUD ────────────────────────────────────────────────────────────

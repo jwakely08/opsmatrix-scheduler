@@ -853,3 +853,24 @@ em.dim { color: #64748b; font-style: normal; }
 .studio-edgehandle:hover { fill: #2dd4bf; }
 .studio-canvas.tool-merge { cursor: copy; }
 .studio-canvas.tool-reshape { cursor: default; }
+
+/* ── task color coding (Josh, 2026-08-31): no more sponge icons — cleaning
+   tasks read green (the teal "on" family), floor-care tasks read blue ── */
+.ptask.fc { border-style: solid; border-color: rgba(59,130,246,.45); color: #93c5fd; }
+.ptask.fc.on { background: rgba(37,99,235,.22); border-color: #3b82f6; color: #93c5fd; }
+.tname { padding: 2px 10px; border-radius: 7px; font-size: 12.5px; min-width: 110px; }
+.tname.clean { background: rgba(13,148,136,.18); color: #5eead4; }
+.tname.fc { background: rgba(37,99,235,.2); color: #93c5fd; }
+.scopekey { font-weight: 400; color: #64748b; margin-left: 10px; font-size: 11px; }
+.keydot { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 3px; vertical-align: -1px; }
+.keydot.clean { background: #0d9488; }
+.keydot.fc { background: #3b82f6; }
+.chipx { background: none; border: none; color: inherit; cursor: pointer; margin-left: 5px; padding: 0; font-size: 10px; opacity: .75; }
+.chipx:hover { opacity: 1; }
+.chipadd { max-width: 120px; font-size: 11px; }
+h4.scopesub { font-size: 12.5px; color: #e2e8f0; margin: 18px 0 4px; }
+
+/* counted non-space rows on schedule cards */
+.nscount { width: 58px; text-align: center; font-weight: 700; }
+.schedroom.nonspace.add select { max-width: 340px; }
+.schedroom.nonspace.add .pnote { margin: 0; font-size: 11px; }

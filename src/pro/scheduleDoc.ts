@@ -13,7 +13,7 @@
 //
 // This module is pure (no DOM, no storage) so the numbers can be tested.
 import {
-  coverageForSpace, coverageMinutes, spacePriority,
+  coverageForSpace, coverageMinutes, spacePriority, nonSpaceTaskMinutes,
   type ClassicData, type ClassicSchedule, type ClassicSpace, type Priority
 } from "./classicStore";
 import { type Rules, type BreakRule } from "./rules";
@@ -251,8 +251,9 @@ export function buildScheduleDoc(
     .filter((t) => t.scheduleId === sched.id)
     .map((t) => ({
       id: t.id,
-      name: t.name,
-      minutes: Math.round(t.hours * 60),
+      // counted tasks print the count so the worker knows the volume planned
+      name: Number(t.count) > 0 ? `${t.name} × ${t.count}` : t.name,
+      minutes: Math.round(nonSpaceTaskMinutes(t)),
       linkedRooms: t.roomIds
         .map((id) => spaces.find((s) => s.id === id))
         .filter(Boolean)
