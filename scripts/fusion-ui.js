@@ -74,20 +74,47 @@
         // Same anatomy as the classic app's own items (nav-icon + nav-label
         // spans, 16px stroke icon) so it looks native — a floor machine
         // outline, not an emoji.
-        if (!document.getElementById("fusion-nav-floorcare") && b.parentNode) {
-          var fcBtn = document.createElement("button");
-          fcBtn.id = "fusion-nav-floorcare";
-          fcBtn.type = "button";
-          fcBtn.className = b.className;
-          fcBtn.innerHTML =
+        // The three route engines sit right under Max Schedules, in the
+        // order a manager thinks about them: floors, then sanitation, then
+        // policing. Injected newest-last so they read top-to-bottom.
+        var ENGINES = [
+          {
+            id: "fusion-nav-floorcare", label: "Max Floor Care", hash: "#floorcare",
+            svg: '<path d="M17 3l-6 8"/><circle cx="10" cy="16" r="5"/><path d="M4 22h16"/>'
+          },
+          {
+            id: "fusion-nav-sanitation", label: "Max Sanitation", hash: "#sanitation",
+            // a collection cart with its handle
+            svg: '<path d="M3 5h3l2 10h10"/><path d="M8 8h12l-1.5 7"/><circle cx="10" cy="19" r="1.6"/><circle cx="17" cy="19" r="1.6"/>'
+          },
+          {
+            id: "fusion-nav-policing", label: "Max Policing", hash: "#policing",
+            // a porter's bell
+            svg: '<path d="M5 17h14"/><path d="M6.5 17a5.5 5.5 0 0 1 11 0"/><path d="M12 6.5v-1"/><path d="M4 20h16"/>'
+          }
+        ];
+        var after = b;
+        for (var e2 = 0; e2 < ENGINES.length; e2++) {
+          var eng = ENGINES[e2];
+          var existing = document.getElementById(eng.id);
+          if (existing) { after = existing; continue; }
+          if (!after.parentNode) break;
+          var engBtn = document.createElement("button");
+          engBtn.id = eng.id;
+          engBtn.type = "button";
+          engBtn.className = b.className;
+          engBtn.innerHTML =
             '<span class="nav-icon">' +
             '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" ' +
             'stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">' +
-            '<path d="M17 3l-6 8"/><circle cx="10" cy="16" r="5"/><path d="M4 22h16"/>' +
+            eng.svg +
             "</svg></span>" +
-            '<span class="nav-label">Max Floor Care</span>';
-          fcBtn.addEventListener("click", function () { window.location.href = "./maps.html#floorcare"; });
-          b.parentNode.insertBefore(fcBtn, b.nextSibling);
+            '<span class="nav-label">' + eng.label + "</span>";
+          (function (hash) {
+            engBtn.addEventListener("click", function () { window.location.href = "./maps.html" + hash; });
+          })(eng.hash);
+          after.parentNode.insertBefore(engBtn, after.nextSibling);
+          after = engBtn;
         }
       }
       // retire the sections Scope now owns
