@@ -834,3 +834,22 @@ em.dim { color: #64748b; font-style: normal; }
   .studio-body { flex-direction: column; }
   .studio-rail { width: auto; max-height: 46%; border-left: none; border-top: 1px solid rgba(148,163,184,.18); }
 }
+
+/* ── Calibration Editor rev 2: the toolbar + reshape pins ── */
+.studio-toolbar {
+  position: absolute; top: 12px; left: 12px; z-index: 6;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-width: 92%;
+  background: #1a2740; border: 1px solid rgba(148,163,184,.3); border-radius: 12px;
+  padding: 8px 10px; box-shadow: 0 10px 34px rgba(0,0,0,.45);
+}
+.studio-toolbar .tb-sep { width: 1px; height: 20px; background: rgba(148,163,184,.3); margin: 0 3px; }
+.studio-vertexhandle {
+  fill: #ffffff; stroke: #0d9488; stroke-width: 2px; cursor: grab;
+}
+.studio-vertexhandle:hover { fill: #5eead4; }
+.studio-edgehandle {
+  fill: #0d9488; stroke: #ffffff; stroke-width: 1.5px; cursor: move; opacity: .9;
+}
+.studio-edgehandle:hover { fill: #2dd4bf; }
+.studio-canvas.tool-merge { cursor: copy; }
+.studio-canvas.tool-reshape { cursor: default; }

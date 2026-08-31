@@ -1,37 +1,32 @@
-// THE CALIBRATION EDITOR (Josh's 16-step spec, 2026-08-28 late night).
-// One tool, one sequence, every time:
+// THE CALIBRATION EDITOR — Josh's flow, revision 2 (2026-08-29):
 //
-//   DRAW PHASE — the plan is on screen. Trace a room you know (rough corner
-//   taps; the ported snap engine seats it on the walls), THEN type its
-//   square footage: that's a calibration anchor. Repeat for as many rooms
-//   as you like — every anchor feeds the eventual measuring. Only then does
-//   "✨ Max draws the rest" arm: Max mimics the plan with drawn boxes laid
-//   over it. Those boxes are NOT data yet — the user confirms them: click
-//   to select, SHIFT-click to select several, "Select all of Max's boxes",
-//   drag the puzzle pieces into place, and ⌖ Snap again as the double-check.
+//   1. EDIT — Max draws EVERYTHING first, automatically, the moment the file
+//      lands (auto-snapped, and a HARD RULE drops overlapping boxes). The
+//      manager then makes the drawing match the plan with a real toolbar:
+//      Select / Trace / Reshape / Merge, plus Snap, Delete, Undo and Redo.
+//      Reshape shows pins on the selected room: pull an edge and it moves
+//      straight along its own direction (clean horizontal/vertical pulls on
+//      square rooms, clean angled pulls on angled ones), drag a pin (it
+//      lines itself up with its neighbours), double-click an edge to add a
+//      pin, double-click a pin to remove it. Merge: tap two touching rooms
+//      and they become one outline.
+//   2. ✓ Finish editing → CALIBRATE — select up to THREE rooms you know and
+//      type each one's calibration measurement. Then 📏 MEASURE ALL ROOMS
+//      fills in every room's square footage from your calibration.
+//   3. DETAILS — the locked matrix rendering appears; per room enter number,
+//      name, Scope type, floor type, fixtures, department. 🚀 Ship to Max
+//      Space files it all under account → building → floor → department.
 //
-//   ✓ CONFIRM MATRIX — the boxes lock, every square footage is computed
-//   from the calibration, and the canvas switches to the FINAL matrix-style
-//   rendering (the same drawing every other import produces).
-//
-//   DETAILS PHASE — still in the editor: select each room and enter what
-//   Max Space needs — room number, name, room type, floor type, fixtures,
-//   and DEPARTMENT (account/building/floor were set at upload; department
-//   is chosen here, per room). Then 🚀 SHIP TO MAX SPACE files everything
-//   into the hierarchy: account → building → floor → department → room.
-//
-// Every set ships as an editable CALIBRATION SET (studioSets.ts): reopen it
-// any time from Max Space → Calibration Editor, move boxes after a remodel,
-// re-ship — and the SAME rooms update, schedules intact.
+// Every ship saves an editable calibration set (studioSets.ts); re-editing
+// from Max Space → Calibration Editor re-ships onto the SAME rooms.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  buildGray, snapToWalls, shoelacePx, centroid, type Gray, type XY
+  buildGray, snapToWalls, shoelacePx, centroid, overlapRatio, unionPolygons,
+  type Gray, type XY
 } from "./planSnap";
 import { calibrateFromKnownRooms } from "./planCalibrate";
-import {
-  buildPlanFromRooms, readPlanWithAI, AiPlanError, type ImportResult
-} from "../bridge/aiPlanImport";
+import { buildPlanFromRooms, readPlanWithAI, AiPlanError } from "../bridge/aiPlanImport";
 import {
   saveStudioSet, loadStudioSets, deleteStudioSet, applyStudioShip, applyStudioUpdate,
   type StudioSet, type StudioShapeData
@@ -42,12 +37,18 @@ import type { Rules } from "./rules";
 
 export interface StudioPicture { dataUrl: string; width: number; height: number; aspect: number }
 
+export interface AiRoomSeed { name: string; roomNumber: string; roomType: string; polygon: number[][] }
+
 type Shape = StudioShapeData;
-type Phase = "draw" | "details";
+type Phase = "edit" | "calibrate" | "details";
+type Tool = "select" | "trace" | "reshape" | "merge";
 
 const uid = () => "shape-" + Math.random().toString(36).slice(2, 9);
 const TRACED = "#14b8a6";
 const AI = "#f59e0b";
+const MAX_ANCHORS = 3;
+/** the hard rule: a new box covering this much of an existing one is a dupe */
+const OVERLAP_LIMIT = 0.35;
 
 function pointIn(pts: XY[], x: number, y: number): boolean {
   let inside = false;
@@ -58,7 +59,7 @@ function pointIn(pts: XY[], x: number, y: number): boolean {
   return inside;
 }
 
-export function PlanStudio({ picture, account, building, floor, rules, existingSet, onShipped, onCancel }: {
+export function PlanStudio({ picture, account, building, floor, rules, existingSet, initialAiRooms, initialNotice, onShipped, onCancel }: {
   picture: StudioPicture;
   account: string;
   building: string;
@@ -66,6 +67,9 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   rules: Rules;
   /** re-editing a saved calibration set (remodels) — ships onto the SAME rooms */
   existingSet?: StudioSet;
+  /** Max's automatic first drawing (already read by the host) */
+  initialAiRooms?: AiRoomSeed[];
+  initialNotice?: string;
   onShipped: (roomCount: number, setSaved: boolean) => void;
   onCancel: () => void;
 }) {
@@ -73,22 +77,28 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   const [shapes, setShapes] = useState<Shape[]>(() =>
     existingSet ? JSON.parse(JSON.stringify(existingSet.shapes)) : []);
   const [sel, setSel] = useState<Set<string>>(new Set());
-  const [phase, setPhase] = useState<Phase>("draw");
-  const [tool, setTool] = useState<"select" | "trace">(existingSet ? "select" : "trace");
+  const [phase, setPhase] = useState<Phase>("edit");
+  const [tool, setTool] = useState<Tool>("select");
   const [tracePts, setTracePts] = useState<XY[]>([]);
+  const [mergeFirst, setMergeFirst] = useState<string | null>(null);
   const [gray, setGray] = useState<Gray | null>(null);
   const [matrix, setMatrix] = useState<{ img: string; w: number; h: number } | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(initialNotice ?? "");
   const [err, setErr] = useState("");
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
   const undoStack = useRef<Shape[][]>([]);
+  const redoStack = useRef<Shape[][]>([]);
+  const pendingSeeds = useRef<AiRoomSeed[] | null>(initialAiRooms?.length ? initialAiRooms : null);
   const svgRef = useRef<SVGSVGElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ kind: "none" | "pan" | "shape"; x: number; y: number; moved: boolean }>(
-    { kind: "none", x: 0, y: 0, moved: false });
+  const drag = useRef<{
+    kind: "none" | "pan" | "shape" | "vertex" | "edge";
+    idx: number; x: number; y: number; moved: boolean;
+    /** edge tool: unit normal the edge slides along */
+    nx: number; ny: number;
+  }>({ kind: "none", idx: -1, x: 0, y: 0, moved: false, nx: 0, ny: 0 });
 
-  // datalist options come straight from what the account already holds
   const deptOptions = useMemo(() => {
     try {
       const v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") ?? "{}") ?? {};
@@ -97,7 +107,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     } catch { return []; }
   }, []);
 
-  // wall grid from the picture
+  // wall grid (contrast-stretched, so faint plans snap too)
   useEffect(() => {
     const img = new Image();
     img.onload = () => {
@@ -111,7 +121,6 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     img.src = picture.dataUrl;
   }, [picture.dataUrl]);
 
-  // fit whichever surface is showing (scan in draw phase, matrix in details)
   const surfW = phase === "details" && matrix ? matrix.w : W;
   const surfH = phase === "details" && matrix ? matrix.h : H;
   useEffect(() => {
@@ -147,21 +156,94 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     return Math.round(shoelacePx(s.pts) / (cal.pxPerFt * cal.pxPerFt));
   }, [cal]);
 
-  // ── mutations with undo ────────────────────────────────────────────────────
+  // ── mutations with undo/redo ───────────────────────────────────────────────
   const mutate = useCallback((next: Shape[] | ((prev: Shape[]) => Shape[])) => {
     setShapes((prev) => {
       undoStack.current.push(prev);
-      if (undoStack.current.length > 60) undoStack.current.shift();
+      if (undoStack.current.length > 80) undoStack.current.shift();
+      redoStack.current = [];
       return typeof next === "function" ? next(prev) : next;
     });
   }, []);
   const undo = useCallback(() => {
     const prev = undoStack.current.pop();
-    if (prev) setShapes(prev);
+    if (!prev) return;
+    setShapes((cur) => { redoStack.current.push(cur); return prev; });
+  }, []);
+  const redo = useCallback(() => {
+    const next = redoStack.current.pop();
+    if (!next) return;
+    setShapes((cur) => { undoStack.current.push(cur); return next; });
   }, []);
   const patchShape = (id: string, patch: Partial<Shape>) =>
     setShapes((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
 
+  // ── Max's boxes: snap + THE HARD NO-OVERLAP RULE ───────────────────────────
+  const ingestSeeds = useCallback((seeds: AiRoomSeed[], existing: Shape[]): Shape[] => {
+    const candidates = seeds
+      .map((r) => ({ seed: r, pts: r.polygon.map((q) => ({ x: q[0] * W, y: q[1] * H })) }))
+      .sort((a, b) => shoelacePx(b.pts) - shoelacePx(a.pts));
+    const kept: Shape[] = [];
+    for (const c of candidates) {
+      const pts = snapPx(c.pts);
+      const blockers = [...existing, ...kept];
+      if (blockers.some((s) => overlapRatio(s.pts, pts) > OVERLAP_LIMIT)) continue; // dupe — dropped
+      kept.push({
+        id: uid(), pts,
+        roomNumber: c.seed.roomNumber, roomName: c.seed.name, roomType: "",
+        floorType: "", fixtureCount: 0, department: "",
+        knownSqFt: null, source: "ai"
+      });
+    }
+    return kept;
+  }, [W, H, snapPx]);
+
+  // the automatic first drawing, once the wall grid is ready to snap against
+  useEffect(() => {
+    if (!gray || !pendingSeeds.current) return;
+    const seeds = pendingSeeds.current;
+    pendingSeeds.current = null;
+    const added = ingestSeeds(seeds, shapes);
+    const dropped = seeds.length - added.length;
+    if (added.length) {
+      mutate((prev) => [...prev, ...added]);
+      setNotice(`✓ Max drew ${added.length} room${added.length === 1 ? "" : "s"}` +
+        (dropped > 0 ? ` (${dropped} overlapping box${dropped === 1 ? "" : "es"} dropped)` : "") +
+        ". Make the drawing match the plan — move, reshape, merge, trace what's missing — then ✓ Finish editing.");
+    } else if (seeds.length) {
+      setErr("Max's boxes all overlapped or were unusable — trace the rooms by hand.");
+    }
+  }, [gray]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function maxDrawMore() {
+    if (aiBusy) return;
+    setAiBusy(true);
+    setErr("");
+    try {
+      const proxy = await aiProxy();
+      const reading = await readPlanWithAI({
+        apiKey: loadApiKey(), proxy,
+        imageDataUrl: picture.dataUrl, imageWidth: W, imageHeight: H,
+        building, floor, onProgress: setNotice
+      });
+      const added = ingestSeeds(reading.rooms.map((r) => ({
+        name: r.name, roomNumber: r.roomNumber, roomType: r.roomType, polygon: r.polygon
+      })), shapes);
+      if (!added.length) {
+        setErr("Max found nothing new beyond what's drawn (overlapping boxes are dropped automatically).");
+      } else {
+        mutate((prev) => [...prev, ...added]);
+        setSel(new Set(added.map((s) => s.id)));
+        setNotice(`✓ Max added ${added.length} more room${added.length === 1 ? "" : "s"}.`);
+      }
+    } catch (e) {
+      setErr(e instanceof AiPlanError ? e.message : String((e as Error)?.message ?? e));
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  // ── coordinates / zoom ─────────────────────────────────────────────────────
   const toPic = (e: { clientX: number; clientY: number }): XY => {
     const r = svgRef.current!.getBoundingClientRect();
     return { x: (e.clientX - r.left - view.tx) / view.k, y: (e.clientY - r.top - view.ty) / view.k };
@@ -183,6 +265,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     return () => svg.removeEventListener("wheel", onWheel);
   }, []);
 
+  // ── tracing ────────────────────────────────────────────────────────────────
   const finishTrace = useCallback(() => {
     if (tracePts.length < 3) return;
     const snapped = snapPx(tracePts);
@@ -198,19 +281,21 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     setErr("");
   }, [tracePts, snapPx, mutate]);
 
-  // keyboard: undo point / finish / cancel / nudge selection / global undo
+  // ── keyboard ───────────────────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const inField = /INPUT|TEXTAREA|SELECT/.test((e.target as Element)?.tagName ?? "");
       if (inField) return;
-      if (e.key === "Escape") { setTracePts([]); setSel(new Set()); }
+      const mod = e.ctrlKey || e.metaKey;
+      if (e.key === "Escape") { setTracePts([]); setSel(new Set()); setMergeFirst(null); }
       else if (e.key === "Enter" && tool === "trace") { e.preventDefault(); finishTrace(); }
       else if ((e.key === "Backspace" || e.key === "Delete") && tool === "trace") {
         e.preventDefault();
         setTracePts((p) => p.slice(0, -1));
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
-        e.preventDefault(); undo();
-      } else if (phase === "draw" && sel.size && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+      } else if (mod && e.key.toLowerCase() === "z" && e.shiftKey) { e.preventDefault(); redo(); }
+      else if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); }
+      else if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
+      else if (phase === "edit" && sel.size && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
         e.preventDefault();
         const d = e.shiftKey ? 8 : 1.5;
         const dx = e.key === "ArrowLeft" ? -d : e.key === "ArrowRight" ? d : 0;
@@ -221,16 +306,10 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [tool, sel, phase, finishTrace, undo, mutate]);
+  }, [tool, sel, phase, finishTrace, undo, redo, mutate]);
 
-  // ── pointer: trace taps, select/shift-select, drag the whole selection ────
-  const onPointerDown = (e: React.PointerEvent) => {
-    (e.target as Element).setPointerCapture?.(e.pointerId);
-    const p = toPic(e);
-    if (phase === "draw" && tool === "trace") {
-      setTracePts((prev) => [...prev, p]);
-      return;
-    }
+  // ── pointer: per-tool behaviour ────────────────────────────────────────────
+  const hitShape = (p: XY): Shape | null => {
     let hit: Shape | null = null, hitArea = Infinity;
     const sx = phase === "details" && matrix ? matrix.w / W : 1;
     for (const s of shapes) {
@@ -240,24 +319,66 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
         if (a < hitArea) { hit = s; hitArea = a; }
       }
     }
+    return hit;
+  };
+
+  const doMerge = (aId: string, bId: string) => {
+    const a = shapes.find((s) => s.id === aId), b = shapes.find((s) => s.id === bId);
+    if (!a || !b) return;
+    const merged = unionPolygons(a.pts, b.pts);
+    if (!merged) {
+      setErr("Those two rooms don't touch — merge joins rooms that share a wall.");
+      setMergeFirst(null);
+      return;
+    }
+    mutate((prev) => prev
+      .filter((s) => s.id !== bId)
+      .map((s) => s.id === aId
+        // the first-tapped room keeps its identity; a stale calibration
+        // measurement can't survive a shape this different
+        ? { ...s, pts: merged, knownSqFt: null }
+        : s));
+    setSel(new Set([aId]));
+    setMergeFirst(null);
+    setTool("select");
+    setNotice("✓ Merged into one room. Reshape or ⌖ Snap it if the outline needs a touch-up.");
+    setErr("");
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    const p = toPic(e);
+    if (phase === "edit" && tool === "trace") {
+      setTracePts((prev) => [...prev, p]);
+      return;
+    }
+    if (phase === "edit" && tool === "merge") {
+      const hit = hitShape(p);
+      if (!hit) { setMergeFirst(null); return; }
+      if (!mergeFirst) { setMergeFirst(hit.id); setSel(new Set([hit.id])); return; }
+      if (hit.id !== mergeFirst) doMerge(mergeFirst, hit.id);
+      return;
+    }
+    const hit = hitShape(p);
     if (hit) {
       setSel((prev) => {
-        if (e.shiftKey) {
+        if (e.shiftKey && phase === "edit") {
           const next = new Set(prev);
-          if (next.has(hit!.id)) next.delete(hit!.id); else next.add(hit!.id);
+          if (next.has(hit.id)) next.delete(hit.id); else next.add(hit.id);
           return next;
         }
-        return prev.has(hit.id) ? prev : new Set([hit.id]);
+        return prev.has(hit.id) && phase === "edit" ? prev : new Set([hit.id]);
       });
-      if (phase === "draw") {
-        undoStack.current.push(shapes); // one undo step per drag
-        drag.current = { kind: "shape", x: e.clientX, y: e.clientY, moved: false };
+      if (phase === "edit" && tool !== "reshape") {
+        undoStack.current.push(shapes);
+        redoStack.current = [];
+        drag.current = { kind: "shape", idx: -1, x: e.clientX, y: e.clientY, moved: false, nx: 0, ny: 0 };
       } else {
-        drag.current = { kind: "none", x: 0, y: 0, moved: false };
+        drag.current = { kind: "none", idx: -1, x: 0, y: 0, moved: false, nx: 0, ny: 0 };
       }
     } else {
       if (!e.shiftKey) setSel(new Set());
-      drag.current = { kind: "pan", x: e.clientX, y: e.clientY, moved: false };
+      drag.current = { kind: "pan", idx: -1, x: e.clientX, y: e.clientY, moved: false, nx: 0, ny: 0 };
     }
   };
   const onPointerMove = (e: React.PointerEvent) => {
@@ -271,54 +392,57 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
       const px = dx / view.k, py = dy / view.k;
       setShapes((prev) => prev.map((s) => sel.has(s.id)
         ? { ...s, pts: s.pts.map((q) => ({ x: q.x + px, y: q.y + py })) } : s));
+    } else if (d.kind === "vertex" && one) {
+      const p = toPic(e);
+      setShapes((prev) => prev.map((s) => {
+        if (s.id !== one.id) return s;
+        const pts = s.pts.map((q) => ({ ...q }));
+        const n = pts.length;
+        let nx = p.x, ny = p.y;
+        // clean lines: a pin near its neighbour's x or y clicks onto it
+        const T = 6 / view.k + 2;
+        const prevPt = pts[(d.idx - 1 + n) % n], nextPt = pts[(d.idx + 1) % n];
+        if (Math.abs(nx - prevPt.x) < T) nx = prevPt.x;
+        else if (Math.abs(nx - nextPt.x) < T) nx = nextPt.x;
+        if (Math.abs(ny - prevPt.y) < T) ny = prevPt.y;
+        else if (Math.abs(ny - nextPt.y) < T) ny = nextPt.y;
+        pts[d.idx] = { x: nx, y: ny };
+        return { ...s, pts };
+      }));
+      return; // don't advance d.x/d.y — vertex follows the cursor absolutely
+    } else if (d.kind === "edge" && one) {
+      // the edge slides along its own normal only — a straight, clean pull
+      const px = dx / view.k, py = dy / view.k;
+      const t = px * d.nx + py * d.ny;
+      setShapes((prev) => prev.map((s) => {
+        if (s.id !== one.id) return s;
+        const pts = s.pts.map((q) => ({ ...q }));
+        const n = pts.length;
+        const j = (d.idx + 1) % n;
+        pts[d.idx] = { x: pts[d.idx].x + d.nx * t, y: pts[d.idx].y + d.ny * t };
+        pts[j] = { x: pts[j].x + d.nx * t, y: pts[j].y + d.ny * t };
+        return { ...s, pts };
+      }));
     }
     d.x = e.clientX; d.y = e.clientY;
   };
   const onPointerUp = () => {
     const d = drag.current;
-    if (d.kind === "shape" && !d.moved) undoStack.current.pop(); // click, not a move
-    drag.current = { kind: "none", x: 0, y: 0, moved: false };
+    if ((d.kind === "shape" || d.kind === "vertex" || d.kind === "edge") && !d.moved) {
+      undoStack.current.pop(); // a click, not a move
+    }
+    drag.current = { kind: "none", idx: -1, x: 0, y: 0, moved: false, nx: 0, ny: 0 };
   };
 
-  // ── Max draws the rest (only after calibration) ───────────────────────────
-  async function maxDrawRest() {
-    if (!cal || aiBusy) return;
-    setAiBusy(true);
-    setErr("");
-    try {
-      const proxy = await aiProxy();
-      const reading = await readPlanWithAI({
-        apiKey: loadApiKey(), proxy,
-        imageDataUrl: picture.dataUrl, imageWidth: W, imageHeight: H,
-        building, floor, onProgress: setNotice
-      });
-      const existing = shapes;
-      const added: Shape[] = [];
-      for (const r of reading.rooms) {
-        const pts = r.polygon.map((q) => ({ x: q[0] * W, y: q[1] * H }));
-        const c = centroid(pts);
-        if (existing.some((s) => pointIn(s.pts, c.x, c.y))) continue;
-        added.push({
-          id: uid(), pts: snapPx(pts),
-          roomNumber: r.roomNumber, roomName: r.name, roomType: "",
-          floorType: "", fixtureCount: 0, department: "",
-          knownSqFt: null, source: "ai"
-        });
-      }
-      if (!added.length) {
-        setErr("Max found no rooms beyond the ones you traced. Trace the rest by hand, or try a sharper file.");
-      } else {
-        mutate((prev) => [...prev, ...added]);
-        setSel(new Set(added.map((s) => s.id)));
-        setNotice(`✓ Max drew ${added.length} box${added.length === 1 ? "" : "es"} over the plan — they're all selected. Line up any that sit off like a puzzle piece (drag, or arrows), then ⌖ Snap selected as the double-check.`);
-      }
-    } catch (e) {
-      setErr(e instanceof AiPlanError ? e.message : String((e as Error)?.message ?? e));
-    } finally {
-      setAiBusy(false);
-    }
-  }
+  const beginHandleDrag = (e: React.PointerEvent, kind: "vertex" | "edge", idx: number, nx = 0, ny = 0) => {
+    e.stopPropagation();
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+    undoStack.current.push(shapes);
+    redoStack.current = [];
+    drag.current = { kind, idx, x: e.clientX, y: e.clientY, moved: false, nx, ny };
+  };
 
+  // ── phase transitions ──────────────────────────────────────────────────────
   const buildReading = () => ({
     buildingName: "", floorName: "",
     rooms: shapes.map((s) => ({
@@ -330,22 +454,28 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     }))
   });
 
-  // ── ✓ Confirm Matrix: lock the boxes, compute every ft², show the render ──
-  function confirmMatrix() {
-    if (!shapes.length) { setErr("Trace at least one room first."); return; }
-    if (!cal) { setErr("Type the square footage of a room you traced — that's the calibration everything is measured from."); return; }
+  function finishEditing() {
+    if (!shapes.length) { setErr("Draw at least one room first — ✏ Trace, or ✨ Max draws the rooms."); return; }
+    setTracePts([]);
+    setMergeFirst(null);
+    setTool("select");
+    setSel(new Set());
+    setErr("");
+    setNotice("");
+    setPhase("calibrate");
+  }
+
+  function measureAll() {
+    if (!cal) { setErr("Select a room you KNOW and type its calibration measurement first."); return; }
     const preview = buildPlanFromRooms(buildReading(), { building, floor, aspect: W / H });
     const plan = preview.plan as { img: string; w: number; h: number };
     setMatrix({ img: plan.img, w: plan.w, h: plan.h });
-    setTracePts([]);
-    setTool("select");
     setSel(new Set());
     setErr("");
     setNotice("");
     setPhase("details");
   }
 
-  // ── 🚀 Ship to Max Space ───────────────────────────────────────────────────
   function ship() {
     const nameless = shapes.filter((s) => !s.roomNumber.trim() && !s.roomName.trim());
     if (nameless.length) {
@@ -355,9 +485,6 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     }
     const result = buildPlanFromRooms(buildReading(), { building, floor, aspect: W / H });
     const shapesData: StudioShapeData[] = JSON.parse(JSON.stringify(shapes));
-    // shipping writes the stores DIRECTLY (the same separate-document rule
-    // every importer follows) and the host reloads — no in-memory races,
-    // and the id-map lands in the saved set synchronously
     const d: ClassicData = loadClassic();
     const map = existingSet
       ? applyStudioUpdate(d, existingSet, result, shapesData, rules)
@@ -385,7 +512,14 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   const selShapes = shapes.filter((s) => sel.has(s.id));
   const one = selShapes.length === 1 ? selShapes[0] : null;
   const detailScale = phase === "details" && matrix ? matrix.w / W : 1;
-  const aiCount = shapes.filter((s) => s.source === "ai").length;
+  const canReshape = phase === "edit" && tool === "reshape" && one;
+
+  const ToolBtn = ({ id, label, title }: { id: Tool; label: string; title: string }) => (
+    <button className={"pbtn small" + (tool === id ? " primary" : "")} title={title}
+      onClick={() => { setTool(id); setTracePts([]); setMergeFirst(null); if (id === "reshape" && selShapes.length > 1) setSel(new Set()); }}>
+      {label}
+    </button>
+  );
 
   return createPortal(
     <div className="studio">
@@ -393,21 +527,18 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
         <button className="pbtn ghost" onClick={onCancel}>‹ {existingSet ? "Back" : "Cancel"}</button>
         <h1>Calibration Editor <span>{[account, building, floor].filter(Boolean).join(" · ") || "New floor plan"}</span></h1>
         <span className="grow" />
-        {phase === "details" && (
-          <button className="pbtn" onClick={() => { setMatrix(null); setPhase("draw"); }}>‹ Back to adjusting</button>
-        )}
-        <button className="pbtn" disabled={!undoStack.current.length || phase === "details"} onClick={undo}>↩ Undo</button>
+        {phase === "calibrate" && <button className="pbtn" onClick={() => setPhase("edit")}>‹ Back to editing</button>}
+        {phase === "details" && <button className="pbtn" onClick={() => { setMatrix(null); setPhase("calibrate"); }}>‹ Back to calibration</button>}
       </header>
 
       <div className="studio-body">
         <div className="studio-canvaswrap" ref={wrapRef}>
-          <svg ref={svgRef} className={"studio-canvas tool-" + (phase === "draw" ? tool : "select")}
+          <svg ref={svgRef} className={"studio-canvas tool-" + (phase === "edit" ? tool : "select")}
             onPointerDown={onPointerDown} onPointerMove={onPointerMove}
             onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
             onDoubleClick={(e) => {
-              if (phase !== "draw" || tool !== "trace") return;
-              e.preventDefault();
-              finishTrace();
+              if (phase !== "edit") return;
+              if (tool === "trace") { e.preventDefault(); finishTrace(); }
             }}>
             <g transform={`translate(${view.tx} ${view.ty}) scale(${view.k})`}>
               {phase === "details" && matrix
@@ -415,7 +546,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                 : <image href={picture.dataUrl} width={W} height={H} />}
               {shapes.map((s) => {
                 const col = s.source === "ai" ? AI : TRACED;
-                const on = sel.has(s.id);
+                const on = sel.has(s.id) || s.id === mergeFirst;
                 const pts = detailScale === 1 ? s.pts : s.pts.map((q) => ({ x: q.x * detailScale, y: q.y * detailScale }));
                 const c = centroid(pts);
                 const sq = sqftOf(s);
@@ -428,13 +559,57 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                     <g className="studio-label" transform={`translate(${c.x} ${c.y}) scale(${1 / Math.max(0.5, view.k)})`}>
                       <text y={-3}>{s.roomNumber || s.roomName || "?"}</text>
                       <text className="sub" y={12}>
-                        {(s.knownSqFt ?? 0) > 0 ? `⚓ ${s.knownSqFt} ft²` : sq !== null ? `${sq} ft²` : "size after calibration"}
+                        {phase === "edit"
+                          ? (s.source === "ai" ? "Max" : "traced")
+                          : (s.knownSqFt ?? 0) > 0 ? `⚓ ${s.knownSqFt} ft²` : sq !== null ? `${sq} ft²` : "—"}
                       </text>
                     </g>
                   </g>
                 );
               })}
-              {tracePts.length > 0 && phase === "draw" && (
+              {/* reshape pins: vertices are circles, edge handles are squares */}
+              {canReshape && (() => {
+                const s = one!;
+                const n = s.pts.length;
+                return (
+                  <g>
+                    {s.pts.map((p, i) => {
+                      const q = s.pts[(i + 1) % n];
+                      const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+                      const len = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+                      const nx = -(q.y - p.y) / len, ny = (q.x - p.x) / len;
+                      const hs = 5.5 / view.k;
+                      return (
+                        <rect key={"e" + i} x={mx - hs} y={my - hs} width={hs * 2} height={hs * 2}
+                          className="studio-edgehandle"
+                          onPointerDown={(e) => beginHandleDrag(e, "edge", i, nx, ny)}
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            // add a pin in the middle of this edge
+                            mutate((prev) => prev.map((sh) => {
+                              if (sh.id !== s.id) return sh;
+                              const pts = [...sh.pts];
+                              pts.splice(i + 1, 0, { x: mx, y: my });
+                              return { ...sh, pts };
+                            }));
+                          }} />
+                      );
+                    })}
+                    {s.pts.map((p, i) => (
+                      <circle key={"v" + i} cx={p.x} cy={p.y} r={6 / view.k}
+                        className="studio-vertexhandle"
+                        onPointerDown={(e) => beginHandleDrag(e, "vertex", i)}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          if (s.pts.length <= 3) return;
+                          mutate((prev) => prev.map((sh) => sh.id === s.id
+                            ? { ...sh, pts: sh.pts.filter((_, j) => j !== i) } : sh));
+                        }} />
+                    ))}
+                  </g>
+                );
+              })()}
+              {tracePts.length > 0 && phase === "edit" && (
                 <g>
                   <polyline points={tracePts.map((p) => `${p.x},${p.y}`).join(" ")}
                     fill="none" stroke="#2dd4bf" strokeWidth={2.5 / view.k} strokeDasharray={`${7 / view.k} ${5 / view.k}`} />
@@ -446,25 +621,50 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
             </g>
           </svg>
 
-          {phase === "draw" && tool === "trace" && (
+          {/* THE TOOLBAR (edit phase) */}
+          {phase === "edit" && (
+            <div className="studio-toolbar">
+              <button className="pbtn small" disabled={!undoStack.current.length} title="Undo (Ctrl+Z)" onClick={undo}>↩</button>
+              <button className="pbtn small" disabled={!redoStack.current.length} title="Redo (Ctrl+Shift+Z)" onClick={redo}>↪</button>
+              <i className="tb-sep" />
+              <ToolBtn id="select" label="☝ Select" title="Click a room; shift-click for several; drag to move" />
+              <ToolBtn id="trace" label="✏ Trace" title="Tap corners of a missing room; the snap seats it" />
+              <ToolBtn id="reshape" label="⬒ Reshape" title="Pins on the selected room: pull edges straight, drag pins, double-click an edge to add a pin, a pin to remove it" />
+              <ToolBtn id="merge" label="⧉ Merge" title="Tap two touching rooms — they become one" />
+              <i className="tb-sep" />
+              <button className="pbtn small" disabled={!selShapes.length}
+                title="Seat the selected room(s) on the plan's walls"
+                onClick={() => mutate((prev) => prev.map((s) => sel.has(s.id) ? { ...s, pts: snapPx(s.pts) } : s))}>
+                ⌖ Snap
+              </button>
+              <button className="pbtn small danger" disabled={!selShapes.length}
+                onClick={() => {
+                  mutate((prev) => prev.filter((s) => !sel.has(s.id)));
+                  setSel(new Set());
+                }}>✕ Delete</button>
+            </div>
+          )}
+
+          {phase === "edit" && tool === "trace" && (
             <div className="studio-tracebar">
               <b>{tracePts.length === 0
-                ? "Tap roughly at each corner of a room — the snap pulls it onto the walls."
+                ? "Tap roughly at each corner — the snap pulls the shape onto the walls."
                 : `${tracePts.length} corner${tracePts.length === 1 ? "" : "s"} placed`}</b>
               <button className="pbtn small" disabled={!tracePts.length}
                 onClick={() => setTracePts((p) => p.slice(0, -1))}>↩ Undo point</button>
               <button className="pbtn small primary" disabled={tracePts.length < 3}
                 onClick={finishTrace}>✓ Finish room</button>
-              <button className="pbtn small ghost" onClick={() => { setTracePts([]); setTool("select"); }}>✕</button>
             </div>
           )}
-
-          {phase === "draw" && selShapes.length > 1 && (
+          {phase === "edit" && tool === "merge" && (
             <div className="studio-tracebar">
-              <b>{selShapes.length} boxes selected — drag them together, arrows nudge</b>
-              <button className="pbtn small primary" onClick={() => {
-                mutate((prev) => prev.map((s) => sel.has(s.id) ? { ...s, pts: snapPx(s.pts) } : s));
-              }}>⌖ Snap selected</button>
+              <b>{mergeFirst ? "Now tap the room to merge it with" : "Tap the FIRST of the two rooms to merge"}</b>
+              {mergeFirst && <button className="pbtn small ghost" onClick={() => setMergeFirst(null)}>✕ Start over</button>}
+            </div>
+          )}
+          {phase === "edit" && selShapes.length > 1 && tool === "select" && (
+            <div className="studio-tracebar">
+              <b>{selShapes.length} boxes selected — drag together, arrows nudge, ⌖ Snap seats them</b>
               <button className="pbtn small ghost" onClick={() => setSel(new Set())}>✕ Clear</button>
             </div>
           )}
@@ -482,34 +682,35 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
         </div>
 
         <aside className="studio-rail">
-          {phase === "draw" ? (
+          {phase === "edit" && (
             <>
-              <div className={"studio-calbox" + (cal ? " ok" : "")}>
-                {cal
-                  ? <><b>✓ Calibrated</b><span>{anchors.length} known room{anchors.length === 1 ? "" : "s"} set the scale — every anchor you add sharpens the eventual measuring.</span></>
-                  : <><b>1 · Calibrate first</b><span>Trace a room you KNOW, snap it into place, then type its square footage. Max can't draw or measure anything until you do.</span></>}
+              <div className="studio-calbox ok">
+                <b>1 · Make the drawing match the plan</b>
+                <span>Max drew first; you correct. Move boxes, reshape funky ones, merge splits,
+                  trace anything missed. Overlapping boxes are dropped automatically.</span>
               </div>
-
-              <div className="prow">
-                <button className={"pbtn" + (tool === "trace" ? " primary" : "")}
-                  onClick={() => { setTool("trace"); setSel(new Set()); }}>✏ Trace a room</button>
-                <button className="pbtn" disabled={!cal || aiBusy} onClick={maxDrawRest}
-                  title={cal ? "Max mimics the plan: drawn boxes over every room you haven't traced" : "Calibrate a room first"}>
-                  {aiBusy ? "✨ Max is drawing…" : "✨ Max draws the rest"}
-                </button>
-              </div>
-              {aiCount > 0 && (
+              <button className="pbtn" disabled={aiBusy} onClick={maxDrawMore}>
+                {aiBusy ? "✨ Max is drawing…" : "✨ Max draws the rooms"}
+              </button>
+              {shapes.some((s) => s.source === "ai") && (
                 <button className="pbtn small" onClick={() => {
                   setSel(new Set(shapes.filter((s) => s.source === "ai").map((s) => s.id)));
                   setTool("select");
-                }}>▣ Select all of Max's boxes ({aiCount})</button>
+                }}>▣ Select all of Max's boxes</button>
               )}
             </>
-          ) : (
+          )}
+          {phase === "calibrate" && (
+            <div className={"studio-calbox" + (cal ? " ok" : "")}>
+              <b>2 · Calibrate — {anchors.length} of {MAX_ANCHORS} rooms set</b>
+              <span>Select up to three rooms you KNOW and type each one's calibration measurement.
+                Then measure everything.</span>
+            </div>
+          )}
+          {phase === "details" && (
             <div className="studio-calbox ok">
-              <b>✓ Matrix confirmed</b>
-              <span>The boxes are locked in and every square footage is measured from your calibration.
-                Select each room and enter its details, then ship it.</span>
+              <b>3 · Every room measured ✓</b>
+              <span>The matrix is locked. Select each room and enter its details, then ship.</span>
             </div>
           )}
           {notice && <p className="pnote">{notice}</p>}
@@ -530,29 +731,33 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                 </label>
               </div>
 
-              {phase === "draw" ? (
-                <>
-                  <label className="pfield">Square feet
-                    <input type="number" min={0}
-                      value={one.knownSqFt ?? ""}
-                      placeholder={cal ? `measured: ${sqftOf(one) ?? "—"}` : "type it if you KNOW it"}
-                      onChange={(e) => patchShape(one.id, { knownSqFt: Number(e.target.value) > 0 ? Number(e.target.value) : null })} />
-                    <small>{(one.knownSqFt ?? 0) > 0
-                      ? "⚓ You set this — it anchors the calibration."
-                      : cal ? "Measured from your calibration. Type a number only if you KNOW this room." : ""}</small>
-                  </label>
-                  <div className="prow">
-                    <button className="pbtn small" onClick={() => {
-                      mutate((prev) => prev.map((s) => s.id === one.id ? { ...s, pts: snapPx(s.pts) } : s));
-                    }}>⌖ Snap to walls</button>
-                    <button className="pbtn small danger" onClick={() => {
-                      mutate((prev) => prev.filter((s) => s.id !== one.id));
-                      setSel(new Set());
-                    }}>✕ Delete</button>
-                  </div>
-                  <small className="pnote">Drag to move it; arrow keys nudge; SHIFT-click to select several at once.</small>
-                </>
-              ) : (
+              {phase === "edit" && (
+                <small className="pnote">
+                  {tool === "reshape"
+                    ? "Pull a square handle to slide that edge straight. Drag a round pin (it lines up with its neighbours). Double-click an edge to add a pin, a pin to remove it."
+                    : "Drag to move · arrows nudge · ⬒ Reshape for pins · ⌖ Snap seats it on the walls."}
+                </small>
+              )}
+
+              {phase === "calibrate" && (
+                <label className="pfield">Calibration measurement <small>sq ft you KNOW</small>
+                  <input type="number" min={0}
+                    value={one.knownSqFt ?? ""}
+                    placeholder="e.g. 600"
+                    onChange={(e) => {
+                      const v = Number(e.target.value) > 0 ? Number(e.target.value) : null;
+                      if (v && (one.knownSqFt ?? 0) <= 0 && anchors.length >= MAX_ANCHORS) {
+                        setErr(`Up to ${MAX_ANCHORS} calibration rooms — clear one first.`);
+                        return;
+                      }
+                      setErr("");
+                      patchShape(one.id, { knownSqFt: v });
+                    }} />
+                  <small>{(one.knownSqFt ?? 0) > 0 ? "⚓ A calibration room — it anchors the scale." : "Leave blank unless you truly know this room."}</small>
+                </label>
+              )}
+
+              {phase === "details" && (
                 <>
                   <div className="prow">
                     <label className="pfield grow">Room type
@@ -583,7 +788,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                       <datalist id="studio-depts">{deptOptions.map((d) => <option key={d} value={d} />)}</datalist>
                     </label>
                   </div>
-                  <p className="pnote">Measured: <b>{sqftOf(one) ?? "—"} ft²</b>{(one.knownSqFt ?? 0) > 0 ? " (⚓ your number)" : ""}</p>
+                  <p className="pnote">Measured: <b>{sqftOf(one) ?? "—"} ft²</b>{(one.knownSqFt ?? 0) > 0 ? " (⚓ your calibration)" : ""}</p>
                 </>
               )}
             </div>
@@ -593,37 +798,41 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
             {shapes.map((s) => (
               <button key={s.id} className={"studio-row" + (sel.has(s.id) ? " on" : "")}
                 onClick={(e) => {
-                  if (e.shiftKey) {
+                  if (e.shiftKey && phase === "edit") {
                     setSel((prev) => {
                       const next = new Set(prev);
                       if (next.has(s.id)) next.delete(s.id); else next.add(s.id);
                       return next;
                     });
                   } else setSel(new Set([s.id]));
-                  if (phase === "draw") setTool("select");
                 }}>
                 <i style={{ background: s.source === "ai" ? AI : TRACED }} />
                 <b>{s.roomNumber || s.roomName || "(no name yet)"}</b>
                 {phase === "details" && !s.department && <em className="miss">dept?</em>}
-                <em>{(s.knownSqFt ?? 0) > 0 ? `⚓ ${s.knownSqFt}` : sqftOf(s) ?? "—"} ft²</em>
+                <em>
+                  {phase === "edit" ? (s.source === "ai" ? "Max" : "traced")
+                    : (s.knownSqFt ?? 0) > 0 ? `⚓ ${s.knownSqFt}` : sqftOf(s) ?? "—"}
+                </em>
               </button>
             ))}
-            {!shapes.length && <p className="pnote">No rooms yet — tap ✏ Trace a room and start with one you know the size of.</p>}
+            {!shapes.length && <p className="pnote">Nothing drawn yet — ✨ Max draws the rooms, or ✏ Trace them yourself.</p>}
           </div>
 
-          {phase === "draw" ? (
-            <button className="pbtn primary wide" onClick={confirmMatrix}>
-              ✓ Confirm Matrix
-            </button>
-          ) : (
-            <button className="pbtn primary wide" onClick={ship}>
-              🚀 Ship to Max Space
-            </button>
+          {phase === "edit" && (
+            <button className="pbtn primary wide" onClick={finishEditing}>✓ Finish editing — calibrate next</button>
+          )}
+          {phase === "calibrate" && (
+            <button className="pbtn primary wide" disabled={!cal} onClick={measureAll}>📏 Measure all rooms</button>
+          )}
+          {phase === "details" && (
+            <button className="pbtn primary wide" onClick={ship}>🚀 Ship to Max Space</button>
           )}
           <small className="pnote">
-            {phase === "draw"
-              ? "Confirm locks the boxes in, measures every room from your calibration, and shows the final OpsMatrix rendering."
-              : `Ships into ${[account, building, floor].filter(Boolean).join(" → ") || "your account"} → department → room. ${existingSet ? "Same rooms update — schedules stay intact." : ""}`}
+            {phase === "edit"
+              ? "When the drawing matches the plan, finish editing and calibrate."
+              : phase === "calibrate"
+                ? "Every room's square footage will be measured from your calibration rooms."
+                : `Ships into ${[account, building, floor].filter(Boolean).join(" → ") || "your account"} → department → room.${existingSet ? " Same rooms update — schedules stay intact." : ""}`}
           </small>
         </aside>
       </div>
@@ -637,10 +846,6 @@ function typeIdOf(rules: Rules, label: string): string {
 }
 
 // ── the Calibration Editor HOME (reached from Max Space's navigation) ──────
-// Every plan built through the editor lives here as an editable set: reopen
-// it after a remodel, move the boxes, fix details, re-ship — the SAME rooms
-// in Max Space update.
-
 export function CalibrationEditorHome({ rules }: {
   rules: Rules;
 }) {
@@ -659,8 +864,6 @@ export function CalibrationEditorHome({ rules }: {
         account={editing.account} building={editing.building} floor={editing.floor}
         rules={rules} existingSet={editing}
         onShipped={(n, saved) => {
-          // the stores were written directly — reload so every view (map,
-          // lists, schedules) sees the remodel; the message survives it
           sessionStorage.setItem("fusion-studio-updated",
             `✓ ${editing.building || "The plan"}${editing.floor ? " · " + editing.floor : ""} updated — ${n} rooms, same rooms in Max Space, schedules intact.` +
             (saved ? "" : " (The editable set could not be re-saved — storage is full — but Max Space is updated.)"));
@@ -674,14 +877,14 @@ export function CalibrationEditorHome({ rules }: {
     <div className="pro-list spaces">
       <p className="pnote">
         Every floor plan built in the Calibration Editor stays editable here. Reopen one after a
-        remodel — move the boxes, re-snap, fix the details — and shipping the update lands on the
-        SAME rooms in Max Space, so schedules and history never break.
+        remodel — move the boxes, reshape, merge, re-calibrate — and shipping the update lands on
+        the SAME rooms in Max Space, so schedules and history never break.
       </p>
       {msg && <p className="pnote keysaved">{msg}</p>}
       {!sets.length && (
         <p className="pnote">
           Nothing here yet. Build one with <b>⬆ Import → 🗺 Floor plan → "No — it's just the floor
-          plan, no sizes"</b> — that opens this editor on your file.
+          plan, no sizes"</b> — Max draws it, you correct and calibrate.
         </p>
       )}
       <div className="studio-sets">

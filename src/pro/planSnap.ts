@@ -27,6 +27,33 @@ export function grayFromPixels(px: Uint8ClampedArray | number[], w: number, h: n
   return { data: g, w, h, dark: mean > 0.5 };
 }
 
+/**
+ * Faint scans (light-gray walls, washed-out photocopies) barely register.
+ * A percentile contrast stretch makes the darkest 2% read as full ink and
+ * the lightest 98% as clean paper — the snap then treats a faint plan like
+ * a crisp one. Pure, so it's testable.
+ */
+export function stretchGray(g: Gray): Gray {
+  // work in the RESPONSE domain (ink = high): lines are a tiny share of a
+  // plan's pixels, so the gain comes from the ink population itself — the
+  // 75th-percentile ink level is boosted to solid, paper stays paper
+  const resp = new Float32Array(g.data.length);
+  for (let i = 0; i < g.data.length; i++) resp[i] = g.dark ? 1 - g.data[i] : g.data[i];
+  const inks: number[] = [];
+  for (let i = 0; i < resp.length; i++) if (resp[i] > 0.08) inks.push(resp[i]);
+  if (inks.length < 50) return g;                 // blank-ish image — leave it
+  inks.sort((a, b) => a - b);
+  const hi = inks[Math.floor(inks.length * 0.75)];
+  if (!(hi > 0.05) || hi > 0.55) return g;        // already strong ink
+  const gain = 0.9 / hi;
+  const out = new Float32Array(g.data.length);
+  for (let i = 0; i < resp.length; i++) {
+    const r = Math.min(1, resp[i] * gain);
+    out[i] = g.dark ? 1 - r : r;
+  }
+  return { ...g, data: out };
+}
+
 /** luminance grid from any drawable source (browser only) */
 export function buildGray(image: HTMLImageElement | HTMLCanvasElement, maxSide = 2200): Gray | null {
   const iw = image instanceof HTMLCanvasElement ? image.width : image.naturalWidth;
@@ -42,7 +69,7 @@ export function buildGray(image: HTMLImageElement | HTMLCanvasElement, maxSide =
   ctx.fillRect(0, 0, w, h);
   ctx.drawImage(image, 0, 0, w, h);
   const g = grayFromPixels(ctx.getImageData(0, 0, w, h).data, w, h);
-  return { ...g, w, h };
+  return stretchGray({ ...g, w, h });
 }
 
 /** how strongly the pixel reads as wall ink */
@@ -298,4 +325,135 @@ export function autoDetectRooms(G: Gray): XY[][] {
     out.push(poly.map((p) => ({ x: p.x / sc, y: p.y / sc })));
   }
   return out;
+}
+
+
+// ── polygon booleans via a shared raster (merge tool + the no-overlap rule) ─
+
+function rasterize(polys: XY[][], res = 420, pad = 1): {
+  mask: Uint8Array[]; w: number; h: number; ox: number; oy: number; sc: number; pad: number;
+} | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const poly of polys) for (const p of poly) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  const bw = maxX - minX, bh = maxY - minY;
+  if (!(bw > 0) || !(bh > 0)) return null;
+  const sc = res / Math.max(bw, bh);
+  const w = Math.max(2, Math.round(bw * sc) + pad * 2), h = Math.max(2, Math.round(bh * sc) + pad * 2);
+  const masks = polys.map((poly) => {
+    const m = new Uint8Array(w * h);
+    const pts = poly.map((p) => ({ x: (p.x - minX) * sc + pad, y: (p.y - minY) * sc + pad }));
+    // scanline fill
+    for (let y = 0; y < h; y++) {
+      const xs: number[] = [];
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const a = pts[i], b = pts[j];
+        if ((a.y > y) !== (b.y > y)) xs.push(a.x + ((y - a.y) * (b.x - a.x)) / (b.y - a.y));
+      }
+      xs.sort((p, q) => p - q);
+      for (let k = 0; k + 1 < xs.length; k += 2) {
+        const x0 = Math.max(0, Math.ceil(xs[k])), x1 = Math.min(w - 1, Math.floor(xs[k + 1]));
+        for (let x = x0; x <= x1; x++) m[y * w + x] = 1;
+      }
+    }
+    return m;
+  });
+  return { mask: masks, w, h, ox: minX, oy: minY, sc, pad };
+}
+
+/** how much of the SMALLER polygon sits inside the other (0..1) */
+export function overlapRatio(a: XY[], b: XY[]): number {
+  if (a.length < 3 || b.length < 3) return 0;
+  const r = rasterize([a, b], 240);
+  if (!r) return 0;
+  let inter = 0, areaA = 0, areaB = 0;
+  for (let i = 0; i < r.w * r.h; i++) {
+    const pa = r.mask[0][i], pb = r.mask[1][i];
+    if (pa) areaA++;
+    if (pb) areaB++;
+    if (pa && pb) inter++;
+  }
+  const denom = Math.min(areaA, areaB);
+  return denom > 0 ? inter / denom : 0;
+}
+
+/**
+ * The merge tool: two rooms become one outline (union). Rasterize both,
+ * OR the masks, trace the boundary, simplify lightly — angled shapes keep
+ * their angles (no rectify here). Null when the rooms don't touch: merging
+ * two separate rooms would invent floor that doesn't exist.
+ */
+export function unionPolygons(a: XY[], b: XY[]): XY[] | null {
+  if (a.length < 3 || b.length < 3) return null;
+  // rooms that share a wall sit a wall-thickness apart once snapped, so the
+  // union is a morphological CLOSE: dilate enough to bridge a real wall,
+  // erode the same amount so the outer boundary comes back true
+  const k = 9;
+  const r = rasterize([a, b], 420, k + 2);
+  if (!r) return null;
+  const u = new Uint8Array(r.w * r.h);
+  for (let i = 0; i < u.length; i++) u[i] = r.mask[0][i] | r.mask[1][i];
+  let grown = new Uint8Array(u);
+  for (let it = 0; it < k; it++) {
+    const nw = new Uint8Array(grown);
+    for (let y = 1; y < r.h - 1; y++) {
+      for (let x = 1; x < r.w - 1; x++) {
+        const i = y * r.w + x;
+        if (!grown[i] && (grown[i - 1] || grown[i + 1] || grown[i - r.w] || grown[i + r.w])) nw[i] = 1;
+      }
+    }
+    grown = nw;
+  }
+  for (let it = 0; it < k; it++) {
+    const nw = new Uint8Array(grown);
+    for (let y = 0; y < r.h; y++) {
+      for (let x = 0; x < r.w; x++) {
+        const i = y * r.w + x;
+        if (!grown[i]) continue;
+        const left = x > 0 ? grown[i - 1] : 0, right = x < r.w - 1 ? grown[i + 1] : 0;
+        const up = y > 0 ? grown[i - r.w] : 0, down = y < r.h - 1 ? grown[i + r.w] : 0;
+        if (!(left && right && up && down)) nw[i] = 0;
+      }
+    }
+    grown = nw;
+  }
+  // the close must not LOSE the rooms themselves
+  for (let i = 0; i < u.length; i++) if (u[i]) grown[i] = 1;
+  // connectivity check: flood from one polygon; the other must be reachable
+  const seen = new Uint8Array(r.w * r.h);
+  const qx = new Int32Array(r.w * r.h), qy = new Int32Array(r.w * r.h);
+  let head = 0, tail = 0, seedFound = false;
+  outer: for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) {
+    if (r.mask[0][y * r.w + x]) { qx[tail] = x; qy[tail] = y; tail++; seen[y * r.w + x] = 1; seedFound = true; break outer; }
+  }
+  if (!seedFound) return null;
+  while (head < tail) {
+    const x = qx[head], y = qy[head]; head++;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= r.w || ny >= r.h) continue;
+      const ni = ny * r.w + nx;
+      if (!seen[ni] && grown[ni]) { seen[ni] = 1; qx[tail] = nx; qy[tail] = ny; tail++; }
+    }
+  }
+  let touchesB = false;
+  for (let i = 0; i < u.length && !touchesB; i++) if (r.mask[1][i] && seen[i]) touchesB = true;
+  if (!touchesB) return null;
+  // trace the union boundary
+  const label = new Int32Array(r.w * r.h);
+  let minx = r.w, maxx = 0, miny = r.h, maxy = 0;
+  for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) {
+    if (grown[y * r.w + x]) {
+      label[y * r.w + x] = 1;
+      if (x < minx) minx = x; if (x > maxx) maxx = x;
+      if (y < miny) miny = y; if (y > maxy) maxy = y;
+    }
+  }
+  const poly = traceRegion(label, { id: 1, minx, maxx, miny, maxy }, r.w, r.h);
+  if (!poly || poly.length < 3) return null;
+  const simplified = rdp(poly, 2.5);
+  if (simplified.length < 3) return null;
+  return simplified.map((p) => ({ x: (p.x - r.pad) / r.sc + r.ox, y: (p.y - r.pad) / r.sc + r.oy }));
 }
