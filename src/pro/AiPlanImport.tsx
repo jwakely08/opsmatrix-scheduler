@@ -10,13 +10,13 @@
 //   3. Either way the plan is rebuilt matrix-style; the upload is never
 //      shown back.
 import React, { useEffect, useRef, useState } from "react";
-import { importPlanFromImage, AiPlanError, type ImportResult } from "../bridge/aiPlanImport";
+import { importPlanFromImage, readPlanWithAI, AiPlanError, type ImportResult } from "../bridge/aiPlanImport";
 import { attachPlanToRooms } from "./roomListImport";
 import { planFileToImage, isPdf } from "./planFile";
 import { dxfToPicture, isDxf, isDwg } from "./dxfRaster";
 import { loadApiKey, saveApiKey } from "./classicStore";
 import { aiProxy } from "./aiTransport";
-import { PlanStudio, type StudioPicture } from "./PlanStudio";
+import { PlanStudio, type StudioPicture, type AiRoomSeed } from "./PlanStudio";
 import type { ClassicData } from "./classicStore";
 import type { Rules } from "./rules";
 
@@ -36,6 +36,8 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
   const [step, setStep] = useState<"choice" | "form">(defaultMode ? "form" : "choice");
   const [mode, setMode] = useState<ReadMode>(defaultMode ?? "read");
   const [studioPic, setStudioPic] = useState<StudioPicture | null>(null);
+  const [studioSeeds, setStudioSeeds] = useState<AiRoomSeed[]>([]);
+  const [studioNotice, setStudioNotice] = useState("");
   // the hierarchy is entered UP FRONT (Josh: account → building → floor,
   // departments are chosen per room later): account prefills from what the
   // device already knows
@@ -114,9 +116,38 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
       const picture = await fileToPicture(file);
 
       if (mode === "calibrate") {
-        // NO reading yet — the Studio opens on the picture, the manager
-        // calibrates first, and Max runs only when they ask it to
+        // Max draws EVERYTHING first, automatically (Josh, rev 2) — the
+        // editor then opens with the boxes ready to correct. No key or an
+        // unreadable plan is not a dead end: the editor opens empty and
+        // tracing by hand still works.
+        const key = apiKey.trim();
+        if (key && key !== loadApiKey()) saveApiKey(key);
+        const proxy = await aiProxy();
+        let seeds: AiRoomSeed[] = [];
+        let noticeMsg = "";
+        if (key || proxy) {
+          try {
+            setStatus("Max is drawing the floor plan…");
+            const reading = await readPlanWithAI({
+              apiKey: key, proxy,
+              imageDataUrl: picture.dataUrl,
+              imageWidth: picture.width, imageHeight: picture.height,
+              building, floor, onProgress: setStatus
+            });
+            seeds = reading.rooms.map((r) => ({
+              name: r.name, roomNumber: r.roomNumber, roomType: r.roomType, polygon: r.polygon
+            }));
+          } catch (e) {
+            noticeMsg = "Max couldn't draw this plan (" +
+              (e instanceof AiPlanError ? e.message : String((e as Error)?.message ?? e)) +
+              ") — trace the rooms by hand, or try ✨ Max draws the rooms again.";
+          }
+        } else {
+          noticeMsg = "No API key saved, so Max can't draw yet — trace the rooms by hand, or save a key and use ✨ Max draws the rooms.";
+        }
         setPhase("form");
+        setStudioSeeds(seeds);
+        setStudioNotice(noticeMsg);
         setStudioPic({
           dataUrl: picture.dataUrl, width: picture.width,
           height: picture.height, aspect: picture.aspect
@@ -153,7 +184,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
   if (studioPic) {
     return (
       <PlanStudio picture={studioPic} account={account} building={building} floor={floor}
-        rules={rules}
+        rules={rules} initialAiRooms={studioSeeds} initialNotice={studioNotice}
         onShipped={(rooms, setSaved) => {
           setStudioPic(null);
           setResult({ rooms, printed: rooms, scaled: true, calibrated: true });
@@ -192,10 +223,9 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
                 <button className="upltile" onClick={() => { setMode("calibrate"); setStep("form"); }}>
                   <b>📐 No — it's just the floor plan, no sizes</b>
                   <span>
-                    The Calibration Editor opens on your file: trace a room you KNOW (the snap pulls it
-                    onto the walls), type its square footage — that's the calibration — then Max
-                    draws the rest, measured from YOUR numbers. Adjust any shape before it becomes
-                    the floor plan.
+                    Max draws every room first, automatically. Then the Calibration Editor opens:
+                    correct the drawing (move, reshape, merge, trace), calibrate up to three rooms
+                    you KNOW, and measure everything from your calibration.
                   </span>
                 </button>
               </>
@@ -205,7 +235,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
               <>
                 <p className="pnote">
                   {mode === "calibrate"
-                    ? "Pick the file — picture, PDF, or CAD (DXF). It opens in the Calibration Editor, where you calibrate before anything is read."
+                    ? "Pick the file — picture, PDF, or CAD (DXF). Max draws the rooms first; the Calibration Editor opens with them ready to correct."
                     : "Pick the file — picture, PDF, or CAD (DXF). Max reads the rooms, their numbers and the stated square footage, then OpsMatrix redraws the plan in its own style."}
                 </p>
 

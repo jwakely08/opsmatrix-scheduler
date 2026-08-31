@@ -3,8 +3,13 @@
 // found straight from the lines. All pure over a synthetic luminance grid.
 import { describe, it, expect } from "vitest";
 import {
-  grayFromPixels, snapToWalls, rectify, rdp, autoDetectRooms, shoelacePx, type Gray
+  grayFromPixels, stretchGray, snapToWalls, rectify, rdp, autoDetectRooms,
+  shoelacePx, overlapRatio, unionPolygons, type Gray
 } from "./planSnap";
+
+const sq = (x: number, y: number, w: number, h: number) => [
+  { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }
+];
 
 /** synthetic plan: white ground, black wall rectangles drawn in a pixel grid */
 function makePlan(w: number, h: number, walls: [number, number, number, number][]): Gray {
@@ -86,5 +91,63 @@ describe("autoDetectRooms", () => {
     // interior ~ 293×193 after dilation/expand round trip — generous window
     expect(area).toBeGreaterThan(240 * 150);
     expect(area).toBeLessThan(330 * 230);
+  });
+});
+
+describe("stretchGray (faint plans)", () => {
+  it("makes light-gray walls read as full ink", () => {
+    // walls drawn at 60% gray on white — barely registers unstretched
+    const w = 200, h = 200;
+    const px = new Uint8ClampedArray(w * h * 4).fill(255);
+    for (let x = 40; x <= 160; x++) {
+      for (const y of [40, 41, 42, 158, 159, 160]) {
+        const i = (y * w + x) * 4;
+        px[i] = px[i + 1] = px[i + 2] = 200; // faint
+      }
+    }
+    const raw = grayFromPixels(px, w, h);
+    const rawResp = raw.dark ? 1 - raw.data[41 * w + 100] : raw.data[41 * w + 100];
+    expect(rawResp).toBeLessThan(0.4); // too faint for the snap threshold
+    const g = stretchGray(raw);
+    const resp = g.dark ? 1 - g.data[41 * w + 100] : g.data[41 * w + 100];
+    expect(resp).toBeGreaterThan(0.6); // now solid ink
+  });
+});
+
+describe("overlapRatio — the hard no-overlap rule", () => {
+  it("a box inside another reads ~1; neighbours read ~0", () => {
+    const big = sq(0, 0, 200, 200);
+    const inner = sq(50, 50, 80, 80);
+    const neighbour = sq(210, 0, 100, 100);
+    expect(overlapRatio(big, inner)).toBeGreaterThan(0.9);
+    expect(overlapRatio(big, neighbour)).toBeLessThan(0.05);
+    const halfIn = sq(150, 0, 100, 100); // half over the edge
+    const r = overlapRatio(big, halfIn);
+    expect(r).toBeGreaterThan(0.4);
+    expect(r).toBeLessThan(0.6);
+  });
+});
+
+describe("unionPolygons — the merge tool", () => {
+  it("two adjacent rooms merge into one outline with the combined area", () => {
+    const a = sq(0, 0, 100, 100);
+    const b = sq(100, 0, 80, 100); // shares the x=100 wall
+    const merged = unionPolygons(a, b)!;
+    expect(merged).toBeTruthy();
+    const area = shoelacePx(merged);
+    expect(Math.abs(area - 180 * 100) / (180 * 100)).toBeLessThan(0.06);
+  });
+
+  it("refuses rooms that don't touch", () => {
+    expect(unionPolygons(sq(0, 0, 50, 50), sq(200, 200, 50, 50))).toBeNull();
+  });
+
+  it("an L-shaped union keeps the notch (no convex-hull cheating)", () => {
+    const a = sq(0, 0, 200, 100);
+    const b = sq(0, 100, 100, 100); // L overall
+    const merged = unionPolygons(a, b)!;
+    const area = shoelacePx(merged);
+    // L area = 200×100 + 100×100 = 30000; a hull would be ~40000
+    expect(Math.abs(area - 30000) / 30000).toBeLessThan(0.08);
   });
 });
