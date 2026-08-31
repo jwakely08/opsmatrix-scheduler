@@ -123,10 +123,16 @@ export function shoelacePx(pts: XY[]): number {
  * response nearby, then corners are rebuilt from neighbouring edge
  * intersections (clamped so near-parallel corridor walls can't fly off).
  */
-export function snapToWalls(G: Gray | null, ptsIn: XY[]): XY[] {
+export function snapToWalls(G: Gray | null, ptsIn: XY[], opts?: { maxOffset?: number }): XY[] {
   if (!G || ptsIn.length < 3) return ptsIn;
   const pts = rectify(ptsIn);
-  const R = Math.max(15, Math.min(55, Math.round(G.w * 0.035)));
+  // maxOffset caps the search: a fresh rough trace wants the full reach, but
+  // RE-snapping a shape someone deliberately reshaped or merged must be a
+  // tight refinement — otherwise the strongest line 40px away (often the old
+  // wall the user just moved off of) wins and the shape "reverts".
+  const R = opts?.maxOffset
+    ? Math.max(4, Math.round(opts.maxOffset))
+    : Math.max(15, Math.min(55, Math.round(G.w * 0.035)));
   const n = pts.length;
   const fitted: { a: XY; b: XY }[] = [];
   for (let e = 0; e < n; e++) {
@@ -456,4 +462,66 @@ export function unionPolygons(a: XY[], b: XY[]): XY[] | null {
   const simplified = rdp(poly, 2.5);
   if (simplified.length < 3) return null;
   return simplified.map((p) => ({ x: (p.x - r.pad) / r.sc + r.ox, y: (p.y - r.pad) / r.sc + r.oy }));
+}
+
+
+/**
+ * Border-to-border cleanup (Josh's rule): after a snap, a room's edge that
+ * runs almost along a NEIGHBOUR's edge — a sliver gap or a slight overlap —
+ * moves onto that neighbour's line exactly. No empty slivers, no overlaps,
+ * shared walls actually shared. Pure; corners are rebuilt the same way the
+ * wall snap rebuilds them.
+ */
+export function alignEdgesToNeighbors(ptsIn: XY[], neighbors: XY[][], tol = 12): XY[] {
+  if (ptsIn.length < 3 || !neighbors.length) return ptsIn;
+  const pts = ptsIn.map((p) => ({ ...p }));
+  const n = pts.length;
+  const fitted: { a: XY; b: XY }[] = [];
+  for (let e = 0; e < n; e++) {
+    const a = pts[e], b = pts[(e + 1) % n];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 4) { fitted.push({ a, b }); continue; }
+    const ux = dx / len, uy = dy / len;
+    const nx = -uy, ny = ux;
+    let bestOff = 0, bestSpan = 0;
+    for (const poly of neighbors) {
+      const m = poly.length;
+      for (let f = 0; f < m; f++) {
+        const c = poly[f], d = poly[(f + 1) % m];
+        const ex = d.x - c.x, ey = d.y - c.y;
+        const elen = Math.hypot(ex, ey);
+        if (elen < 4) continue;
+        // near-parallel?
+        const cross = Math.abs(ux * (ey / elen) - uy * (ex / elen));
+        if (cross > 0.18) continue; // > ~10°
+        // signed normal distance from this edge to the neighbour's line
+        const off = (c.x - a.x) * nx + (c.y - a.y) * ny;
+        const off2 = (d.x - a.x) * nx + (d.y - a.y) * ny;
+        const offMid = (off + off2) / 2;
+        if (Math.abs(offMid) > tol) continue;
+        // do the spans actually face each other along the edge direction?
+        const t1 = (c.x - a.x) * ux + (c.y - a.y) * uy;
+        const t2 = (d.x - a.x) * ux + (d.y - a.y) * uy;
+        const lo = Math.max(0, Math.min(t1, t2)), hi = Math.min(len, Math.max(t1, t2));
+        const span = hi - lo;
+        if (span < Math.min(len, elen) * 0.25) continue;
+        if (span > bestSpan) { bestSpan = span; bestOff = offMid; }
+      }
+    }
+    fitted.push({
+      a: { x: a.x + nx * bestOff, y: a.y + ny * bestOff },
+      b: { x: b.x + nx * bestOff, y: b.y + ny * bestOff }
+    });
+  }
+  const out: XY[] = [];
+  for (let j = 0; j < n; j++) {
+    const prev = fitted[(j - 1 + n) % n], next = fitted[j];
+    let ip = intersect(prev, next);
+    if (!ip) ip = { x: (prev.b.x + next.a.x) / 2, y: (prev.b.y + next.a.y) / 2 };
+    const gx = ip.x - pts[j].x, gy = ip.y - pts[j].y;
+    if (Math.hypot(gx, gy) > tol * 3) ip = { x: pts[j].x, y: pts[j].y };
+    out.push(ip);
+  }
+  return out;
 }
