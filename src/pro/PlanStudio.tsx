@@ -33,11 +33,18 @@ import {
 } from "./studioSets";
 import { loadApiKey, loadClassic, saveClassic, FLOOR_TYPES, type ClassicData } from "./classicStore";
 import { aiProxy } from "./aiTransport";
-import type { Rules } from "./rules";
+import { typeIdFromLabelStrict, type Rules } from "./rules";
 
 export interface StudioPicture { dataUrl: string; width: number; height: number; aspect: number }
 
-export interface AiRoomSeed { name: string; roomNumber: string; roomType: string; polygon: number[][] }
+export interface AiRoomSeed {
+  name: string;
+  roomNumber: string;
+  roomType: string;
+  polygon: number[][];
+  /** square footage READ off the plan — preloads the calibration anchor */
+  squareFeet?: number;
+}
 
 type Shape = StudioShapeData;
 type Phase = "edit" | "calibrate" | "details";
@@ -59,7 +66,7 @@ function pointIn(pts: XY[], x: number, y: number): boolean {
   return inside;
 }
 
-export function PlanStudio({ picture, account, building, floor, rules, existingSet, initialAiRooms, initialNotice, onShipped, onCancel }: {
+export function PlanStudio({ picture, account, building, floor, rules, existingSet, initialAiRooms, initialNotice, sizesFromFile, onShipped, onCancel }: {
   picture: StudioPicture;
   account: string;
   building: string;
@@ -70,6 +77,9 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   /** Max's automatic first drawing (already read by the host) */
   initialAiRooms?: AiRoomSeed[];
   initialNotice?: string;
+  /** the file STATED its sizes — every room arrives already measured, so
+   *  calibration is a spot-check, not a 3-room ceiling */
+  sizesFromFile?: boolean;
   onShipped: (roomCount: number, setSaved: boolean) => void;
   onCancel: () => void;
 }) {
@@ -199,13 +209,18 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
       if (blockers.some((s) => overlapRatio(s.pts, pts) > OVERLAP_LIMIT)) continue; // dupe — dropped
       kept.push({
         id: uid(), pts,
-        roomNumber: c.seed.roomNumber, roomName: c.seed.name, roomType: "",
+        roomNumber: c.seed.roomNumber, roomName: c.seed.name,
+        // a plan that STATES its data preloads everything Max read: the room
+        // type maps into Scope's vocabulary, and a stated square footage
+        // becomes that room's calibration measurement
+        roomType: scopeLabelFor(rules, c.seed.roomType),
         floorType: "", fixtureCount: 0, department: "",
-        knownSqFt: null, source: "ai"
+        knownSqFt: Number(c.seed.squareFeet) > 0 ? Math.round(Number(c.seed.squareFeet)) : null,
+        source: "ai"
       });
     }
     return kept;
-  }, [W, H, cleanSnap]);
+  }, [W, H, cleanSnap, rules]);
 
   // the automatic first drawing, once the wall grid is ready to snap against
   useEffect(() => {
@@ -713,9 +728,15 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
           )}
           {phase === "calibrate" && (
             <div className={"studio-calbox" + (cal ? " ok" : "")}>
-              <b>2 · Calibrate — {anchors.length} of {MAX_ANCHORS} rooms set</b>
-              <span>Select up to three rooms you KNOW and type each one's calibration measurement.
-                Then measure everything.</span>
+              {sizesFromFile ? (<>
+                <b>2 · Sizes read from the plan — {anchors.length} room{anchors.length === 1 ? "" : "s"} measured</b>
+                <span>Max copied the square footage stated on the plan. Spot-check a few against
+                  what you know, fix any it misread, and fill in any it missed.</span>
+              </>) : (<>
+                <b>2 · Calibrate — {anchors.length} of {MAX_ANCHORS} rooms set</b>
+                <span>Select up to three rooms you KNOW and type each one's calibration measurement.
+                  Then measure everything.</span>
+              </>)}
             </div>
           )}
           {phase === "details" && (
@@ -757,7 +778,9 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                     placeholder="e.g. 600"
                     onChange={(e) => {
                       const v = Number(e.target.value) > 0 ? Number(e.target.value) : null;
-                      if (v && (one.knownSqFt ?? 0) <= 0 && anchors.length >= MAX_ANCHORS) {
+                      // the 3-room ceiling is for plans with NO sizes; a plan
+                      // that stated them arrives with every room measured
+                      if (v && !sizesFromFile && (one.knownSqFt ?? 0) <= 0 && anchors.length >= MAX_ANCHORS) {
                         setErr(`Up to ${MAX_ANCHORS} calibration rooms — clear one first.`);
                         return;
                       }
@@ -834,7 +857,9 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
             <button className="pbtn primary wide" onClick={finishEditing}>✓ Finish editing — calibrate next</button>
           )}
           {phase === "calibrate" && (
-            <button className="pbtn primary wide" disabled={!cal} onClick={measureAll}>📏 Measure all rooms</button>
+            <button className="pbtn primary wide" disabled={!cal} onClick={measureAll}>
+              {sizesFromFile ? "📏 Sizes look right — build the matrix" : "📏 Measure all rooms"}
+            </button>
           )}
           {phase === "details" && (
             <button className="pbtn primary wide" onClick={ship}>🚀 Ship to Max Space</button>
@@ -843,7 +868,9 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
             {phase === "edit"
               ? "When the drawing matches the plan, finish editing and calibrate."
               : phase === "calibrate"
-                ? "Every room's square footage will be measured from your calibration rooms."
+                ? (sizesFromFile
+                  ? "Rooms Max didn't find a size for are measured against the ones it did."
+                  : "Every room's square footage will be measured from your calibration rooms.")
                 : `Ships into ${[account, building, floor].filter(Boolean).join(" → ") || "your account"} → department → room. Blanks are fine — you'll validate rooms in Max Space.${existingSet ? " Same rooms update — schedules stay intact." : ""}`}
           </small>
         </aside>
@@ -855,6 +882,12 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
 
 function typeIdOf(rules: Rules, label: string): string {
   return rules.roomTypes.find((rt) => rt.label === label)?.id ?? "";
+}
+
+/** what Max read ("Exam Room", "OR") → the account's own Scope label, or "" */
+function scopeLabelFor(rules: Rules, read: string): string {
+  const id = typeIdFromLabelStrict(rules, read);
+  return id ? rules.roomTypes.find((rt) => rt.id === id)?.label ?? "" : "";
 }
 
 // ── the Calibration Editor HOME (reached from Max Space's navigation) ──────

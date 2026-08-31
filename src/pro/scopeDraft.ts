@@ -19,7 +19,7 @@ function slice(r: Rules, section: ScopeSection): unknown {
       autoFor: r.tasks.map((t) => [t.id, [...(t.autoFor ?? [])].sort()])
     };
     case "tasks": return r.tasks.map(({ autoFor: _a, ...rest }) => rest);
-    case "nonSpace": return r.nonSpaceDefs;
+    case "nonSpace": return { defs: r.nonSpaceDefs, quals: r.nonSpaceQualifiers ?? [] };
     case "breaks": return r.breaks ?? [];
   }
 }
@@ -56,6 +56,7 @@ export function saveSection(saved: Rules, draft: Rules, section: ScopeSection): 
       break;
     case "nonSpace":
       next.nonSpaceDefs = clone(draft.nonSpaceDefs);
+      next.nonSpaceQualifiers = clone(draft.nonSpaceQualifiers ?? []);
       break;
     case "breaks":
       next.breaks = clone(draft.breaks ?? []);

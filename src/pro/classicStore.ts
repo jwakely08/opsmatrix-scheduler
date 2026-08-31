@@ -87,6 +87,9 @@ export interface ClassicPlan {
   img: string;
   w: number;
   h: number;
+  /** the plan's scale: pixels per foot (set when the plan was built to scale).
+   *  Absent = unscaled, so on-plan distances can't be turned into feet. */
+  ratio?: number;
   rooms?: { spaceId: string; pts: { x: number; y: number }[] }[];
   [k: string]: unknown;
 }
@@ -94,9 +97,15 @@ export interface ClassicPlan {
 export interface NonSpaceTask {
   id: string;
   name: string;
+  /** total hours — legacy sizing, and kept in sync for counted tasks */
   hours: number;
   scheduleId: string;
   roomIds: string[];
+  /** counted (2026-08-31) model: which Scope def, how many occurrences */
+  defId?: string;
+  count?: number;
+  /** minutes per occurrence at add time (def minutes + qualifiers) */
+  minutesPer?: number;
 }
 
 const V7 = "opsmatrix_v7";
@@ -279,6 +288,9 @@ export function coverageForSpace(data: ClassicData, spaceId: string): Coverage[]
   const out: Coverage[] = [];
   for (const sched of data.v7.schedules ?? []) {
     if (sched.projectNoteId) continue;
+    // a Sanitation/Policing route VISITS rooms — it never covers their
+    // cleaning tasks, so it stays out of coverage entirely
+    if (sched.routeOnly) continue;
     if (!(sched.spaceOrder ?? []).includes(spaceId)) continue;
     const { primary, tasks } = fromClassicRoomTasks(sched.roomTasks?.[spaceId]);
     out.push({ scheduleId: sched.id, primary, tasks });
@@ -364,8 +376,11 @@ export function coverageMinutes(rules: Rules, space: ClassicSpace, cov: Coverage
 
 export function scheduleMinutes(data: ClassicData, rules: Rules, sched: ClassicSchedule): number {
   // a schedule shipped from Max Floor Care carries its equipment-priced
-  // total (a rider scrubs a corridor far faster than the generic task rate)
+  // total (a rider scrubs a corridor far faster than the generic task rate);
+  // Sanitation/Policing routes carry their distance/pass-priced total the
+  // same way
   if (Number(sched.floorCareMinutes) > 0) return Number(sched.floorCareMinutes);
+  if (Number(sched.fixedMinutes) > 0) return Number(sched.fixedMinutes);
   const spaces = data.v7.spaces ?? [];
   let total = 0;
   for (const id of sched.spaceOrder ?? []) {
@@ -375,9 +390,17 @@ export function scheduleMinutes(data: ClassicData, rules: Rules, sched: ClassicS
     total += computeMinutes(rules, sp, { tasks, includeBase: primary }).total;
   }
   for (const t of data.nonSpace) {
-    if (t.scheduleId === sched.id) total += t.hours * 60;
+    if (t.scheduleId === sched.id) total += nonSpaceTaskMinutes(t);
   }
   return total;
+}
+
+/** one non-space entry's minutes: counted model when present, else the block */
+export function nonSpaceTaskMinutes(t: NonSpaceTask): number {
+  if (Number(t.count) > 0 && Number(t.minutesPer) > 0) {
+    return Number(t.count) * Number(t.minutesPer);
+  }
+  return (Number(t.hours) || 0) * 60;
 }
 
 // ── schedule CRUD ────────────────────────────────────────────────────────────

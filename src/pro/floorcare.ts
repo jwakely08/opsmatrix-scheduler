@@ -102,21 +102,43 @@ export function floorCareTasks(rules: Rules) {
  */
 export function fcEligible(rules: Rules, space: SpaceLike): boolean {
   const fcIds = new Set(floorCareTasks(rules).map((t) => t.id));
-  return requiredTasks(rules, space).some((id) => fcIds.has(id));
+  const notNeeded = new Set(space.fcNotNeeded ?? []);
+  return requiredTasks(rules, space).some((id) => fcIds.has(id) && !notNeeded.has(id));
 }
 
 /** which of the five tasks make sense for one specific room */
 export function fcTasksForSpace(rules: Rules, space: SpaceLike): string[] {
-  const fcIds = floorCareTasks(rules).map((t) => t.id);
+  const notNeeded = new Set(space.fcNotNeeded ?? []);
+  const fcIds = floorCareTasks(rules).map((t) => t.id).filter((id) => !notNeeded.has(id));
   const required = new Set(requiredTasks(rules, space));
   const out = fcIds.filter((id) => required.has(id));
   if (isCarpet(space.floorType)) {
-    if (!out.includes("machine-carpet")) out.push("machine-carpet");
+    if (!out.includes("machine-carpet") && !notNeeded.has("machine-carpet")) out.push("machine-carpet");
     // wet-scrub/burnish tasks don't apply to carpet
     return out.filter((id) => ["machine-carpet", "machine-sweep"].includes(id) || required.has(id));
   }
   // hard floors: every floor-care task except carpet cleaning is offerable
   return fcIds.filter((id) => id !== "machine-carpet");
+}
+
+// ── same work, with or without the machine — never schedule both ───────────
+// Josh (2026-08-31): dust mopping and machine sweeping are the same pass;
+// picking one eliminates the other for that room.
+export const FC_EXCLUSIVE: Record<string, string> = {
+  "dust-mop": "machine-sweep",
+  "machine-sweep": "dust-mop"
+};
+
+/**
+ * The tasks actually OFFERABLE for a room right now: what makes sense for it
+ * (fcTasksForSpace, "does not need" respected) minus any task whose exclusive
+ * twin is already booked for this room — on any floor-care schedule.
+ */
+export function fcOfferable(rules: Rules, space: SpaceLike, bookedTaskIds: Set<string>): string[] {
+  return fcTasksForSpace(rules, space).filter((id) => {
+    const twin = FC_EXCLUSIVE[id];
+    return !(twin && bookedTaskIds.has(twin));
+  });
 }
 
 // ── industry-realistic stop timing (recalibrated 2026-08-24, Josh's ask) ────

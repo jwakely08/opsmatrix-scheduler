@@ -12,6 +12,7 @@ import {
 } from "./rules";
 import {
   loadFloorCare, saveFloorCare, floorCareTasks, fcEligible, fcTasksForSpace,
+  fcOfferable, FC_EXCLUSIVE,
   stopMinutes, fcTiming, shipToSchedules, unship, fcScheduleId, fcScheduledRate,
   FC_SETUP_MINUTES, FC_PRACTICAL_FACTOR, FC_PROJECT_TASKS,
   type FcSchedule, type FcStore, type FcEquip, type FcProject
@@ -24,7 +25,10 @@ import {
   rectifyForDisplay, pathFrom, centroidOf,
   type ClassicData, type ClassicSpace
 } from "./classicStore";
-import { MapCanvas } from "./MapCanvas";
+import {
+  MapCanvas, BuildingPicker, BuildingBadge, planBuilding, planBuildings,
+  loadMapBuilding, saveMapBuilding
+} from "./MapCanvas";
 
 const fmt = (n: number) => n.toLocaleString();
 const uid = (p: string) => p + "-" + Math.random().toString(36).slice(2, 9);
@@ -183,9 +187,17 @@ export function FloorCareApp({ data, rules, commit }: {
   const [justShipped, setJustShipped] = useState<string | null>(null);
   const [editing, setEditing] = useState<FcSchedule | null>(() => {
     const m = /[?&]fc=([a-z0-9-]+)/i.exec(window.location.search + window.location.hash);
-    if (!m) return null;
-    const fc = loadFloorCare().schedules.find((s) => s.id === m[1]);
-    return fc ? JSON.parse(JSON.stringify(fc)) : null;
+    if (m) {
+      const fc = loadFloorCare().schedules.find((s) => s.id === m[1]);
+      if (fc) return JSON.parse(JSON.stringify(fc));
+    }
+    // Josh (2026-08-31): Max Floor Care opens STRAIGHT into building a
+    // schedule — no "Build a schedule" stop first. Cancel shows the list.
+    return {
+      id: uid("fc"), name: "", shift: "3rd Shift",
+      techs: [{ key: "T1" }], equipment: {}, stops: [],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    };
   });
 
   const commitStore = (next: FcStore) => { setStore(next); saveFloorCare(next); };
@@ -210,7 +222,7 @@ export function FloorCareApp({ data, rules, commit }: {
           }} />
       )}
       {tab === "daily" && editing && (
-        <Builder data={data} rules={rules} fc={editing} setFc={setEditing}
+        <Builder data={data} rules={rules} commit={commit} fc={editing} setFc={setEditing}
           otherStops={store.schedules.filter((s) => s.id !== editing.id).flatMap((s) => s.stops)}
           onCancel={() => setEditing(null)}
           onConfirm={(fc) => {
@@ -296,8 +308,9 @@ function taskLabel(rules: Rules, id: string): string {
 }
 
 // ── the builder ────────────────────────────────────────────────────────────
-function Builder({ data, rules, fc, setFc, onCancel, onConfirm, otherStops }: {
+function Builder({ data, rules, commit, fc, setFc, onCancel, onConfirm, otherStops }: {
   data: ClassicData; rules: Rules;
+  commit: (mut: (d: ClassicData) => void) => void;
   fc: FcSchedule;
   setFc: (fc: FcSchedule) => void;
   onCancel: () => void;
@@ -320,10 +333,24 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm, otherStops }: {
   const timing = fcTiming(rules, spaces, fc);
 
   // ── map picking (Josh, 2026-08-28): the same map as Max Schedules, but only
-  // rooms with floor-care work are selectable — everything else is greyed out
+  // rooms with floor-care work are selectable — everything else is greyed out.
+  // Building first (2026-08-31): several buildings → pick one before floors.
   const plans = data.plans ?? [];
-  const [planId, setPlanId] = useState<string | null>(plans[0]?.id ?? null);
-  const plan = plans.find((p) => p.id === planId) ?? plans[0] ?? null;
+  const buildings = planBuildings(plans);
+  const [fcBuilding, setFcBuilding] = useState<string | null>(() => loadMapBuilding());
+  const activeBuilding = buildings.length <= 1
+    ? (buildings[0] ?? "")
+    : (fcBuilding !== null && buildings.includes(fcBuilding) ? fcBuilding : null);
+  const needsBuilding = buildings.length > 1 && activeBuilding === null;
+  const bPlans = activeBuilding === null ? [] : plans.filter((p) => planBuilding(p) === activeBuilding);
+  const [planId, setPlanId] = useState<string | null>(null);
+  const plan = bPlans.find((p) => p.id === planId) ?? bPlans[0] ?? null;
+  const chooseBuilding = (b: string | null) => {
+    setFcBuilding(b);
+    saveMapBuilding(b);
+    setPlanId(null);
+    setPickRoom(null);
+  };
   const [pickMode, setPickMode] = useState<"map" | "list">(() =>
     plans.length && spaces.some((sp) => fcEligible(rules, sp) && (sp.visualPts?.length ?? 0) >= 3) ? "map" : "list");
   const [pickRoom, setPickRoom] = useState<ClassicSpace | null>(null);
@@ -349,6 +376,18 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm, otherStops }: {
   }, [otherStops, fc.stops]);
   const fcRemaining = (sp: ClassicSpace): string[] =>
     fcTasksForSpace(rules, sp).filter((id) => !bookedFc.has(sp.id + "|" + id));
+  /** every task booked for this room, this schedule or any other */
+  const bookedTasksFor = (spId: string): Set<string> =>
+    new Set([...otherStops, ...fc.stops].filter((s) => s.spaceId === spId).map((s) => s.taskId));
+  /** Josh's "does not need" list, persisted on the room itself */
+  const setNotNeeded = (spId: string, taskId: string, off: boolean) => commit((d) => {
+    const sp = (d.v7.spaces ?? []).find((s) => s.id === spId);
+    if (!sp) return;
+    const cur = new Set((sp.fcNotNeeded as string[] | undefined) ?? []);
+    if (off) cur.add(taskId); else cur.delete(taskId);
+    sp.fcNotNeeded = [...cur];
+    sp.updatedAt = new Date().toISOString();
+  });
   const techColorOf = (spaceId: string): string | null => {
     const stop = fc.stops.find((s) => s.spaceId === spaceId);
     if (!stop) return null;
@@ -475,10 +514,17 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm, otherStops }: {
           )}
         </div>
 
+        {pickMode === "map" && needsBuilding && (
+          <BuildingPicker plans={plans} spaces={spaces}
+            onPick={(b) => chooseBuilding(b)}
+            note="Pick the building you're scheduling floor care in — then its floors." />
+        )}
         {pickMode === "map" && plan && (
           <div className="fc-mapwrap">
             <MapCanvas
-              plan={plan} plans={plans} onPlan={setPlanId}
+              plan={plan} plans={bPlans} onPlan={setPlanId}
+              badge={<BuildingBadge building={activeBuilding ?? ""}
+                onChange={buildings.length > 1 ? () => chooseBuilding(null) : undefined} />}
               spaces={mapSpaces} shapes={shapes}
               mode="floorcare"
               fillFor={(sp) => {
@@ -491,8 +537,7 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm, otherStops }: {
               onRoom={(sp) => {
                 if (!sp) { setPickRoom(null); return; }
                 if (!eligibleIds.has(sp.id)) return; // greyed-out rooms don't react
-                const options = fcTasksForSpace(rules, sp).filter((id) => !taskFilter || id === taskFilter);
-                if (options.length === 1) { addStop(sp.id, options[0]); return; }
+                // always open the room card: Needs on top, Does not need below
                 setPickRoom(sp);
               }}
               legend={
@@ -505,19 +550,52 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm, otherStops }: {
                 </div>
               }
             />
-            {pickRoom && (
-              <div className="fc-mappick">
-                <b>{String(pickRoom.roomNumber ?? "")} {String(pickRoom.roomName ?? "")}</b>
-                {fcTasksForSpace(rules, pickRoom)
-                  .filter((id) => !taskFilter || id === taskFilter)
-                  .map((id) => (
-                    <button key={id} className="pbtn small" onClick={() => { addStop(pickRoom.id, id); setPickRoom(null); }}>
-                      + {taskLabel(rules, id)} · {stopMinutes(rules, pickRoom, id, fc.equipment)}m
-                    </button>
-                  ))}
-                <button className="pbtn small ghost" onClick={() => setPickRoom(null)}>✕</button>
-              </div>
-            )}
+            {pickRoom && (() => {
+              // read the LIVE room — "does not need" edits land on data, and
+              // the card must reflect them the moment they're tapped
+              const room = mapSpaces.find((s) => s.id === pickRoom.id) ?? pickRoom;
+              const booked = bookedTasksFor(room.id);
+              const notNeeded = (room.fcNotNeeded as string[] | undefined) ?? [];
+              const offer = fcOfferable(rules, room, booked).filter((id) => !taskFilter || id === taskFilter);
+              const excludedByTwin = fcTasksForSpace(rules, room)
+                .filter((id) => FC_EXCLUSIVE[id] && booked.has(FC_EXCLUSIVE[id]));
+              return (
+                <div className="fc-mappick tall">
+                  <b>{String(room.roomNumber ?? "")} {String(room.roomName ?? "")}</b>
+                  <div className="fc-pickgroup">
+                    <span className="fc-picklabel">Needs</span>
+                    {offer.map((id) => (
+                      <span key={id} className="fc-pickrow">
+                        <button className="pbtn small" onClick={() => { addStop(room.id, id); setPickRoom(null); }}>
+                          + {taskLabel(rules, id)} · {stopMinutes(rules, room, id, fc.equipment)}m
+                        </button>
+                        <button className="plink" title={"This room does not need " + taskLabel(rules, id)}
+                          onClick={() => setNotNeeded(room.id, id, true)}>doesn't need it</button>
+                      </span>
+                    ))}
+                    {excludedByTwin.map((id) => (
+                      <small key={id} className="pnote">
+                        {taskLabel(rules, id)} is off — {taskLabel(rules, FC_EXCLUSIVE[id])} is already
+                        scheduled here, and they're the same pass (one with the machine, one without).
+                      </small>
+                    ))}
+                    {!offer.length && !excludedByTwin.length && <small className="pnote">Nothing left — every task is scheduled or marked not needed.</small>}
+                  </div>
+                  {notNeeded.length > 0 && (
+                    <div className="fc-pickgroup">
+                      <span className="fc-picklabel">Does not need</span>
+                      {notNeeded.map((id) => (
+                        <span key={id} className="fc-pickrow">
+                          <span className="ptask sm">{taskLabel(rules, id)}</span>
+                          <button className="plink" onClick={() => setNotNeeded(room.id, id, false)}>↩ needs it after all</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <button className="pbtn small ghost" onClick={() => setPickRoom(null)}>✕</button>
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -527,7 +605,7 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm, otherStops }: {
 
         {pickMode === "list" && <div className="fc-rooms">
           {rooms.map((sp) => {
-            const options = fcTasksForSpace(rules, sp).filter((id) => !taskFilter || id === taskFilter);
+            const options = fcOfferable(rules, sp, bookedTasksFor(sp.id)).filter((id) => !taskFilter || id === taskFilter);
             const n = scheduledCount(sp.id);
             return (
               <div key={sp.id} className={"fc-room" + (n ? " scheduled" : "")}>
@@ -597,7 +675,7 @@ function Builder({ data, rules, fc, setFc, onCancel, onConfirm, otherStops }: {
             ✓ Confirm — ship to Max Schedules
           </button>
           {confirmErr && <p className="warntext">⚠ {confirmErr}</p>}
-          <button className="pbtn ghost wide" onClick={onCancel}>Cancel</button>
+          <button className="pbtn ghost wide" onClick={onCancel}>☰ All floor-care schedules</button>
         </div>
       </aside>
     </div>

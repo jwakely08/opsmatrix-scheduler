@@ -58,7 +58,7 @@ export function hubHashFor(token: string): string {
     const sub = v.split("/")[1] ?? "explorer";
     return "#spaces?view=" + sub;
   }
-  return "#" + v; // scope | workload | floorcare
+  return "#" + v; // scope | workload | floorcare | sanitation | policing | exporting
 }
 
 /** a full relative URL for a token, usable from either document */

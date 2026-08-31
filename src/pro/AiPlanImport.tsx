@@ -10,8 +10,7 @@
 //   3. Either way the plan is rebuilt matrix-style; the upload is never
 //      shown back.
 import React, { useEffect, useRef, useState } from "react";
-import { importPlanFromImage, readPlanWithAI, AiPlanError, type ImportResult } from "../bridge/aiPlanImport";
-import { attachPlanToRooms } from "./roomListImport";
+import { readPlanWithAI, AiPlanError } from "../bridge/aiPlanImport";
 import { planFileToImage, isPdf } from "./planFile";
 import { dxfToPicture, isDxf, isDwg } from "./dxfRaster";
 import { loadApiKey, saveApiKey } from "./classicStore";
@@ -38,6 +37,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
   const [studioPic, setStudioPic] = useState<StudioPicture | null>(null);
   const [studioSeeds, setStudioSeeds] = useState<AiRoomSeed[]>([]);
   const [studioNotice, setStudioNotice] = useState("");
+  const [studioSized, setStudioSized] = useState(false);
   // the hierarchy is entered UP FRONT (Josh: account → building → floor,
   // departments are chosen per room later): account prefills from what the
   // device already knows
@@ -72,27 +72,9 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
     onClose();
   };
 
-  /** write a READ-mode import into the stores (the Studio ships itself) */
-  function persist(imported: ImportResult, calibrated: boolean) {
-    for (const sp of imported.spaces) (sp as { system?: string }).system = account;
-    commit((d) => {
-      // rooms already imported from a room list get the GEOMETRY attached
-      // to them — a later floor plan never duplicates existing rooms
-      d.v7.spaces = d.v7.spaces ?? [];
-      attachPlanToRooms(d.v7.spaces as never, imported as never);
-      d.plans.push(imported.plan as never);
-      localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans));
-    });
-    const printed = imported.spaces.filter((s) => Number(s.squareFeet) > 0).length;
-    setResult({
-      rooms: imported.spaces.length,
-      printed,
-      scaled: Boolean((imported.plan as { ratio?: number }).ratio),
-      calibrated
-    });
-    setStudioPic(null);
-    setPhase("done");
-  }
+  // There is no second write path any more: EVERY plan — read or calibrated —
+  // is shipped by the Calibration Editor (PlanStudio.ship), so the manager
+  // always sees and approves the rooms before they land in Max Space.
 
   /** any accepted file → a picture (photos, PDFs rasterised, DXF drawn) */
   async function fileToPicture(file: File) {
@@ -115,62 +97,54 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
     try {
       const picture = await fileToPicture(file);
 
-      if (mode === "calibrate") {
-        // Max draws EVERYTHING first, automatically (Josh, rev 2) — the
-        // editor then opens with the boxes ready to correct. No key or an
-        // unreadable plan is not a dead end: the editor opens empty and
-        // tracing by hand still works.
-        const key = apiKey.trim();
-        if (key && key !== loadApiKey()) saveApiKey(key);
-        const proxy = await aiProxy();
-        let seeds: AiRoomSeed[] = [];
-        let noticeMsg = "";
-        if (key || proxy) {
-          try {
-            setStatus("Max is drawing the floor plan…");
-            const reading = await readPlanWithAI({
-              apiKey: key, proxy,
-              imageDataUrl: picture.dataUrl,
-              imageWidth: picture.width, imageHeight: picture.height,
-              building, floor, onProgress: setStatus
-            });
-            seeds = reading.rooms.map((r) => ({
-              name: r.name, roomNumber: r.roomNumber, roomType: r.roomType, polygon: r.polygon
-            }));
-          } catch (e) {
-            noticeMsg = "Max couldn't draw this plan (" +
-              (e instanceof AiPlanError ? e.message : String((e as Error)?.message ?? e)) +
-              ") — trace the rooms by hand, or try ✨ Max draws the rooms again.";
-          }
-        } else {
-          noticeMsg = "No API key saved, so Max can't draw yet — trace the rooms by hand, or save a key and use ✨ Max draws the rooms.";
-        }
-        setPhase("form");
-        setStudioSeeds(seeds);
-        setStudioNotice(noticeMsg);
-        setStudioPic({
-          dataUrl: picture.dataUrl, width: picture.width,
-          height: picture.height, aspect: picture.aspect
-        });
-        return;
-      }
-
+      // BOTH modes go through the Calibration Editor now (Josh, 2026-08-31:
+      // "I want the same process in place, the same editor and everything,
+      // for when you upload floor plans or CAD files WITH information — the
+      // only difference is all the data is preloaded"). Max reads first;
+      // the editor opens with whatever it found, and approval happens on
+      // 🚀 Ship to Max Space either way.
       const key = apiKey.trim();
       if (key && key !== loadApiKey()) saveApiKey(key);
       const proxy = await aiProxy();
-      const imported = await importPlanFromImage({
-        apiKey: key,
-        proxy,
-        imageDataUrl: picture.dataUrl,
-        imageWidth: picture.width,
-        imageHeight: picture.height,
-        aspect: picture.aspect,
-        renderRegion: (picture as { renderRegion?: never }).renderRegion,
-        building,
-        floor,
-        onProgress: setStatus
+      let seeds: AiRoomSeed[] = [];
+      let noticeMsg = "";
+      let read = false;
+      if (key || proxy) {
+        try {
+          setStatus(mode === "read" ? "Max is reading the floor plan…" : "Max is drawing the floor plan…");
+          const reading = await readPlanWithAI({
+            apiKey: key, proxy,
+            imageDataUrl: picture.dataUrl,
+            imageWidth: picture.width, imageHeight: picture.height,
+            building, floor, onProgress: setStatus
+          });
+          seeds = reading.rooms.map((r) => ({
+            name: r.name, roomNumber: r.roomNumber, roomType: r.roomType, polygon: r.polygon,
+            // read mode keeps the sizes stated on the plan; calibrate mode
+            // ignores them (there weren't any to state)
+            squareFeet: mode === "read" ? r.squareFeet : 0
+          }));
+          read = mode === "read" && seeds.some((s) => Number(s.squareFeet) > 0);
+          if (mode === "read" && !read) {
+            noticeMsg = "Max didn't find a square footage stated for any room. " +
+              "Calibrate up to three rooms you know instead, then measure them all.";
+          }
+        } catch (e) {
+          noticeMsg = "Max couldn't read this plan (" +
+            (e instanceof AiPlanError ? e.message : String((e as Error)?.message ?? e)) +
+            ") — trace the rooms by hand, or try ✨ Max draws the rooms again.";
+        }
+      } else {
+        noticeMsg = "No API key saved, so Max can't draw yet — trace the rooms by hand, or save a key and use ✨ Max draws the rooms.";
+      }
+      setPhase("form");
+      setStudioSeeds(seeds);
+      setStudioNotice(noticeMsg);
+      setStudioSized(read);
+      setStudioPic({
+        dataUrl: picture.dataUrl, width: picture.width,
+        height: picture.height, aspect: picture.aspect
       });
-      persist(imported, false);
     } catch (e) {
       setError(e instanceof AiPlanError ? e.message : String((e as Error)?.message || e));
       setPhase("error");
@@ -185,6 +159,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
     return (
       <PlanStudio picture={studioPic} account={account} building={building} floor={floor}
         rules={rules} initialAiRooms={studioSeeds} initialNotice={studioNotice}
+        sizesFromFile={studioSized}
         onShipped={(rooms, setSaved) => {
           setStudioPic(null);
           setResult({ rooms, printed: rooms, scaled: true, calibrated: true });
@@ -216,8 +191,8 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
                 <button className="upltile" onClick={() => { setMode("read"); setStep("form"); }}>
                   <b>✨ Yes — the sizes are in the file</b>
                   <span>
-                    Max reads the rooms, numbers and square footage, and the plan arrives already
-                    to scale. Nothing to measure.
+                    Max reads the rooms, numbers and square footage, then the Calibration Editor
+                    opens with everything already filled in — check it over and ship it.
                   </span>
                 </button>
                 <button className="upltile" onClick={() => { setMode("calibrate"); setStep("form"); }}>
@@ -236,7 +211,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
                 <p className="pnote">
                   {mode === "calibrate"
                     ? "Pick the file — picture, PDF, or CAD (DXF). Max draws the rooms first; the Calibration Editor opens with them ready to correct."
-                    : "Pick the file — picture, PDF, or CAD (DXF). Max reads the rooms, their numbers and the stated square footage, then OpsMatrix redraws the plan in its own style."}
+                    : "Pick the file — picture, PDF, or CAD (DXF). Max reads the rooms, their numbers and the stated square footage; the Calibration Editor opens with all of it filled in, ready to check and ship."}
                 </p>
 
                 {/* the hierarchy, up front: account → building → floor.
@@ -319,14 +294,9 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
               <>
                 <p className="pnote big">✓ {result.rooms} rooms on the new floor plan.</p>
                 <p className="pnote">
-                  {result.calibrated
-                    ? "Shipped to Max Space — drawn in OpsMatrix's own style, every room measured from your calibration and filed under " + [account, building, floor].filter(Boolean).join(" → ") + ". The set stays editable in Max Space → Calibration Editor."
-                    : (result.printed > 0
-                      ? `${result.printed} of them had a square footage stated in the file, so those areas were used as-is`
-                      : "No square footage was stated in the file, so the rooms were measured from the drawing") +
-                    (result.scaled
-                      ? " — the plan is already to scale, so there is nothing to measure by hand."
-                      : ". Set the scale once on the plan if you want exact areas.")}
+                  Shipped to Max Space — drawn in OpsMatrix's own style, every room measured, and
+                  filed under {[account, building, floor].filter(Boolean).join(" → ")}. The set
+                  stays editable in Max Space → Calibration Editor.
                 </p>
                 <p className="pnote">
                   Check the room numbers and types on the map, then start tapping rooms onto schedules.
