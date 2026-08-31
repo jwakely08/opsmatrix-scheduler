@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import {
   grayFromPixels, stretchGray, snapToWalls, rectify, rdp, autoDetectRooms,
-  shoelacePx, overlapRatio, unionPolygons, type Gray
+  shoelacePx, overlapRatio, unionPolygons, alignEdgesToNeighbors, type Gray
 } from "./planSnap";
 
 const sq = (x: number, y: number, w: number, h: number) => [
@@ -149,5 +149,48 @@ describe("unionPolygons — the merge tool", () => {
     const area = shoelacePx(merged);
     // L area = 200×100 + 100×100 = 30000; a hull would be ~40000
     expect(Math.abs(area - 30000) / 30000).toBeLessThan(0.08);
+  });
+});
+
+describe("re-snap is a refinement, not a re-detection", () => {
+  it("a tight maxOffset stays on the near line instead of reverting to the old wall", () => {
+    // two vertical walls: the OLD one at x=100, the one the user moved to at x=140
+    const g = makePlan(400, 300, [
+      [100, 50, 103, 250],
+      [140, 50, 143, 250],
+      [98, 50, 145, 53],   // top cap so corners have something to grab
+      [98, 247, 145, 250]
+    ]);
+    // the user reshaped the left edge to ~x=134 (near the NEW wall)
+    const shape = [{ x: 134, y: 55 }, { x: 300, y: 55 }, { x: 300, y: 245 }, { x: 134, y: 245 }];
+    const tight = snapToWalls(g, shape, { maxOffset: 12 });
+    const minXTight = Math.min(...tight.map((p) => p.x));
+    expect(Math.abs(minXTight - 141.5)).toBeLessThan(5); // seats on the NEW wall
+    expect(minXTight).toBeGreaterThan(120);              // never reverts to x=100
+  });
+});
+
+describe("alignEdgesToNeighbors — border to border, no gaps, no overlaps", () => {
+  it("closes a sliver gap onto the neighbour's border", () => {
+    const a = sq(100, 100, 100, 100);        // right edge at x=200
+    const b = sq(205, 100, 100, 100);        // 5px gap
+    const aligned = alignEdgesToNeighbors(b, [a], 12);
+    const minX = Math.min(...aligned.map((p) => p.x));
+    expect(Math.abs(minX - 200)).toBeLessThan(0.5);
+  });
+
+  it("pulls a slight overlap back to the shared border", () => {
+    const a = sq(100, 100, 100, 100);
+    const b = sq(194, 100, 100, 100);        // 6px overlap
+    const aligned = alignEdgesToNeighbors(b, [a], 12);
+    const minX = Math.min(...aligned.map((p) => p.x));
+    expect(Math.abs(minX - 200)).toBeLessThan(0.5);
+  });
+
+  it("leaves far or unrelated edges alone", () => {
+    const a = sq(100, 100, 100, 100);
+    const b = sq(400, 100, 100, 100);        // nowhere near
+    const aligned = alignEdgesToNeighbors(b, [a], 12);
+    expect(aligned.map((p) => Math.round(p.x))).toEqual(b.map((p) => Math.round(p.x)));
   });
 });

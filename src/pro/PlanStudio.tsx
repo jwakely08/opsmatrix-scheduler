@@ -22,8 +22,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  buildGray, snapToWalls, shoelacePx, centroid, overlapRatio, unionPolygons,
-  type Gray, type XY
+  buildGray, snapToWalls, alignEdgesToNeighbors, shoelacePx, centroid,
+  overlapRatio, unionPolygons, type Gray, type XY
 } from "./planSnap";
 import { calibrateFromKnownRooms } from "./planCalibrate";
 import { buildPlanFromRooms, readPlanWithAI, AiPlanError } from "../bridge/aiPlanImport";
@@ -138,11 +138,20 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   }, [surfW, surfH]);
 
   const graySc = gray ? gray.w / W : 1;
-  const snapPx = useCallback((pts: XY[]): XY[] => {
+  const snapPx = useCallback((pts: XY[], tight = false): XY[] => {
     if (!gray) return pts;
     const scaled = pts.map((p) => ({ x: p.x * graySc, y: p.y * graySc }));
-    return snapToWalls(gray, scaled).map((p) => ({ x: p.x / graySc, y: p.y / graySc }));
+    // tight = RE-snapping an established shape: refine to the nearest line
+    // only, never revert to a stronger wall the user deliberately left
+    const snapped = snapToWalls(gray, scaled, tight ? { maxOffset: Math.max(6, 14 * graySc) } : undefined);
+    return snapped.map((p) => ({ x: p.x / graySc, y: p.y / graySc }));
   }, [gray, graySc]);
+
+  /** wall snap + Josh's border rule: seat against neighbouring rooms too —
+   *  no sliver gaps, no overlaps between room borders */
+  const cleanSnap = useCallback((pts: XY[], others: XY[][], tight: boolean): XY[] => {
+    return alignEdgesToNeighbors(snapPx(pts, tight), others, 12);
+  }, [snapPx]);
 
   // ── calibration ────────────────────────────────────────────────────────────
   const calRooms = useMemo(() => shapes.map((s) => ({ id: s.id, visualPts: s.pts })), [shapes]);
@@ -185,8 +194,8 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
       .sort((a, b) => shoelacePx(b.pts) - shoelacePx(a.pts));
     const kept: Shape[] = [];
     for (const c of candidates) {
-      const pts = snapPx(c.pts);
       const blockers = [...existing, ...kept];
+      const pts = cleanSnap(c.pts, blockers.map((s) => s.pts), false);
       if (blockers.some((s) => overlapRatio(s.pts, pts) > OVERLAP_LIMIT)) continue; // dupe — dropped
       kept.push({
         id: uid(), pts,
@@ -196,7 +205,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
       });
     }
     return kept;
-  }, [W, H, snapPx]);
+  }, [W, H, cleanSnap]);
 
   // the automatic first drawing, once the wall grid is ready to snap against
   useEffect(() => {
@@ -268,7 +277,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   // ── tracing ────────────────────────────────────────────────────────────────
   const finishTrace = useCallback(() => {
     if (tracePts.length < 3) return;
-    const snapped = snapPx(tracePts);
+    const snapped = cleanSnap(tracePts, shapes.map((s) => s.pts), false);
     const id = uid();
     mutate((prev) => [...prev, {
       id, pts: snapped, roomNumber: "", roomName: "", roomType: "",
@@ -279,7 +288,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     setSel(new Set([id]));
     setTool("select");
     setErr("");
-  }, [tracePts, snapPx, mutate]);
+  }, [tracePts, shapes, cleanSnap, mutate]);
 
   // ── keyboard ───────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -446,7 +455,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   const buildReading = () => ({
     buildingName: "", floorName: "",
     rooms: shapes.map((s) => ({
-      name: s.roomName.trim() || s.roomNumber.trim() || "Room",
+      name: s.roomName.trim(),
       roomNumber: s.roomNumber.trim(),
       squareFeet: sqftOf(s) ?? 0,
       roomType: s.roomType,
@@ -477,12 +486,8 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   }
 
   function ship() {
-    const nameless = shapes.filter((s) => !s.roomNumber.trim() && !s.roomName.trim());
-    if (nameless.length) {
-      setSel(new Set([nameless[0].id]));
-      setErr(`${nameless.length} room${nameless.length === 1 ? " still needs" : "s still need"} a number or a name — it's selected, fill it in.`);
-      return;
-    }
+    // blanks ship fine (Josh: validation happens in Max Space anyway) — the
+    // only hard requirement was the calibration, and measure-all enforced it
     const result = buildPlanFromRooms(buildReading(), { building, floor, aspect: W / H });
     const shapesData: StudioShapeData[] = JSON.parse(JSON.stringify(shapes));
     const d: ClassicData = loadClassic();
@@ -632,9 +637,15 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
               <ToolBtn id="reshape" label="⬒ Reshape" title="Pins on the selected room: pull edges straight, drag pins, double-click an edge to add a pin, a pin to remove it" />
               <ToolBtn id="merge" label="⧉ Merge" title="Tap two touching rooms — they become one" />
               <i className="tb-sep" />
+              <button className="pbtn small" disabled={!shapes.length} title="Select every room"
+                onClick={() => { setSel(new Set(shapes.map((s) => s.id))); setTool("select"); }}>
+                ▣ All
+              </button>
               <button className="pbtn small" disabled={!selShapes.length}
-                title="Seat the selected room(s) on the plan's walls"
-                onClick={() => mutate((prev) => prev.map((s) => sel.has(s.id) ? { ...s, pts: snapPx(s.pts) } : s))}>
+                title="Seat the selected room(s): nearest wall lines + flush against neighbouring rooms (no gaps, no overlaps)"
+                onClick={() => mutate((prev) => prev.map((s) => sel.has(s.id)
+                  ? { ...s, pts: cleanSnap(s.pts, prev.filter((o) => o.id !== s.id).map((o) => o.pts), true) }
+                  : s))}>
                 ⌖ Snap
               </button>
               <button className="pbtn small danger" disabled={!selShapes.length}
@@ -783,9 +794,10 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                     </label>
                     <label className="pfield grow">Department
                       <input list="studio-depts" value={one.department}
-                        placeholder="e.g. Oncology (7 East)"
+                        placeholder="pick one, or type a NEW department"
                         onChange={(e) => patchShape(one.id, { department: e.target.value })} />
                       <datalist id="studio-depts">{deptOptions.map((d) => <option key={d} value={d} />)}</datalist>
+                      <small>Typing a name that doesn't exist yet creates the department when you ship.</small>
                     </label>
                   </div>
                   <p className="pnote">Measured: <b>{sqftOf(one) ?? "—"} ft²</b>{(one.knownSqFt ?? 0) > 0 ? " (⚓ your calibration)" : ""}</p>
@@ -832,7 +844,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
               ? "When the drawing matches the plan, finish editing and calibrate."
               : phase === "calibrate"
                 ? "Every room's square footage will be measured from your calibration rooms."
-                : `Ships into ${[account, building, floor].filter(Boolean).join(" → ") || "your account"} → department → room.${existingSet ? " Same rooms update — schedules stay intact." : ""}`}
+                : `Ships into ${[account, building, floor].filter(Boolean).join(" → ") || "your account"} → department → room. Blanks are fine — you'll validate rooms in Max Space.${existingSet ? " Same rooms update — schedules stay intact." : ""}`}
           </small>
         </aside>
       </div>

@@ -263,6 +263,15 @@ Order flipped and the editor became a real editing tool:
 - **Phases now: EDIT → ✓ Finish editing → CALIBRATE (select up to 3 rooms, each gets a "Calibration measurement" field, counter shows n of 3, no square footage shown anywhere before this) → 📏 MEASURE ALL ROOMS (locks the matrix rendering, fills every room's ft²) → DETAILS (unchanged: number/name/Scope type/floor type/fixtures/department) → 🚀 Ship.**
 - Verified: 242 vitest tests green (stretch/overlap/union added), 19-check Playwright e2e — Max-first entry incl. the keyless notice, toolbar present, no ft² in edit phase, edge pull slides straight (-40px X, Y untouched) with undo AND redo round trip, pin added by double-click, merge of two wall-separated rooms → one shape at combined area then undone, calibrate counter + measure-all gate, ship with hierarchy + calibrated areas + saved set.
 
+## 12l. CALIBRATION EDITOR POLISH (2026-08-31, Josh's nitpick pass — "so close to perfect")
+
+- **▣ All** on the toolbar selects every room (the rail keeps "Select all of Max's boxes" for the AI subset).
+- **Re-snap no longer reverts**: `snapToWalls` gained `maxOffset` — the toolbar's ⌖ Snap on an established shape searches only ±14px (a refinement), so a reshaped or merged room can't get yanked back to the wall the user deliberately left. Fresh traces and AI arrivals keep the full search reach. Tested with a two-wall synthetic (tight snap seats on the near wall, never reverts).
+- **Border-to-border rule**: new `alignEdgesToNeighbors` (planSnap, tested) runs after every snap — an edge running almost along a neighbouring room's edge (sliver gap OR slight overlap, ±12px) moves onto that neighbour's line exactly. Applied on toolbar ⌖ Snap, trace finish, and AI ingestion, so shared walls are actually shared and nothing draws over shell spaces.
+- **Departments are creatable in the details phase** — the field says so ("pick one, or type a NEW department"); typing a new name creates it on ship.
+- **Blanks ship**: the name-or-number gate on 🚀 Ship is gone — the only hard requirement is the calibration (already enforced by 📏 Measure all rooms). Blank rooms land in Max Space flagged for validation, exactly the intended workflow; anything Max READ off the plan (numbers/names) still arrives preloaded.
+- Verified: 246 vitest tests green, 6-check Playwright pass (Select All, border-to-border after a deliberate 10px drag, no far-wall reversion, new-department creation, blank room shipped).
+
 ## 13. BUILD & DEPLOY WORKFLOW
 
 ```
