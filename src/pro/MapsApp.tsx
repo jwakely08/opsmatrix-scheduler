@@ -8,7 +8,10 @@ import {
   type ClassicData, type ClassicSpace, type ClassicSchedule, type NonSpaceTask
 } from "./classicStore";
 import { navVisit, navBack, hubHashFor } from "./nav";
-import { MapCanvas } from "./MapCanvas";
+import {
+  MapCanvas, BuildingPicker, BuildingBadge, planBuilding, planBuildings,
+  loadMapBuilding, saveMapBuilding
+} from "./MapCanvas";
 import {
   SpaceExplorerView, RoomListView, RoomEditor, notesForSpace, type SpacesView
 } from "./SpacesApp";
@@ -21,6 +24,8 @@ import { PrintSchedule } from "./PrintSchedule";
 import { AiPlanImport } from "./AiPlanImport";
 import { WorkloadApp, ImportResult } from "./WorkloadApp";
 import { FloorCareApp, HoursBar } from "./FloorCareApp";
+import { SanitationApp } from "./SanitationApp";
+import { PolicingApp } from "./PolicingApp";
 import { buildScheduleDoc, parseClock, type SchedBreak } from "./scheduleDoc";
 import { importScan } from "../bridge/fusionEntry";
 import {
@@ -41,7 +46,7 @@ const RED = "#dc2626";
 
 function uid(p: string) { return p + "-" + Math.random().toString(36).slice(2, 9); }
 
-type Tab = "map" | "rooms" | "schedules" | "spaces" | "scope" | "workload" | "floorcare" | "exporting";
+type Tab = "map" | "rooms" | "schedules" | "spaces" | "scope" | "workload" | "floorcare" | "exporting" | "sanitation" | "policing";
 
 /**
  * The hash is the hub's single source of truth for WHICH view is on screen:
@@ -58,6 +63,8 @@ function parseHash(h: string): { tab: Tab; spacesView: SpacesView; autoAdd: bool
   if (h === "#workload") return { tab: "workload", spacesView: "explorer", autoAdd: false };
   if (h === "#exporting") return { tab: "exporting", spacesView: "explorer", autoAdd: false };
   if (h.indexOf("#floorcare") === 0) return { tab: "floorcare", spacesView: "explorer", autoAdd: false };
+  if (h.indexOf("#sanitation") === 0) return { tab: "sanitation", spacesView: "explorer", autoAdd: false };
+  if (h.indexOf("#policing") === 0) return { tab: "policing", spacesView: "explorer", autoAdd: false };
   if (h.indexOf("#spaces") === 0) {
     const m = /view=(explorer|list|map|studio)/.exec(h);
     return {
@@ -136,7 +143,23 @@ export function MapsApp() {
   const [printId, setPrintId] = useState<string | null>(null);
 
   const plans = data.plans;
-  const plan = plans.find((p) => p.id === planId) ?? plans[0] ?? null;
+  // building first (Josh, 2026-08-31): with plans in several buildings, the
+  // map won't show a floor until the building is chosen — and the choice is
+  // remembered across pages so every map opens where the manager works
+  const buildings = useMemo(() => planBuildings(plans), [plans]);
+  const [mapBuilding, setMapBuilding] = useState<string | null>(() => loadMapBuilding());
+  const chooseBuilding = useCallback((b: string | null) => {
+    setMapBuilding(b);
+    saveMapBuilding(b);
+    setPlanId(null);
+    setRoomSel(null);
+  }, []);
+  const activeBuilding = buildings.length <= 1
+    ? (buildings[0] ?? "")
+    : (mapBuilding !== null && buildings.includes(mapBuilding) ? mapBuilding : null);
+  const needsBuilding = buildings.length > 1 && activeBuilding === null;
+  const buildingPlans = activeBuilding === null ? [] : plans.filter((p) => planBuilding(p) === activeBuilding);
+  const plan = buildingPlans.find((p) => p.id === planId) ?? buildingPlans[0] ?? null;
   const spaces = useMemo(
     () => (data.v7.spaces ?? []).filter((s) => !plan || s.visualPlanId === plan.id || !s.visualPlanId),
     [data.v7.spaces, plan]
@@ -237,7 +260,11 @@ export function MapsApp() {
   const onMapView = tab === "map" || (tab === "spaces" && spacesView === "map");
 
   return (
-    <div className="pro-shell">
+    <div className="pro-shell withnav">
+      {/* the always-there left menu (Josh, 2026-08-31): every Max page one
+          click away, on every screen — classic's sidebar, mirrored here */}
+      <SideNav tab={tab} go={go} />
+      <div className="pro-shellmain">
       <header className="pro-head">
         {/* THE back button: same blue bubble on every screen, true history —
             it returns to the exact page the user came from (nav.ts) */}
@@ -250,6 +277,10 @@ export function MapsApp() {
           <h1>Workload <span>Intelligence</span></h1>
         ) : tab === "floorcare" ? (
           <h1>Max Floor <span>Care</span></h1>
+        ) : tab === "sanitation" ? (
+          <h1>Max <span>Sanitation</span></h1>
+        ) : tab === "policing" ? (
+          <h1>Max <span>Policing</span></h1>
         ) : tab === "spaces" ? (
           <>
             <h1>Max <span>Space</span></h1>
@@ -285,8 +316,15 @@ export function MapsApp() {
         )}
       </header>
 
-      {onMapView && (
+      {onMapView && !needsBuilding && (
         <div className="pro-filters">
+          {buildings.length > 1 && (
+            <label className="psel"><span>Building</span>
+              <select value={activeBuilding ?? ""} onChange={(e) => chooseBuilding(e.target.value)}>
+                {buildings.map((b) => <option key={b || "~none"} value={b}>{b || "No building set"}</option>)}
+              </select>
+            </label>
+          )}
           {tab === "map" && <>
             <Sel label="Schedule" v={filters.schedule ?? ""} on={(v) => setFilters({ ...filters, schedule: v })}
               opts={schedules.map((s) => [s.id, `${s.num ?? ""} ${s.name ?? ""}`.trim()])} />
@@ -313,10 +351,15 @@ export function MapsApp() {
       )}
 
       <div className="pro-main">
+        {onMapView && needsBuilding && (
+          <BuildingPicker plans={plans} spaces={data.v7.spaces ?? []} onPick={chooseBuilding} />
+        )}
         {onMapView && plan && (
           <MapCanvas
             key={tab + spacesView + (plan?.id ?? "")}
-            plan={plan} plans={plans} onPlan={setPlanId}
+            plan={plan} plans={buildingPlans} onPlan={setPlanId}
+            badge={<BuildingBadge building={activeBuilding ?? ""}
+              onChange={buildings.length > 1 ? () => chooseBuilding(null) : undefined} />}
             spaces={spaces} shapes={shapes}
             mode={tab === "spaces" ? "spaces" : "map"}
             fillFor={(sp) => {
@@ -400,7 +443,7 @@ export function MapsApp() {
           />
         )}
 
-        {onMapView && !plan && (
+        {onMapView && !needsBuilding && !plan && (
           <div className="pro-empty">
             <h2>No floor plan has been added{spaces.length ? " for these rooms" : " yet"}</h2>
             {spaces.length > 0 ? (
@@ -481,6 +524,15 @@ export function MapsApp() {
         {tab === "floorcare" && (
           <FloorCareApp data={data} rules={rules} commit={commit} />
         )}
+
+        {tab === "sanitation" && (
+          <SanitationApp data={data} rules={rules} commit={commit} />
+        )}
+
+        {tab === "policing" && (
+          <PolicingApp data={data} rules={rules} commit={commit} />
+        )}
+      </div>
       </div>
 
       {report && (
@@ -1856,5 +1908,37 @@ function ReportModal({ data, rules, spaces, schedules, onClose, onJump }: {
         <p className="pnote">{schedules.length} schedules · {spaces.length} rooms checked</p>
       </div>
     </div>
+  );
+}
+
+// ── the persistent left menu (Josh, 2026-08-31) ─────────────────────────────
+// Every Max destination, on every hub screen — classic.html keeps its own
+// sidebar, and this rail is its twin, so navigation never dead-ends.
+
+function SideNav({ tab, go }: { tab: Tab; go: (token: string) => void }) {
+  const items: { ico: string; label: string; token: string; on?: boolean }[] = [
+    { ico: "🏠", label: "Dashboard", token: "classic:Dashboard" },
+    { ico: "🧱", label: "Max Space", token: "hub:spaces/explorer", on: tab === "spaces" },
+    { ico: "🗓", label: "Max Schedules", token: "hub:map", on: tab === "map" || tab === "rooms" || tab === "schedules" },
+    { ico: "🫧", label: "Max Floor Care", token: "hub:floorcare", on: tab === "floorcare" },
+    { ico: "🚮", label: "Max Sanitation", token: "hub:sanitation", on: tab === "sanitation" },
+    { ico: "🛎", label: "Max Policing", token: "hub:policing", on: tab === "policing" },
+    { ico: "📅", label: "Max Calendar", token: "classic:Max Calendar" },
+    { ico: "📝", label: "Max Notes", token: "classic:Max Notes" },
+    { ico: "👥", label: "Max Team", token: "classic:Max Team" },
+    { ico: "📈", label: "Workload Intelligence", token: "hub:workload", on: tab === "workload" },
+    { ico: "🧭", label: "Scope", token: "hub:scope", on: tab === "scope" },
+    { ico: "📤", label: "Exporting", token: "hub:exporting", on: tab === "exporting" },
+    { ico: "⚙️", label: "Admin Settings", token: "classic:Admin Settings" }
+  ];
+  return (
+    <aside className="pro-sidenav">
+      <div className="pro-sidebrand">Ops<span>Matrix</span></div>
+      {items.map((it) => (
+        <button key={it.label} className={it.on ? "on" : ""} onClick={() => go(it.token)}>
+          <i className="navico">{it.ico}</i><span className="navlbl">{it.label}</span>
+        </button>
+      ))}
+    </aside>
   );
 }

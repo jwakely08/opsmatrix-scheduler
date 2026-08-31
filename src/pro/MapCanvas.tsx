@@ -1,18 +1,94 @@
 // The pan/zoom floor-plan canvas — shared by Max Schedules' Map, Max Space's
-// Map View, and Max Floor Care's map picker. Pinch, wheel and drag to move;
-// tap slop is bigger for touch so real thumbs can select rooms.
+// Map View, and the Floor Care / Sanitation / Policing map pickers. Pinch,
+// wheel and drag to move; tap slop is bigger for touch so real thumbs can
+// select rooms.
 import React, { useEffect, useRef, useState } from "react";
-import { boundsOf, pointIn, type ClassicData, type ClassicSpace } from "./classicStore";
+import { boundsOf, pointIn, type ClassicData, type ClassicPlan, type ClassicSpace } from "./classicStore";
 
 const WALL_STROKE = 13;
 
+// ── building-first hierarchy (Josh, 2026-08-31): every map view selects the
+// BUILDING first, then that building's floor plans — and the chosen building
+// is remembered across pages so the title in the corner always tells the
+// manager whose floors they're editing. ─────────────────────────────────────
+
+export const MAP_BUILDING_KEY = "om_map_building";
+
+export function planBuilding(p: { building?: unknown }): string {
+  return String(p.building ?? "").trim();
+}
+
+/** distinct buildings across the plans, in first-seen order ("" = unfiled) */
+export function planBuildings(plans: { building?: unknown }[]): string[] {
+  return [...new Set(plans.map(planBuilding))];
+}
+
+export function loadMapBuilding(): string | null {
+  try { return sessionStorage.getItem(MAP_BUILDING_KEY); } catch { return null; }
+}
+
+export function saveMapBuilding(b: string | null) {
+  try {
+    if (b === null) sessionStorage.removeItem(MAP_BUILDING_KEY);
+    else sessionStorage.setItem(MAP_BUILDING_KEY, b);
+  } catch { /* storage off */ }
+}
+
+/** the full-width "pick a building" step that fronts every map view */
+export function BuildingPicker({ plans, spaces, onPick, note }: {
+  plans: ClassicPlan[];
+  spaces: ClassicSpace[];
+  onPick: (building: string) => void;
+  note?: string;
+}) {
+  const buildings = planBuildings(plans);
+  return (
+    <div className="pro-empty buildpick">
+      <h2>Which building?</h2>
+      <p>{note ?? "Floor plans are filed by building. Pick one — then choose the floor."}</p>
+      <div className="bcards">
+        {buildings.map((b) => {
+          const bPlans = plans.filter((p) => planBuilding(p) === b);
+          const planIds = new Set(bPlans.map((p) => p.id));
+          const roomCount = spaces.filter((sp) => planIds.has(String(sp.visualPlanId ?? ""))).length;
+          return (
+            <button key={b || "~none"} className="bcard" onClick={() => onPick(b)}>
+              <b>🏢 {b || "No building set"}</b>
+              <span>{bPlans.length} floor plan{bPlans.length === 1 ? "" : "s"} · {roomCount} rooms drawn</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** the always-there corner badge: which building these floors belong to */
+export function BuildingBadge({ building, onChange }: {
+  building: string;
+  onChange?: () => void;
+}) {
+  return (
+    <div className="mapbuilding">
+      <b>🏢 {building || "No building set"}</b>
+      {onChange && <button className="plink" onClick={onChange}>change</button>}
+    </div>
+  );
+}
+
 // ── the map canvas (shared by Map + Spaces tabs, and Floor Care's builder) ──
 
-export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, flagFor, selectedId, onRoom, legend, mode }: {
+export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker }: {
   plan: NonNullable<ClassicData["plans"][0]>;
   plans: ClassicData["plans"];
   onPlan: (id: string) => void;
   spaces: ClassicSpace[];
+  /** the persistent building title, top-right (BuildingBadge) */
+  badge?: React.ReactNode;
+  /** a tap that hit NO room, in plan coordinates (Max Sanitation's dock pin) */
+  onCanvas?: (pt: { x: number; y: number }) => void;
+  /** a dropped pin on the plan (Max Sanitation's sanitation dock) */
+  marker?: { x: number; y: number; label: string } | null;
   shapes: Map<string, { pts: { x: number; y: number }[]; path: string; c: { x: number; y: number } }>;
   fillFor: (sp: ClassicSpace) => string;
   /** second schedule's color → the room renders two-tone striped */
@@ -93,6 +169,10 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
       const b = boundsOf(sh.pts);
       const area = (b.maxX - b.minX) * (b.maxY - b.minY);
       if (area < hitArea) { hit = sp; hitArea = area; }
+    }
+    if (!hit && onCanvas && x >= 0 && y >= 0 && x <= plan.w && y <= plan.h) {
+      onCanvas({ x, y });
+      return;
     }
     onRoom(hit);
   }
@@ -179,6 +259,13 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
           })}
           <image href={plan.img} width={plan.w} height={plan.h}
             style={{ mixBlendMode: "multiply", pointerEvents: "none" }} />
+          {marker && (
+            <g className="mapmarker" transform={`translate(${marker.x} ${marker.y}) scale(${1 / Math.max(0.4, view.k)})`}>
+              <circle r={13} />
+              <text y={5}>📍</text>
+              <text className="mklabel" y={30}>{marker.label}</text>
+            </g>
+          )}
           {spaces.map((sp) => {
             const sh = shapes.get(sp.id);
             if (!sh) return null;
@@ -205,6 +292,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
           ))}
         </div>
       )}
+      {badge}
       {legend}
       {/* touch-friendly zoom controls — pinch works too, but thumbs deserve buttons */}
       <div className="pro-zoomctl">

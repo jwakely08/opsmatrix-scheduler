@@ -22,7 +22,8 @@ export const WORKSPACE_KEYS = [
   "opsmatrix_fusion_nonspace",
   "opsmatrix_fusion_aliases",
   "opsmatrix_fusion_floorcare",
-  "opsmatrix_fusion_planstudio"
+  "opsmatrix_fusion_planstudio",
+  "opsmatrix_fusion_routes"
 ] as const;
 
 export interface WorkspaceSnapshot {

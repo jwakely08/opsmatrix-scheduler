@@ -25,7 +25,10 @@ import {
   rectifyForDisplay, pathFrom, centroidOf,
   type ClassicData, type ClassicSpace
 } from "./classicStore";
-import { MapCanvas } from "./MapCanvas";
+import {
+  MapCanvas, BuildingPicker, BuildingBadge, planBuilding, planBuildings,
+  loadMapBuilding, saveMapBuilding
+} from "./MapCanvas";
 
 const fmt = (n: number) => n.toLocaleString();
 const uid = (p: string) => p + "-" + Math.random().toString(36).slice(2, 9);
@@ -330,10 +333,24 @@ function Builder({ data, rules, commit, fc, setFc, onCancel, onConfirm, otherSto
   const timing = fcTiming(rules, spaces, fc);
 
   // ── map picking (Josh, 2026-08-28): the same map as Max Schedules, but only
-  // rooms with floor-care work are selectable — everything else is greyed out
+  // rooms with floor-care work are selectable — everything else is greyed out.
+  // Building first (2026-08-31): several buildings → pick one before floors.
   const plans = data.plans ?? [];
-  const [planId, setPlanId] = useState<string | null>(plans[0]?.id ?? null);
-  const plan = plans.find((p) => p.id === planId) ?? plans[0] ?? null;
+  const buildings = planBuildings(plans);
+  const [fcBuilding, setFcBuilding] = useState<string | null>(() => loadMapBuilding());
+  const activeBuilding = buildings.length <= 1
+    ? (buildings[0] ?? "")
+    : (fcBuilding !== null && buildings.includes(fcBuilding) ? fcBuilding : null);
+  const needsBuilding = buildings.length > 1 && activeBuilding === null;
+  const bPlans = activeBuilding === null ? [] : plans.filter((p) => planBuilding(p) === activeBuilding);
+  const [planId, setPlanId] = useState<string | null>(null);
+  const plan = bPlans.find((p) => p.id === planId) ?? bPlans[0] ?? null;
+  const chooseBuilding = (b: string | null) => {
+    setFcBuilding(b);
+    saveMapBuilding(b);
+    setPlanId(null);
+    setPickRoom(null);
+  };
   const [pickMode, setPickMode] = useState<"map" | "list">(() =>
     plans.length && spaces.some((sp) => fcEligible(rules, sp) && (sp.visualPts?.length ?? 0) >= 3) ? "map" : "list");
   const [pickRoom, setPickRoom] = useState<ClassicSpace | null>(null);
@@ -497,10 +514,17 @@ function Builder({ data, rules, commit, fc, setFc, onCancel, onConfirm, otherSto
           )}
         </div>
 
+        {pickMode === "map" && needsBuilding && (
+          <BuildingPicker plans={plans} spaces={spaces}
+            onPick={(b) => chooseBuilding(b)}
+            note="Pick the building you're scheduling floor care in — then its floors." />
+        )}
         {pickMode === "map" && plan && (
           <div className="fc-mapwrap">
             <MapCanvas
-              plan={plan} plans={plans} onPlan={setPlanId}
+              plan={plan} plans={bPlans} onPlan={setPlanId}
+              badge={<BuildingBadge building={activeBuilding ?? ""}
+                onChange={buildings.length > 1 ? () => chooseBuilding(null) : undefined} />}
               spaces={mapSpaces} shapes={shapes}
               mode="floorcare"
               fillFor={(sp) => {

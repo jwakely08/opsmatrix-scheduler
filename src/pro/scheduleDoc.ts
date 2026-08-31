@@ -219,13 +219,22 @@ export function buildScheduleDoc(
     .map((id) => spaces.find((s) => s.id === id))
     .filter(Boolean) as ClassicSpace[];
 
+  // Sanitation/Policing routes aren't cleaning coverage — their per-stop
+  // minutes ride on the schedule itself (routeStopMinutes), and the printed
+  // running order uses them directly
+  const routeMinutes = (sched.routeOnly
+    ? (sched.routeStopMinutes as Record<string, number> | undefined)
+    : undefined) ?? null;
+
   for (const sp of ordered) {
     const cov = coverageForSpace(data, sp.id).find((c) => c.scheduleId === sched.id);
-    if (!cov) continue;
+    if (!cov && !routeMinutes) continue;
 
     takeBreaksDue();
 
-    const minutes = coverageMinutes(rules, sp, cov);
+    const minutes = routeMinutes
+      ? Math.round(Number(routeMinutes[sp.id]) || 0)
+      : coverageMinutes(rules, sp, cov!);
     rows.push({
       spaceId: sp.id,
       order: rows.length + 1,
@@ -233,7 +242,7 @@ export function buildScheduleDoc(
       roomNumber: String(sp.roomNumber ?? ""),
       roomName: String(sp.roomName ?? sp.roomNumber ?? ""),
       roomType: String(sp.roomType ?? ""),
-      tasks: coverageTaskLabels(rules, cov),
+      tasks: cov ? coverageTaskLabels(rules, cov) : ["Route stop"],
       priority: spacePriority(sp),
       minutes
     });

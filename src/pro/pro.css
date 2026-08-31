@@ -186,7 +186,8 @@ body {
 .lgrow.on { background: rgba(13,148,136,.25); outline: 1px solid #0d9488; }
 
 .floorstack {
-  position: absolute; right: 14px; top: 14px; display: flex; flex-direction: column-reverse; gap: 0;
+  /* sits under the building badge (top-right) */
+  position: absolute; right: 14px; top: 54px; display: flex; flex-direction: column-reverse; gap: 0;
 }
 .floorcard {
   width: 120px; height: 44px; margin-top: -14px;
@@ -880,3 +881,42 @@ h4.scopesub { font-size: 12.5px; color: #e2e8f0; margin: 18px 0 4px; }
 .fc-pickgroup { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
 .fc-picklabel { font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: #64748b; }
 .fc-pickrow { display: flex; align-items: center; gap: 8px; }
+
+/* ── the persistent left menu + shell-with-nav layout ── */
+.pro-shell.withnav { flex-direction: row; }
+.pro-shellmain { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100vh; }
+.pro-sidenav {
+  width: 186px; flex: none; background: #0b1322; border-right: 1px solid rgba(148,163,184,.12);
+  display: flex; flex-direction: column; gap: 2px; padding: 12px 8px; overflow-y: auto;
+}
+.pro-sidebrand { font-weight: 800; font-size: 14px; letter-spacing: .02em; padding: 2px 10px 12px; color: #e2e8f0; }
+.pro-sidebrand span { color: #2dd4bf; }
+.pro-sidenav button {
+  display: flex; align-items: center; gap: 9px; background: none; border: none; color: #94a3b8;
+  padding: 9px 10px; border-radius: 9px; font-size: 12.5px; cursor: pointer; text-align: left; white-space: nowrap;
+}
+.pro-sidenav button:hover { background: rgba(148,163,184,.08); color: #e2e8f0; }
+.pro-sidenav button.on { background: rgba(20,184,166,.14); color: #2dd4bf; }
+.pro-sidenav .navico { font-style: normal; width: 18px; text-align: center; flex: none; }
+@media (max-width: 900px) {
+  .pro-sidenav { width: 54px; padding: 10px 6px; }
+  .pro-sidenav .navlbl, .pro-sidebrand { display: none; }
+  .pro-sidenav button { justify-content: center; padding: 10px 6px; }
+}
+
+/* building-first map hierarchy */
+.buildpick { text-align: center; }
+.bcards { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 14px; }
+.bcard {
+  background: #0f172a; border: 1px solid rgba(148,163,184,.2); border-radius: 13px;
+  padding: 18px 22px; min-width: 220px; cursor: pointer; text-align: left;
+  display: flex; flex-direction: column; gap: 6px; color: #e2e8f0; transition: all .15s ease;
+}
+.bcard:hover { border-color: #2dd4bf; transform: translateY(-1px); }
+.bcard b { font-size: 14px; }
+.bcard span { color: #94a3b8; font-size: 12px; }
+.mapbuilding {
+  position: absolute; top: 10px; right: 12px; z-index: 5;
+  background: rgba(11,19,34,.9); border: 1px solid rgba(148,163,184,.25); border-radius: 99px;
+  padding: 6px 14px; font-size: 12.5px; color: #e2e8f0; display: flex; align-items: center; gap: 10px;
+}

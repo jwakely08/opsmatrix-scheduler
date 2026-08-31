@@ -87,6 +87,9 @@ export interface ClassicPlan {
   img: string;
   w: number;
   h: number;
+  /** the plan's scale: pixels per foot (set when the plan was built to scale).
+   *  Absent = unscaled, so on-plan distances can't be turned into feet. */
+  ratio?: number;
   rooms?: { spaceId: string; pts: { x: number; y: number }[] }[];
   [k: string]: unknown;
 }
@@ -285,6 +288,9 @@ export function coverageForSpace(data: ClassicData, spaceId: string): Coverage[]
   const out: Coverage[] = [];
   for (const sched of data.v7.schedules ?? []) {
     if (sched.projectNoteId) continue;
+    // a Sanitation/Policing route VISITS rooms — it never covers their
+    // cleaning tasks, so it stays out of coverage entirely
+    if (sched.routeOnly) continue;
     if (!(sched.spaceOrder ?? []).includes(spaceId)) continue;
     const { primary, tasks } = fromClassicRoomTasks(sched.roomTasks?.[spaceId]);
     out.push({ scheduleId: sched.id, primary, tasks });
@@ -370,8 +376,11 @@ export function coverageMinutes(rules: Rules, space: ClassicSpace, cov: Coverage
 
 export function scheduleMinutes(data: ClassicData, rules: Rules, sched: ClassicSchedule): number {
   // a schedule shipped from Max Floor Care carries its equipment-priced
-  // total (a rider scrubs a corridor far faster than the generic task rate)
+  // total (a rider scrubs a corridor far faster than the generic task rate);
+  // Sanitation/Policing routes carry their distance/pass-priced total the
+  // same way
   if (Number(sched.floorCareMinutes) > 0) return Number(sched.floorCareMinutes);
+  if (Number(sched.fixedMinutes) > 0) return Number(sched.fixedMinutes);
   const spaces = data.v7.spaces ?? [];
   let total = 0;
   for (const id of sched.spaceOrder ?? []) {
