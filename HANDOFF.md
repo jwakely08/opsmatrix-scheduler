@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -51,6 +51,8 @@ OpsMatrix is Josh Wakely's hospital EVS (Environmental Services) operations plat
 | `opsmatrix_fusion_nonspace` | hub | `[{id, name, hours, scheduleId, roomIds[]}]` non-space task instances |
 | `opsmatrix_fusion_aliases` | importer + WI | approved source-name → room/floor type mappings (`{roomTypes:{}, floorTypes:{}}`) |
 | `opsmatrix_fusion_floorcare` | Max Floor Care | `{schedules:[FcSchedule], projects:[FcProject]}` (§12c) |
+| `opsmatrix_fusion_planstudio` | Calibration Editor | `[StudioSet]` — the editable calibration sets (§12j) |
+| `opsmatrix_fusion_routes` | Max Sanitation + Max Policing | `{sanitation:[SanRoute], policing:[PoliceRoute]}` (§12m) |
 | `opsmatrix_max_api_key` | fusion (both pages) | dedicated API-key backup slot — see below |
 | `opsmatrix_sched_v1` | old React app | its own AppState (irrelevant to Classic) |
 
@@ -272,6 +274,68 @@ Order flipped and the editor became a real editing tool:
 - **Blanks ship**: the name-or-number gate on 🚀 Ship is gone — the only hard requirement is the calibration (already enforced by 📏 Measure all rooms). Blank rooms land in Max Space flagged for validation, exactly the intended workflow; anything Max READ off the plan (numbers/names) still arrives preloaded.
 - Verified: 246 vitest tests green, 6-check Playwright pass (Select All, border-to-border after a deliberate 10px drag, no far-wall reversion, new-department creation, blank room shipped).
 
+## 12m. THE ROUTE ENGINES + NAVIGATION + SCOPE REWORK (2026-08-31 night, Josh's batch)
+
+**MAX SANITATION** (`src/pro/SanitationApp.tsx`, logic in `src/pro/routes.ts` — pure and tested).
+A soiled-utility collection route, built on the map like Max Floor Care but with its own rules:
+only soiled utility / soiled hold rooms are selectable (`isSoiledUtility` — matches the room name
+or type), and the manager first drops a **sanitation dock pin** anywhere on the plan. Clicking rooms
+records the running order; `sanTiming` prices every leg by REAL distance — centroid-to-centroid on
+the plan, converted through the plan's own `ratio` (px per foot) at `SAN_FT_PER_MIN = 250` (3 mph
+walking, derated for pushing a cart) — plus `SAN_PICKUP_MINUTES = 3` per room and
+`SAN_UNLOAD_MINUTES = 4` per dock unload. The trip home is always included; **⏎ Return to dock**
+inserts a mid-route unload (cart full → dump → carry on). An unscaled plan says so plainly instead
+of inventing distances. Shipping writes a real schedule (`routeOnly`, `fixedMinutes`,
+`routeStopMinutes`) that prints and reports like any other, but **never counts as cleaning
+coverage** — visiting a room is not cleaning it.
+
+**MAX POLICING** (`src/pro/PolicingApp.tsx`) — the day-porter engine, built as the shell Josh asked
+for. Only lobbies, restrooms, waiting rooms and corridors are selectable (`POLICE_TYPES`), only
+non-floor-care tasks are offered, and repeat passes accumulate. Ships the same way. **Still to
+spec:** the frequency model (how many passes a day), cart stocking, coverage windows.
+
+**Navigation.** A persistent left menu (`SideNav` in MapsApp) carries every Max destination on every
+hub page, mirroring classic's sidebar; classic's own sidebar gained Sanitation and Policing under
+Floor Care. **Building first** on every map (`BuildingPicker` / `BuildingBadge` in MapCanvas): with
+plans in more than one building nothing draws until a building is chosen, the floor stack then lists
+only that building's plans, the choice is remembered across pages (`om_map_building`, sessionStorage),
+and the building name sits in the map's top-right corner at all times.
+
+**Scope.** No more sponge icons — cleaning tasks read green, floor-care blue (`.tname`, `.ptask.fc`).
+Room types show their automatic tasks as individually deletable chips with a ＋ picker. The general
+formula gained **mopping / vacuuming inclusion toggles**, and standalone `Mopping` / `Vacuuming`
+space tasks exist for when they're switched off. **General Clean is visible under Space tasks** and
+deletable past a loud warning (`general.formulaOff` — room times then count only explicit tasks and
+type minutes, with a restore link). Built-ins deleted in Scope now STAY deleted (`deletedBuiltIns`
+tombstones in saveRules) instead of resurrecting on the next load.
+
+**Non-space tasks, reworked.** Priced **per occurrence** (`minutes`) plus attached **qualifiers** —
+a new Scope section with **Travel time** built in at 5 minutes. (No published industry standard
+breaks travel out: terminal-clean figures of 35–45 min fold it in, so the default is an honest,
+editable starting point and says so on screen.) Schedules add a non-space task **with a count** in
+Max Schedules — 5 discharges = 5 × (40 + 5) = 225 minutes — and the count is editable on the card.
+Sanitation Route left the non-space list entirely; the engine above replaces it.
+
+**Max Floor Care.** Opens straight into the builder (no "Build a schedule" landing). Clicking a room
+opens a card with **Needs** on top and **Does not need** below (`fcNotNeeded`, saved on the room), and
+**dust mopping ↔ machine sweeping are mutually exclusive** (`FC_EXCLUSIVE`) — the same pass, one with
+a machine and one without, so booking either removes the other and says why.
+
+**Plan uploads.** Both answers to the calibrate-or-read question now land in the Calibration Editor.
+A file that STATES its sizes arrives fully preloaded — numbers, names, Scope-mapped room types and
+the stated square footage as each room's calibration measurement (`sizesFromFile` lifts the 3-anchor
+ceiling and rewords the step) — and approval happens on 🚀 Ship to Max Space. The old direct-write
+import path is deleted: there is exactly one way rooms enter Max Space from a plan.
+
+**Migrations.** Two new synced stores meant two migrations — `0003_planstudio_store.sql` (the fix for
+the staging sync error) and `0004_routes_store.sql`. `workspaceSchema.test.ts` parses the migration
+files and fails CI if `WORKSPACE_KEYS` and the DB whitelist ever drift again.
+
+Verified: 281 vitest tests green; 41-check Playwright pass across all seven surfaces (left nav on
+every page, building gate + badge + remembered choice, sanitation dock pin and its refusal message,
+policing map, Scope colour coding/qualifiers/deletable chips, Floor Care straight-to-builder with the
+Needs card), no page errors.
+
 ## 13. BUILD & DEPLOY WORKFLOW
 
 ```
@@ -323,6 +387,12 @@ git add -A && git commit && git push          # Pages deploys automatically (~35
 ```
 
 ## 15. OPEN ITEMS / NEXT CANDIDATES
+
+- **Max Policing needs its real spec** (2026-08-31): the shell ships (room eligibility, non-floor-care
+  passes, timing, ship-to-schedules). Josh still owes the frequency model (passes per day), cart
+  stocking and coverage windows.
+- **The role matrix** (admin / director / manager / supervisor) — Josh said he'd explain it later.
+  Today only `canEditFormula` (owner|director) gates the general formula and the General Clean delete.
 
 - **Josh demos to a potential client** — the demo link must stay pristine; bump the seed stamp whenever the demo should refresh on his devices.
 - Non-space task instances count toward schedule totals in the HUB legend/cards; Classic's own schedule cards count room minutes only (known, communicated).
