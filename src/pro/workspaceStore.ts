@@ -11,6 +11,9 @@
 
 export const WORKSPACE_FORMAT = "opsmatrix-workspace-v1";
 
+// ⚠ Adding a key here REQUIRES a migration extending workspaces_key_check
+// (supabase/migrations) — the DB whitelists these names, and one rejected
+// store blocks the WHOLE sync push. workspaceSchema.test.ts enforces this.
 export const WORKSPACE_KEYS = [
   "opsmatrix_v7",
   "opsmatrix_v7_plans",

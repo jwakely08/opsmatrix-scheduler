@@ -39,9 +39,11 @@ Create THREE projects at supabase.com (org: your company; region: a US
 region, same for all three): `opsmatrix-dev`, `opsmatrix-staging`,
 `opsmatrix-prod`. For EACH project:
 
-1. **SQL Editor** → run `supabase/migrations/0001_init.sql`, then
-   `supabase/migrations/0002_production.sql` (in that order; both should end
-   "Success").
+1. **SQL Editor** → run every file in `supabase/migrations/` in numeric
+   order — `0001_init.sql`, `0002_production.sql`, `0003_planstudio_store.sql`,
+   and anything numbered after them (each should end "Success"). New
+   migrations land over time; a project is current only when it has run
+   them ALL.
 2. **Authentication → Sign In / Up**: turn **"Allow new users to sign up" OFF**
    (staging AND production — OpsMatrix is invite-only: every account is
    provisioned by you, never self-created; the app's sign-in screen matches).
