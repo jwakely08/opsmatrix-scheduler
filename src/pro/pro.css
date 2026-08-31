@@ -874,3 +874,9 @@ h4.scopesub { font-size: 12.5px; color: #e2e8f0; margin: 18px 0 4px; }
 .nscount { width: 58px; text-align: center; font-weight: 700; }
 .schedroom.nonspace.add select { max-width: 340px; }
 .schedroom.nonspace.add .pnote { margin: 0; font-size: 11px; }
+
+/* floor-care room card: Needs / Does not need */
+.fc-mappick.tall { flex-direction: column; align-items: stretch; max-width: 380px; }
+.fc-pickgroup { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+.fc-picklabel { font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: #64748b; }
+.fc-pickrow { display: flex; align-items: center; gap: 8px; }

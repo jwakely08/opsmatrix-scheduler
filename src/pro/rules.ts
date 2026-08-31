@@ -407,6 +407,8 @@ export interface SpaceLike {
   spaceTasks?: string[];
   /** legacy field name, migrated on read */
   fusionTasks?: string[];
+  /** floor-care tasks the manager marked "does not need" for this room */
+  fcNotNeeded?: string[];
 }
 
 export function requiredTasks(rules: Rules, space: SpaceLike): string[] {
