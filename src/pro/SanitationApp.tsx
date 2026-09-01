@@ -13,6 +13,7 @@ import {
   MapCanvas, BuildingPicker, BuildingBadge, planBuilding, planBuildings,
   loadMapBuilding, saveMapBuilding
 } from "./MapCanvas";
+import { buildingArtMap } from "./buildingArt";
 import { HoursBar } from "./FloorCareApp";
 import {
   loadRoutes, saveRoutes, isSoiledUtility, sanTiming, shipSanitation, unshipRoute,
@@ -119,7 +120,7 @@ export function SanitationApp({ data, rules, commit }: {
   if (needsBuilding) {
     return (
       <div className="pro-list wi">
-        <BuildingPicker plans={plans} spaces={spaces} onPick={(b) => chooseBuilding(b)}
+        <BuildingPicker art={buildingArtMap(data)} plans={plans} spaces={spaces} onPick={(b) => chooseBuilding(b)}
           note="Pick the building — the route runs between ITS sanitation dock and ITS soiled utility rooms." />
       </div>
     );

@@ -12,6 +12,7 @@ import {
   MapCanvas, BuildingPicker, BuildingBadge, planBuilding, planBuildings,
   loadMapBuilding, saveMapBuilding
 } from "./MapCanvas";
+import { buildingArtMap } from "./buildingArt";
 import {
   SpaceExplorerView, RoomListView, RoomEditor, notesForSpace, type SpacesView
 } from "./SpacesApp";
@@ -41,7 +42,7 @@ import {
 } from "./rules";
 
 const WALL_STROKE = 13;
-const GRAY = "#64748b";
+const GRAY = "#517299"; // unscheduled: holo slate-blue, not dead gray
 const RED = "#dc2626";
 
 function uid(p: string) { return p + "-" + Math.random().toString(36).slice(2, 9); }
@@ -352,7 +353,7 @@ export function MapsApp() {
 
       <div className="pro-main">
         {onMapView && needsBuilding && (
-          <BuildingPicker plans={plans} spaces={data.v7.spaces ?? []} onPick={chooseBuilding} />
+          <BuildingPicker art={buildingArtMap(data)} plans={plans} spaces={data.v7.spaces ?? []} onPick={chooseBuilding} />
         )}
         {onMapView && plan && (
           <MapCanvas
@@ -1932,30 +1933,75 @@ function ReportModal({ data, rules, spaces, schedules, onClose, onJump }: {
 // Every Max destination, on every hub screen — classic.html keeps its own
 // sidebar, and this rail is its twin, so navigation never dead-ends.
 
+// monochrome 16px line icons (mockup language: clean glyphs, never emoji)
+const NAV_PATHS: Record<string, string> = {
+  home: "M3 10.5 12 3l9 7.5M5.5 9v11h13V9M10 20v-6h4v6",
+  layers: "M12 3 3 8l9 5 9-5-9-5ZM3 12.5l9 5 9-5M3 17l9 5 9-5",
+  calendar: "M4 5.5h16v15H4zM4 10h16M8 3v4M16 3v4",
+  machine: "M17 3l-6 8M5 16a5 5 0 0 0 10 0 5 5 0 0 0-10 0ZM3 22h18",
+  cart: "M3 5h3l2 10h10M8 8h12l-1.5 7M10 19.5a1.5 1.5 0 1 0 .01 0M17 19.5a1.5 1.5 0 1 0 .01 0",
+  bell: "M5 17h14M6.5 17a5.5 5.5 0 0 1 11 0M12 6.5v-1M4 20h16",
+  caldays: "M4 5.5h16v15H4zM4 10h16M8 3v4M16 3v4M8 13.5h.01M12 13.5h.01M16 13.5h.01M8 17h.01M12 17h.01",
+  note: "M6 3h9l4 4v14H6zM14.5 3v4.5H19M9 12h6M9 16h6",
+  users: "M9 11a3.5 3.5 0 1 0-.01 0ZM3 20a6 6 0 0 1 12 0M16.5 11.5a3 3 0 1 0-.01 0M15.5 15.7a5.6 5.6 0 0 1 5.5 4.3",
+  chart: "M4 20V4M4 20h16M8 16v-5M12 16V7M16 16v-8M20 16V11",
+  compass: "M12 21a9 9 0 1 0-.01 0ZM15.5 8.5l-2 5-5 2 2-5 5-2Z",
+  exporting: "M12 15V4M8 8l4-4 4 4M5 15v5h14v-5",
+  inspect: "M12 21a9 9 0 1 0-.01 0ZM8.5 12l2.5 2.5 4.5-5",
+  clipboard: "M9 4h6v3H9zM9 4H6.5v17h11V4H15M9 11h6M9 15h6",
+  report: "M5 3h10l4 4v14H5zM15 3v4h4M9 17v-4M12 17v-7M15 17v-2",
+  gear: "M12 15.2a3.2 3.2 0 1 0-.01 0ZM19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.06-.4.1-.8.1-1.2Z"
+};
+
+function NavIcon({ k }: { k: string }) {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+      strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={NAV_PATHS[k]} />
+    </svg>
+  );
+}
+
 function SideNav({ tab, go }: { tab: Tab; go: (token: string) => void }) {
   const items: { ico: string; label: string; token: string; on?: boolean }[] = [
-    { ico: "🏠", label: "Dashboard", token: "classic:Dashboard" },
-    { ico: "🧱", label: "Max Space", token: "hub:spaces/explorer", on: tab === "spaces" },
-    { ico: "🗓", label: "Max Schedules", token: "hub:map", on: tab === "map" || tab === "rooms" || tab === "schedules" },
-    { ico: "🫧", label: "Max Floor Care", token: "hub:floorcare", on: tab === "floorcare" },
-    { ico: "🚮", label: "Max Sanitation", token: "hub:sanitation", on: tab === "sanitation" },
-    { ico: "🛎", label: "Max Policing", token: "hub:policing", on: tab === "policing" },
-    { ico: "📅", label: "Max Calendar", token: "classic:Max Calendar" },
-    { ico: "📝", label: "Max Notes", token: "classic:Max Notes" },
-    { ico: "👥", label: "Max Team", token: "classic:Max Team" },
-    { ico: "📈", label: "Workload Intelligence", token: "hub:workload", on: tab === "workload" },
-    { ico: "🧭", label: "Scope", token: "hub:scope", on: tab === "scope" },
-    { ico: "📤", label: "Exporting", token: "hub:exporting", on: tab === "exporting" },
-    { ico: "⚙️", label: "Admin Settings", token: "classic:Admin Settings" }
+    { ico: "home", label: "Dashboard", token: "classic:Dashboard" },
+    { ico: "layers", label: "Max Space", token: "hub:spaces/explorer", on: tab === "spaces" },
+    { ico: "calendar", label: "Max Schedules", token: "hub:map", on: tab === "map" || tab === "rooms" || tab === "schedules" },
+    { ico: "machine", label: "Max Floor Care", token: "hub:floorcare", on: tab === "floorcare" },
+    { ico: "cart", label: "Max Sanitation", token: "hub:sanitation", on: tab === "sanitation" },
+    { ico: "bell", label: "Max Policing", token: "hub:policing", on: tab === "policing" },
+    { ico: "caldays", label: "Max Calendar", token: "classic:Max Calendar" },
+    { ico: "inspect", label: "Max Inspections", token: "classic:Max Inspections" },
+    { ico: "clipboard", label: "Max Logs", token: "classic:Max Logs" },
+    { ico: "report", label: "Max Reports", token: "classic:Max Reports" },
+    { ico: "note", label: "Max Notes", token: "classic:Max Notes" },
+    { ico: "users", label: "Max Team", token: "classic:Max Team" },
+    { ico: "chart", label: "Workload Intelligence", token: "hub:workload", on: tab === "workload" },
+    { ico: "compass", label: "Scope", token: "hub:scope", on: tab === "scope" },
+    { ico: "exporting", label: "Exporting", token: "hub:exporting", on: tab === "exporting" },
+    { ico: "gear", label: "Admin Settings", token: "classic:Admin Settings" }
   ];
   return (
     <aside className="pro-sidenav">
-      <div className="pro-sidebrand">Ops<span>Matrix</span></div>
-      {items.map((it) => (
-        <button key={it.label} className={it.on ? "on" : ""} onClick={() => go(it.token)}>
-          <i className="navico">{it.ico}</i><span className="navlbl">{it.label}</span>
-        </button>
-      ))}
+      {/* the brand tile — classic's sidebar identity, mirrored exactly */}
+      <div className="pro-sidebrand">
+        <i className="brandmark" aria-hidden="true">✻</i>
+        <span className="brandtext"><b>Ops<span>Matrix</span></b><small>powered by Max</small></span>
+      </div>
+      <div className="pro-sidenavscroll">
+        {items.map((it) => (
+          <button key={it.label} className={it.on ? "on" : ""} onClick={() => go(it.token)}>
+            <i className="navico"><NavIcon k={it.ico} /></i><span className="navlbl">{it.label}</span>
+          </button>
+        ))}
+      </div>
+      {/* Ask Max lives in classic (the Hey Max bubble) — one tap away */}
+      <button className="askmax" onClick={() => go("classic:Dashboard")}>
+        <i aria-hidden="true">✻</i>
+        <span className="navlbl"><b>Ask Max</b><small>Your operations copilot</small></span>
+        <em className="navlbl">AI</em>
+      </button>
+      <div className="sideversion navlbl">OpsMatrix · Max Schedules hub</div>
     </aside>
   );
 }

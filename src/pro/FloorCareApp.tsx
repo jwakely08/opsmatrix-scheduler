@@ -29,6 +29,7 @@ import {
   MapCanvas, BuildingPicker, BuildingBadge, planBuilding, planBuildings,
   loadMapBuilding, saveMapBuilding
 } from "./MapCanvas";
+import { buildingArtMap } from "./buildingArt";
 
 const fmt = (n: number) => n.toLocaleString();
 const uid = (p: string) => p + "-" + Math.random().toString(36).slice(2, 9);
@@ -515,7 +516,7 @@ function Builder({ data, rules, commit, fc, setFc, onCancel, onConfirm, otherSto
         </div>
 
         {pickMode === "map" && needsBuilding && (
-          <BuildingPicker plans={plans} spaces={spaces}
+          <BuildingPicker art={buildingArtMap(data)} plans={plans} spaces={spaces}
             onPick={(b) => chooseBuilding(b)}
             note="Pick the building you're scheduling floor care in — then its floors." />
         )}

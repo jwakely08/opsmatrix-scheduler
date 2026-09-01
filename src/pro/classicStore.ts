@@ -438,7 +438,7 @@ export function deleteSchedule(data: ClassicData, scheduleId: string) {
 
 export function scheduleColor(schedules: ClassicSchedule[], id: string | undefined): string {
   const s = schedules.find((x) => x.id === id);
-  return (s?.color as string) || "#64748b";
+  return (s?.color as string) || "#517299"; // unscheduled reads holo slate-blue
 }
 
 /**
