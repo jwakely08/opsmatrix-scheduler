@@ -562,7 +562,10 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
             }}>
             <g transform={`translate(${view.tx} ${view.ty}) scale(${view.k})`}>
               {phase === "details" && matrix
-                ? <image href={matrix.img} width={matrix.w} height={matrix.h} />
+                // the locked matrix wears the neon rendering; the UPLOADED
+                // plan (edit/calibrate phases) stays exactly as the manager
+                // knows it — you can't correct a drawing you can't recognise
+                ? <image href={matrix.img} width={matrix.w} height={matrix.h} className="planimg" />
                 : <image href={picture.dataUrl} width={W} height={H} />}
               {shapes.map((s) => {
                 const col = s.source === "ai" ? AI : TRACED;
