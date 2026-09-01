@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-09-01 late (§12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-09-01 latest (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -398,6 +398,42 @@ Two fixes after Josh's staging pass:
   (popup centred+topmost on explorer/list/map, preloaded fields, merge sum, direct
   ship, stored sq ft + plan ratio + readMode set) and an 8-check e2e of the NO-info
   flow; 281 unit tests green.
+
+## 12p. ROVER MODE (2026-09-01 — Josh's final pre-launch feature)
+
+Full-screen, voice-first SPACE VALIDATION for walking the hospital with an iPad/iPhone.
+Lives ONLY in Max Space → Map View (🚙 Rover Mode button, shown when a plan exists).
+
+- **Flow**: toggle on → full screen (portal overlay always; native fullscreen where the
+  browser allows — iOS Safari doesn't, the overlay IS the fullscreen there) → tap a room →
+  the mic opens and the bottom sheet shows the five data points (number, name, type,
+  floor type, fixtures) → speak plainly, labeled ("room number 101 room type office…")
+  or terse ("102 office Dr Smith's office carpet zero fixtures") → fields fill live →
+  say **"confirm"** (also: next / save it / looks good) or thumb the big button → the
+  room SAVES IMMEDIATELY (applyRoomType + syncSpaceMinutes — repriced on the spot) and
+  turns green → tap the next room. "clear" resets the card, "cancel" closes it.
+  ✓ Save & Exit just leaves — every confirm already persisted, so a dead battery in the
+  east wing loses nothing.
+- **Speed architecture (Josh asked)**: the device's OWN recognizer (Web Speech API —
+  on-device, streaming, works in dead zones; iOS ends recognition at every pause so
+  RoverMode transparently restarts it while a room is open) + a LOCAL grammar
+  (`src/pro/roverParse.ts`, pure + 15 unit tests) over Scope's own vocabulary: room-type
+  labels + spoken aliases (OR room, bathroom…), floor synonyms (tile/VCT/concrete…),
+  number words ("one oh two" → 102, "seventeen fixtures"). NO AI round-trip per room —
+  deliberately: 1–3s of network per room would be slower than walking, and hospitals
+  have dead zones. Utterances MERGE, so a spoken correction ("room type exam room")
+  overrides just that field.
+- **📍 My location**: tap the button, tap the plan — a YOU pin marks the spot (manual;
+  re-tap as you move). Automatic dead-reckoning was deliberately dropped per Josh's own
+  out-clause: phone motion sensors drift metres within a corridor and a dot that lies is
+  worse than no dot.
+- Map colors in Rover: green = validated this walk, teal = data complete, amber ⚠ =
+  still missing details (spaceIncomplete). Voice-unsupported browsers get an honest
+  banner and the fields still type.
+- Verified: 24-check Playwright walk on an iPhone viewport (fake recognizer driven by
+  the test): button only in Map View, mic gates on room selection, both spoken forms,
+  voice confirm + thumb confirm, immediate persistence + repricing, spoken correction,
+  green states, YOU pin, exit persistence, zero page errors. 296 unit tests green.
 
 ## 13. BUILD & DEPLOY WORKFLOW
 

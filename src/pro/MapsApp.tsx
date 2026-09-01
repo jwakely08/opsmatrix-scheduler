@@ -23,6 +23,7 @@ import { fetchAccountRole, canEditFormula, type AccountRole } from "./accountRol
 import { cloudConfigured } from "./cloudConfig";
 import { PrintSchedule } from "./PrintSchedule";
 import { AiPlanImport } from "./AiPlanImport";
+import { RoverMode } from "./RoverMode";
 import { WorkloadApp, ImportResult } from "./WorkloadApp";
 import { FloorCareApp, HoursBar } from "./FloorCareApp";
 import { SanitationApp } from "./SanitationApp";
@@ -142,6 +143,8 @@ export function MapsApp() {
   const [report, setReport] = useState(false);
   const [planId, setPlanId] = useState<string | null>(null);
   const [printId, setPrintId] = useState<string | null>(null);
+  // Rover Mode (Josh's final launch feature): full-screen voice validation
+  const [roverOn, setRoverOn] = useState(false);
 
   const plans = data.plans;
   // building first (Josh, 2026-08-31): with plans in several buildings, the
@@ -308,6 +311,9 @@ export function MapsApp() {
         <span className="grow" />
         {/* Max Space's ONLY two entry points for data: ⬆ Import and ＋ Add Room */}
         {tab === "spaces" && <>
+          {spacesView === "map" && plan && (
+            <button className="pbtn rover-toggle" onClick={() => setRoverOn(true)}>🚙 Rover Mode</button>
+          )}
           <UploadHub key={planCal ? "plancal" : planRead ? "planread" : "plain"} commit={commit} rules={rules}
             autoPlan={planCal ? "calibrate" : planRead ? "choice" : undefined} />
           <button className="pbtn primary" onClick={() => openEditor(null)}>＋ Add Room</button>
@@ -553,6 +559,14 @@ export function MapsApp() {
       {printId && (
         <PrintPreview data={data} rules={rules} scheduleId={printId}
           onClose={() => setPrintId(null)} />
+      )}
+
+      {roverOn && plan && (
+        <RoverMode
+          plan={plan} plans={buildingPlans} onPlan={setPlanId}
+          spaces={spaces} shapes={shapes} rules={rules} commit={commit}
+          building={activeBuilding ?? ""}
+          onExit={() => setRoverOn(false)} />
       )}
     </div>
   );
