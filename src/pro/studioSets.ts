@@ -37,6 +37,9 @@ export interface StudioSet {
   spaceIdByShape: Record<string, string>;
   /** the plan record this set owns in opsmatrix_v7_plans */
   planId: string;
+  /** built from a WITH-info plan (sizes read off the sheet) — re-editing
+   *  keeps the direct edit→ship flow, no calibration step */
+  readMode?: boolean;
   createdAt: string;
   updatedAt: string;
 }

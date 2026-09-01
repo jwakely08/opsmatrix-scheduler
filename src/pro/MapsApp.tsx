@@ -677,7 +677,7 @@ function UploadHub({ commit, rules, autoPlan }: {
     <>
       <button className="pbtn primary" onClick={() => setChooser(true)}>⬆ Import</button>
 
-      {chooser && (
+      {chooser && createPortal(
         <div className="pro-modalback" onClick={(e) => { if (e.target === e.currentTarget) setChooser(false); }}>
           <div className="pro-modal">
             <div className="pshead"><h2>Upload space data</h2>
@@ -696,7 +696,8 @@ function UploadHub({ commit, rules, autoPlan }: {
               <span>A laser-measured scan. Rooms are detected and drawn exactly.</span>
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       <AiPlanImport open={planOpen} onClose={() => setPlanOpen(false)}
@@ -719,7 +720,7 @@ function UploadHub({ commit, rules, autoPlan }: {
           if (files.length) handleMagicplan(files);
         }} />
 
-      {rlPhase !== "idle" && (
+      {rlPhase !== "idle" && createPortal(
         <div className="pro-modalback" onClick={(e) => {
           if (e.target === e.currentTarget && rlPhase !== "working") setRlPhase("idle");
         }}>
@@ -734,7 +735,8 @@ function UploadHub({ commit, rules, autoPlan }: {
             </>)}
             {rlPhase === "done" && rlSummary && <ImportResult summary={rlSummary} />}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );

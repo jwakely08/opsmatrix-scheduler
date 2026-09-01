@@ -1288,3 +1288,6 @@ body {
   mix-blend-mode: screen;
   filter: invert(1) sepia(1) saturate(4.2) hue-rotate(153deg) brightness(1.22);
 }
+
+/* overlays always win: portaled to <body> and above every stacking context */
+.pro-modalback { z-index: 1000; }
