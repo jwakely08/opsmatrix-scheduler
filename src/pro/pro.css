@@ -1279,3 +1279,12 @@ body {
 
 /* the building-pick step sits with its content, not 15vh below it */
 .pro-list .buildpick, .fc-main .buildpick { margin: 4vh auto; }
+
+/* THE MATRIX, as envisioned (Josh's mockups): the stored plan is a light
+   blueprint — on screen it inverts into glowing cyan linework over the dark
+   holo-table, and room fills shine through from underneath. Print never
+   sees this (PrintSchedule renders the plan untouched). */
+.pro-map .planimg, .studio-canvas .planimg {
+  mix-blend-mode: screen;
+  filter: invert(1) sepia(1) saturate(4.2) hue-rotate(153deg) brightness(1.22);
+}

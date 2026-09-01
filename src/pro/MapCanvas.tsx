@@ -261,8 +261,11 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
               </g>
             );
           })}
+          {/* the matrix, rendered as the mockups envision it: the stored
+              drawing stays a light blueprint (prints clean on paper), and
+              the MAP inverts + colorizes it into glowing neon linework */}
           <image href={plan.img} width={plan.w} height={plan.h}
-            style={{ mixBlendMode: "multiply", pointerEvents: "none" }} />
+            className="planimg" style={{ pointerEvents: "none" }} />
           {marker && (
             <g className="mapmarker" transform={`translate(${marker.x} ${marker.y}) scale(${1 / Math.max(0.4, view.k)})`}>
               <circle r={13} />
