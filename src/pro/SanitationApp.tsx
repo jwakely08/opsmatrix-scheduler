@@ -94,7 +94,10 @@ export function SanitationApp({ data, rules, commit }: {
     () => new Set(mapSpaces.filter((sp) => isSoiledUtility(sp)).map((sp) => sp.id)),
     [mapSpaces]);
 
-  const timing = active ? sanTiming(plan, spaces, active) : null;
+  // timing and shipping always price against the ROUTE'S OWN floor plan —
+  // never whichever floor happens to be on screen
+  const routePlan = active ? (plans.find((pl) => pl.id === active.planId) ?? plan) : plan;
+  const timing = active ? sanTiming(routePlan, spaces, active) : null;
 
   const ship = () => {
     if (!active) return;
@@ -105,8 +108,8 @@ export function SanitationApp({ data, rules, commit }: {
     }
     if (!active.dock) { setErr("Drop the sanitation dock pin first — 📍 below the map."); return; }
     if (!active.seq.some((x) => x !== DOCK)) { setErr("Click at least one soiled utility room."); return; }
-    const shipped: SanRoute = { ...active, planId: plan?.id ?? active.planId, building: activeBuilding ?? "" };
-    commit((d) => { shipSanitation(d, plan, shipped); });
+    const shipped: SanRoute = { ...active, building: activeBuilding ?? "" };
+    commit((d) => { shipSanitation(d, routePlan, shipped); });
     commitStore({ ...store, sanitation: [...store.sanitation.filter((r) => r.id !== shipped.id), shipped] });
     setRoute(null);
     setErr("");
@@ -176,19 +179,43 @@ export function SanitationApp({ data, rules, commit }: {
                   onChange={buildings.length > 1 ? () => chooseBuilding(null) : undefined} />}
                 spaces={mapSpaces} shapes={shapes}
                 mode="sanitation"
-                marker={active.dock ? { x: active.dock.x, y: active.dock.y, label: "DOCK" } : null}
-                onCanvas={placingDock ? (pt) => { patch({ dock: pt }); setPlacingDock(false); setErr(""); } : undefined}
+                marker={active.dock && plan && plan.id === active.planId
+                  ? { x: active.dock.x, y: active.dock.y, label: "DOCK" } : null}
+                onCanvas={placingDock ? (pt) => {
+                  const hasStops = active.seq.some((x) => x !== DOCK);
+                  if (hasStops && plan && active.planId !== plan.id) {
+                    setErr("The dock pin lives on the route's own floor — switch back to it, or Start over.");
+                    setPlacingDock(false);
+                    return;
+                  }
+                  patch({ dock: pt, ...(hasStops ? {} : { planId: plan?.id ?? active.planId }) });
+                  setPlacingDock(false);
+                  setErr("");
+                } : undefined}
                 fillFor={(sp) => {
                   if (!soiledIds.has(sp.id)) return "#33404d";
-                  return active.seq.includes(sp.id) ? "#0891b2" : "#475569";
+                  return active.seq.includes(sp.id) && plan?.id === active.planId ? "#0891b2" : "#475569";
                 }}
                 selectedId={null}
                 onRoom={(sp) => {
                   if (!sp || !soiledIds.has(sp.id)) return;
                   if (placingDock) return; // pin placement wins the tap
                   if (!active.dock) { setErr("Drop the sanitation dock pin first — the route starts and ends there."); return; }
+                  // ONE FLOOR PER ROUTE (Josh's hierarchy rule): distances
+                  // only mean something on one plan's scale. The first stop
+                  // pins the route to the floor on screen; other floors get
+                  // a plain refusal, not silent garbage math.
+                  const hasStops = active.seq.some((x) => x !== DOCK);
+                  if (hasStops && plan && active.planId !== plan.id) {
+                    const home = plans.find((pl) => pl.id === active.planId);
+                    setErr(`This route runs on ${home?.floor ?? "another floor"} — one floor per route. Finish it there, or Start over to route this floor.`);
+                    return;
+                  }
                   setErr("");
-                  patch({ seq: [...active.seq, sp.id] });
+                  patch({
+                    seq: [...active.seq, sp.id],
+                    ...(hasStops ? {} : { planId: plan?.id ?? active.planId })
+                  });
                 }}
                 legend={
                   <div className="pro-legend">
