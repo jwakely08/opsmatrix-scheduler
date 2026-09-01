@@ -10,7 +10,8 @@
 //   3. Either way the plan is rebuilt matrix-style; the upload is never
 //      shown back.
 import React, { useEffect, useRef, useState } from "react";
-import { readPlanWithAI, AiPlanError } from "../bridge/aiPlanImport";
+import { readPlanWithAI, locateDrawing, padBox, AiPlanError } from "../bridge/aiPlanImport";
+import { createPortal } from "react-dom";
 import { planFileToImage, isPdf } from "./planFile";
 import { dxfToPicture, isDxf, isDwg } from "./dxfRaster";
 import { loadApiKey, saveApiKey } from "./classicStore";
@@ -109,13 +110,26 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
       let seeds: AiRoomSeed[] = [];
       let noticeMsg = "";
       let read = false;
+      // read mode (Josh, 2026-09-01): the sheet often carries legends, title
+      // blocks and notes — Max first LOCATES the floor plan itself and the
+      // rest of the page is cropped away, so only the interior rooms are
+      // read and only the drawing shows in the editor
+      let pic = picture;
+      if (mode === "read" && (key || proxy)) {
+        try {
+          setStatus("Max is finding the floor plan on the page…");
+          const box = await locateDrawing({ apiKey: key, proxy, imageDataUrl: picture.dataUrl });
+          const rr = (picture as { renderRegion?: (b: ReturnType<typeof padBox>, t: number) => Promise<typeof picture> }).renderRegion;
+          if (box && rr) pic = await rr(padBox(box), 2576);
+        } catch { /* the crop is an optimisation — read the full page instead */ }
+      }
       if (key || proxy) {
         try {
           setStatus(mode === "read" ? "Max is reading the floor plan…" : "Max is drawing the floor plan…");
           const reading = await readPlanWithAI({
             apiKey: key, proxy,
-            imageDataUrl: picture.dataUrl,
-            imageWidth: picture.width, imageHeight: picture.height,
+            imageDataUrl: pic.dataUrl,
+            imageWidth: pic.width, imageHeight: pic.height,
             building, floor, onProgress: setStatus
           });
           seeds = reading.rooms.map((r) => ({
@@ -142,8 +156,8 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
       setStudioNotice(noticeMsg);
       setStudioSized(read);
       setStudioPic({
-        dataUrl: picture.dataUrl, width: picture.width,
-        height: picture.height, aspect: picture.aspect
+        dataUrl: pic.dataUrl, width: pic.width,
+        height: pic.height, aspect: pic.aspect
       });
     } catch (e) {
       setError(e instanceof AiPlanError ? e.message : String((e as Error)?.message || e));
@@ -170,7 +184,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
     );
   }
 
-  return (
+  return createPortal(
     <>
       {(
         <div className="pro-modalback" onClick={(e) => {
@@ -309,6 +323,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
           </div>
         </div>
       )}
-    </>
+    </>,
+    document.body
   );
 }

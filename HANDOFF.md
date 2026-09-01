@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-09-01 (§12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-09-01 late (§12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -367,6 +367,37 @@ way round.
 - Verified: 281 vitest green; 17-check Playwright sweep (all 11 surfaces load, tile drill-down,
   picture pick + reload persistence, vector icons, zero page errors) + screenshot review of
   Explorer/map/Sanitation/Scope/Floor Care against the mockups.
+
+## 12o. WITH-INFO UPLOADS: EDIT → SHIP, NO CALIBRATION (2026-09-01, Josh's correction)
+
+Two fixes after Josh's staging pass:
+
+- **The Import popup was trapped in the header.** The Deep Theme gave `.pro-head` a
+  backdrop-filter, which (per CSS spec) makes it the CONTAINING BLOCK for its
+  `position: fixed` descendants — and the ⬆ Import chooser, the room-list progress
+  dialog and the whole AiPlanImport modal rendered inside the header. Result: popups
+  squeezed into the top strip and losing the z-order war to tiles/menus. Fix: those
+  modals render through `createPortal(document.body)` (like PrintSchedule and the
+  Studio always did) + `.pro-modalback { z-index: 1000 }`. RULE: any `.pro-modalback`
+  must portal to body — never render one inside a filtered/blurred/transformed ancestor.
+- **WITH-info uploads don't calibrate — ever.** The point of "Yes — the sizes are in
+  the file" is checking the matrix, not measuring it. The flow is now: upload →
+  `locateDrawing` + `renderRegion` CROP the sheet to the floor plan itself (legends,
+  title blocks, side notes are cut away — this step existed in the old reader and had
+  been lost) → Max pre-draws every room with number/name/type/sq ft preloaded → the
+  editor opens with the FULL toolset and the room panel shows all details incl. an
+  editable Square feet field (hand-traced rooms type theirs in; blanks ship blank and
+  get the existing missing-info flags in Max Space) → the edit-phase button IS
+  **🚀 Ship to Max Space**. No calibrate phase, no measure-all. **Merging sums the
+  square footage** (300+120 → 420). PlanStudio's `direct` mode = `sizesFromFile` prop
+  or `StudioSet.readMode` (persisted, so re-editing a read-mode set from the
+  Calibration Editor home skips calibration too). The NO-info flow is untouched —
+  verified by walking it end-to-end (drew → finish editing → calibrate → measure all
+  → details → ship).
+- Verified: 21-check e2e of the WITH-info flow against a stubbed Anthropic response
+  (popup centred+topmost on explorer/list/map, preloaded fields, merge sum, direct
+  ship, stored sq ft + plan ratio + readMode set) and an 8-check e2e of the NO-info
+  flow; 281 unit tests green.
 
 ## 13. BUILD & DEPLOY WORKFLOW
 

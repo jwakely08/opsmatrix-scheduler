@@ -84,6 +84,10 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   onCancel: () => void;
 }) {
   const W = picture.width, H = picture.height;
+  // WITH-info uploads (Josh, 2026-09-01): there is NOTHING to calibrate —
+  // the plan stated its sizes, Max read them. The flow is edit → ship:
+  // check the drawing, fix what needs fixing, send it to Max Space.
+  const direct = Boolean(sizesFromFile) || Boolean(existingSet?.readMode);
   const [shapes, setShapes] = useState<Shape[]>(() =>
     existingSet ? JSON.parse(JSON.stringify(existingSet.shapes)) : []);
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -231,9 +235,11 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     const dropped = seeds.length - added.length;
     if (added.length) {
       mutate((prev) => [...prev, ...added]);
-      setNotice(`✓ Max drew ${added.length} room${added.length === 1 ? "" : "s"}` +
+      setNotice(`✓ Max ${direct ? "read" : "drew"} ${added.length} room${added.length === 1 ? "" : "s"}` +
         (dropped > 0 ? ` (${dropped} overlapping box${dropped === 1 ? "" : "es"} dropped)` : "") +
-        ". Make the drawing match the plan — move, reshape, merge, trace what's missing — then ✓ Finish editing.");
+        (direct
+          ? ". Numbers, names and square footage are filled in — check the drawing, then 🚀 Ship to Max Space."
+          : ". Make the drawing match the plan — move, reshape, merge, trace what's missing — then ✓ Finish editing."));
     } else if (seeds.length) {
       setErr("Max's boxes all overlapped or were unusable — trace the rooms by hand.");
     }
@@ -251,7 +257,8 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
         building, floor, onProgress: setNotice
       });
       const added = ingestSeeds(reading.rooms.map((r) => ({
-        name: r.name, roomNumber: r.roomNumber, roomType: r.roomType, polygon: r.polygon
+        name: r.name, roomNumber: r.roomNumber, roomType: r.roomType, polygon: r.polygon,
+        squareFeet: direct ? r.squareFeet : 0
       })), shapes);
       if (!added.length) {
         setErr("Max found nothing new beyond what's drawn (overlapping boxes are dropped automatically).");
@@ -355,12 +362,14 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
       setMergeFirst(null);
       return;
     }
+    // WITH-info plans: the merged room IS both rooms, so its square footage
+    // is the sum of theirs (Josh, 2026-09-01). Calibrated plans re-measure
+    // from the merged outline instead, so a stale anchor never survives.
+    const summed = direct ? (sqftOf(a) ?? 0) + (sqftOf(b) ?? 0) : 0;
     mutate((prev) => prev
       .filter((s) => s.id !== bId)
       .map((s) => s.id === aId
-        // the first-tapped room keeps its identity; a stale calibration
-        // measurement can't survive a shape this different
-        ? { ...s, pts: merged, knownSqFt: null }
+        ? { ...s, pts: merged, knownSqFt: direct && summed > 0 ? Math.round(summed) : null }
         : s));
     setSel(new Set([aId]));
     setMergeFirst(null);
@@ -514,7 +523,8 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     const saved = saveStudioSet(existingSet
       ? {
         ...existingSet, shapes: shapesData, spaceIdByShape: map,
-        account, building, floor, updatedAt: new Date().toISOString()
+        account, building, floor, readMode: direct || existingSet.readMode,
+        updatedAt: new Date().toISOString()
       }
       : {
         id: "set-" + Math.random().toString(36).slice(2, 9),
@@ -523,6 +533,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
         shapes: shapesData,
         spaceIdByShape: map,
         planId: String((result.plan as { id?: string }).id ?? ""),
+        readMode: direct,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       });
@@ -582,9 +593,9 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                     <g className="studio-label" transform={`translate(${c.x} ${c.y}) scale(${1 / Math.max(0.5, view.k)})`}>
                       <text y={-3}>{s.roomNumber || s.roomName || "?"}</text>
                       <text className="sub" y={12}>
-                        {phase === "edit"
+                        {phase === "edit" && !direct
                           ? (s.source === "ai" ? "Max" : "traced")
-                          : (s.knownSqFt ?? 0) > 0 ? `⚓ ${s.knownSqFt} ft²` : sq !== null ? `${sq} ft²` : "—"}
+                          : (s.knownSqFt ?? 0) > 0 ? `${direct ? "" : "⚓ "}${s.knownSqFt} ft²` : sq !== null ? `${sq} ft²` : "—"}
                       </text>
                     </g>
                   </g>
@@ -714,9 +725,16 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
           {phase === "edit" && (
             <>
               <div className="studio-calbox ok">
-                <b>1 · Make the drawing match the plan</b>
-                <span>Max drew first; you correct. Move boxes, reshape funky ones, merge splits,
-                  trace anything missed. Overlapping boxes are dropped automatically.</span>
+                {direct ? (<>
+                  <b>Check Max's reading, then ship</b>
+                  <span>Room numbers, names and square footage came off the plan. Fix any box or
+                    number, merge splits (their square footage adds up), trace anything missed —
+                    then 🚀 Ship. Blanks are fine; rooms missing info get flagged in Max Space.</span>
+                </>) : (<>
+                  <b>1 · Make the drawing match the plan</b>
+                  <span>Max drew first; you correct. Move boxes, reshape funky ones, merge splits,
+                    trace anything missed. Overlapping boxes are dropped automatically.</span>
+                </>)}
               </div>
               <button className="pbtn" disabled={aiBusy} onClick={maxDrawMore}>
                 {aiBusy ? "✨ Max is drawing…" : "✨ Max draws the rooms"}
@@ -774,6 +792,18 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                 </small>
               )}
 
+              {direct && phase === "edit" && (
+                <label className="pfield">Square feet <small>read from the plan — fix it, or type it for a room you traced</small>
+                  <input type="number" min={0}
+                    value={one.knownSqFt ?? ""}
+                    placeholder={sqftOf(one) !== null ? `≈ ${sqftOf(one)} (measured from the plan's scale)` : "e.g. 240"}
+                    onChange={(e) => {
+                      const v = Number(e.target.value) > 0 ? Number(e.target.value) : null;
+                      patchShape(one.id, { knownSqFt: v });
+                    }} />
+                </label>
+              )}
+
               {phase === "calibrate" && (
                 <label className="pfield">Calibration measurement <small>sq ft you KNOW</small>
                   <input type="number" min={0}
@@ -794,7 +824,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                 </label>
               )}
 
-              {phase === "details" && (
+              {(phase === "details" || (direct && phase === "edit")) && (
                 <>
                   <div className="prow">
                     <label className="pfield grow">Room type
@@ -826,7 +856,8 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                       <small>Typing a name that doesn't exist yet creates the department when you ship.</small>
                     </label>
                   </div>
-                  <p className="pnote">Measured: <b>{sqftOf(one) ?? "—"} ft²</b>{(one.knownSqFt ?? 0) > 0 ? " (⚓ your calibration)" : ""}</p>
+                  {phase === "details" &&
+                    <p className="pnote">Measured: <b>{sqftOf(one) ?? "—"} ft²</b>{(one.knownSqFt ?? 0) > 0 ? " (⚓ your calibration)" : ""}</p>}
                 </>
               )}
             </div>
@@ -848,17 +879,22 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                 <b>{s.roomNumber || s.roomName || "(no name yet)"}</b>
                 {phase === "details" && !s.department && <em className="miss">dept?</em>}
                 <em>
-                  {phase === "edit" ? (s.source === "ai" ? "Max" : "traced")
-                    : (s.knownSqFt ?? 0) > 0 ? `⚓ ${s.knownSqFt}` : sqftOf(s) ?? "—"}
+                  {phase === "edit" && !direct ? (s.source === "ai" ? "Max" : "traced")
+                    : (s.knownSqFt ?? 0) > 0 ? `${direct ? "" : "⚓ "}${s.knownSqFt}` : sqftOf(s) ?? "—"}
                 </em>
               </button>
             ))}
             {!shapes.length && <p className="pnote">Nothing drawn yet — ✨ Max draws the rooms, or ✏ Trace them yourself.</p>}
           </div>
 
-          {phase === "edit" && (
+          {phase === "edit" && (direct ? (
+            <button className="pbtn primary wide" onClick={() => {
+              if (!shapes.length) { setErr("Draw at least one room first — ✏ Trace, or ✨ Max draws the rooms."); return; }
+              ship();
+            }}>🚀 Ship to Max Space</button>
+          ) : (
             <button className="pbtn primary wide" onClick={finishEditing}>✓ Finish editing — calibrate next</button>
-          )}
+          ))}
           {phase === "calibrate" && (
             <button className="pbtn primary wide" disabled={!cal} onClick={measureAll}>
               {sizesFromFile ? "📏 Sizes look right — build the matrix" : "📏 Measure all rooms"}
@@ -869,7 +905,9 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
           )}
           <small className="pnote">
             {phase === "edit"
-              ? "When the drawing matches the plan, finish editing and calibrate."
+              ? (direct
+                ? `Everything Max read ships into ${[account, building, floor].filter(Boolean).join(" → ") || "your account"}. Blanks are fine — rooms missing info get flagged in Max Space.`
+                : "When the drawing matches the plan, finish editing and calibrate.")
               : phase === "calibrate"
                 ? (sizesFromFile
                   ? "Rooms Max didn't find a size for are measured against the ones it did."
