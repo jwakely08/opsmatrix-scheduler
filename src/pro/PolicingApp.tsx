@@ -55,7 +55,15 @@ export function PolicingApp({ data, rules, commit }: {
   const plan = bPlans.find((p) => p.id === planId) ?? bPlans[0] ?? null;
 
   const [store, setStore] = useState<RouteStore>(() => loadRoutes());
-  const [route, setRoute] = useState<PoliceRoute | null>(null);
+  const [route, setRoute] = useState<PoliceRoute | null>(() => {
+    // deep link from a shipped schedule: maps.html#policing?pr=<id>
+    const m = /[?&]pr=([a-z0-9-]+)/i.exec(window.location.search + window.location.hash);
+    if (m) {
+      const r = loadRoutes().policing.find((x) => x.id === m[1]);
+      if (r) return JSON.parse(JSON.stringify(r));
+    }
+    return null;
+  });
   const [pickRoom, setPickRoom] = useState<ClassicSpace | null>(null);
   const [justShipped, setJustShipped] = useState("");
   const [err, setErr] = useState("");

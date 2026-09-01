@@ -392,9 +392,11 @@ export function MapsApp() {
             selectedId={roomSel}
             onRoom={(sp) => {
               if (!sp) { setRoomSel(null); return; }
-              if (tab === "map" && schedSelected && schedSelected.floorCareId) {
-                // floor-care schedules are edited in Max Floor Care only
-                alert("This schedule was built in Max Floor Care — edit it there. (Schedules tab → Edit in Floor Care)");
+              if (tab === "map" && schedSelected && (schedSelected.floorCareId || schedSelected.routeOnly)) {
+                // engine-built schedules are edited in their engine only
+                const home = schedSelected.floorCareId ? "Max Floor Care"
+                  : schedSelected.sanitationId ? "Max Sanitation" : "Max Policing";
+                alert("This schedule was built in " + home + " — edit it there. (Schedules tab → Edit in " + home + ")");
                 return;
               }
               if (tab === "map" && schedSelected) {
@@ -1147,6 +1149,10 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
                 <button className="pbtn small primary" onClick={() => onPrint(s.id)}>🖨 Print schedule</button>
                 {s.floorCareId ? (
                   <a className="pbtn small" href={"./maps.html#floorcare?fc=" + s.floorCareId}>Edit in Floor Care</a>
+                ) : s.sanitationId ? (
+                  <a className="pbtn small" href={"./maps.html#sanitation?sr=" + s.sanitationId}>Edit in Max Sanitation</a>
+                ) : s.policingId ? (
+                  <a className="pbtn small" href={"./maps.html#policing?pr=" + s.policingId}>Edit in Max Policing</a>
                 ) : (
                   <button className="pbtn small" onClick={() => onOpenOnMap(s.id)}>🗺 Edit on map</button>
                 )}
@@ -1165,19 +1171,30 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
                 </p>
               )}
               {members.map((sp, i) => {
-                const c = coverageForSpace(data, sp.id).find((x) => x.scheduleId === s.id)!;
+                // a Sanitation/Policing route carries its own per-stop
+                // minutes and never has cleaning coverage — rendering it
+                // through coverage crashed this whole page (2026-09-01 fix)
+                const routeStops = s.routeOnly
+                  ? ((s.routeStopMinutes as Record<string, number> | undefined) ?? {})
+                  : null;
+                const c = coverageForSpace(data, sp.id).find((x) => x.scheduleId === s.id);
+                if (!c && !routeStops) return null;
                 return (
                   <div key={sp.id} className="schedroom">
                     <span className="ordnum">{i + 1}</span>
                     <b>{sp.roomNumber}</b>
-                    <span>{[c.primary ? "General Clean" : "", ...c.tasks.map((t) => rules.tasks.find((x) => x.id === t)?.label ?? t)].filter(Boolean).join(" + ") || "no tasks picked yet"}</span>
-                    <em>{coverageMinutes(rules, sp, c)}m</em>
-                    <span className="ordmove">
-                      <button disabled={i === 0} title="Move earlier"
-                        onClick={() => commit((d) => moveInSchedule(d, s.id, sp.id, -1))}>↑</button>
-                      <button disabled={i === members.length - 1} title="Move later"
-                        onClick={() => commit((d) => moveInSchedule(d, s.id, sp.id, 1))}>↓</button>
-                    </span>
+                    <span>{routeStops
+                      ? (s.sanitationId ? "Collection stop" : "Porter pass")
+                      : [c!.primary ? "General Clean" : "", ...c!.tasks.map((t) => rules.tasks.find((x) => x.id === t)?.label ?? t)].filter(Boolean).join(" + ") || "no tasks picked yet"}</span>
+                    <em>{routeStops ? Math.round(Number(routeStops[sp.id]) || 0) : coverageMinutes(rules, sp, c!)}m</em>
+                    {!routeStops && (
+                      <span className="ordmove">
+                        <button disabled={i === 0} title="Move earlier"
+                          onClick={() => commit((d) => moveInSchedule(d, s.id, sp.id, -1))}>↑</button>
+                        <button disabled={i === members.length - 1} title="Move later"
+                          onClick={() => commit((d) => moveInSchedule(d, s.id, sp.id, 1))}>↓</button>
+                      </span>
+                    )}
                   </div>
                 );
               })}
