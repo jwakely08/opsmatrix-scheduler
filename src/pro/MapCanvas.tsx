@@ -4,6 +4,7 @@
 // select rooms.
 import React, { useEffect, useRef, useState } from "react";
 import { boundsOf, pointIn, type ClassicData, type ClassicPlan, type ClassicSpace } from "./classicStore";
+import { buildingArtUrl } from "./buildingArt";
 
 const WALL_STROKE = 13;
 
@@ -35,11 +36,13 @@ export function saveMapBuilding(b: string | null) {
 }
 
 /** the full-width "pick a building" step that fronts every map view */
-export function BuildingPicker({ plans, spaces, onPick, note }: {
+export function BuildingPicker({ plans, spaces, onPick, note, art }: {
   plans: ClassicPlan[];
   spaces: ClassicSpace[];
   onPick: (building: string) => void;
   note?: string;
+  /** saved building-picture choices (buildingArtMap) — presets deal in automatically */
+  art?: Record<string, string>;
 }) {
   const buildings = planBuildings(plans);
   return (
@@ -53,7 +56,8 @@ export function BuildingPicker({ plans, spaces, onPick, note }: {
           const roomCount = spaces.filter((sp) => planIds.has(String(sp.visualPlanId ?? ""))).length;
           return (
             <button key={b || "~none"} className="bcard" onClick={() => onPick(b)}>
-              <b>🏢 {b || "No building set"}</b>
+              <span className="bcardimg" style={{ backgroundImage: `url(${buildingArtUrl(b, art ?? {})})` }} />
+              <b>{b || "No building set"}</b>
               <span>{bPlans.length} floor plan{bPlans.length === 1 ? "" : "s"} · {roomCount} rooms drawn</span>
             </button>
           );

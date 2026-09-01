@@ -5,12 +5,15 @@
 // duplicate/edit/delete on every row and NO scheduling controls (scheduling
 // lives in Max Schedules, full stop). Writes go through classicStore on this
 // separate document, so Classic's save effect can never clobber them.
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   syncSpaceMinutes, spaceIncomplete, spacePriority, deleteSpace, duplicateSpace,
   FLOOR_TYPES, PRIORITIES, PRIORITY_NUM, PRIORITY_WORD,
   type ClassicData, type ClassicSpace, type Priority
 } from "./classicStore";
+import {
+  BUILDING_PRESETS, buildingArtMap, buildingArtUrl, setBuildingArt, fileToBuildingArt
+} from "./buildingArt";
 import {
   autoTasksFor, typeIdFromLabel, isCarpet, spaceCleanability, type Rules
 } from "./rules";
@@ -411,6 +414,10 @@ export function SpaceExplorerView({ data, rules, commit, onEdit }: {
   const [path, setPath] = useState<{ building: string | null; floor: string | null; dept: string | null }>(
     { building: null, floor: null, dept: null });
   const [q, setQ] = useState("");
+  // which building's PICTURE is being chosen (Josh, 2026-09-01: every
+  // building tile carries a picture — 8 preloaded renders, or your own photo)
+  const [artFor, setArtFor] = useState<string | null>(null);
+  const art = buildingArtMap(data);
 
   const level = path.dept !== null ? "rooms" : path.floor !== null ? "depts" : path.building !== null ? "floors" : "buildings";
 
@@ -495,6 +502,54 @@ export function SpaceExplorerView({ data, rules, commit, onEdit }: {
           <p className="pnote counts">{scoped.length} room{scoped.length === 1 ? "" : "s"}</p>
           <RoomTable data={data} rules={rules} rows={scoped} showDept={false} commit={commit} onEdit={onEdit} />
         </>
+      ) : level === "buildings" ? (
+        <>
+          <div className="bldgtiles">
+            {tiles.map((t) => {
+              const floors = new Set(spaces
+                .filter((sp) => String(sp.building ?? "").trim() === t.name)
+                .map((sp) => String(sp.floor ?? "").trim()).values()).size;
+              return (
+                <div key={t.label} className="bldgtile" role="button" tabIndex={0}
+                  onClick={() => drill(t.name)}
+                  onKeyDown={(e) => { if (e.key === "Enter") drill(t.name); }}>
+                  <div className="bldgimg" style={{ backgroundImage: `url(${buildingArtUrl(t.name, art)})` }}>
+                    <button className="bldgart" aria-label="Change this building's picture"
+                      onClick={(e) => { e.stopPropagation(); setArtFor(t.name); }}>🖼 Picture</button>
+                  </div>
+                  <div className="bldgbody">
+                    <b>{t.label}</b>
+                    <div className="bldgstats">
+                      <span><i>Floors</i><b>{floors}</b></span>
+                      <span><i>Rooms</i><b>{t.rooms}</b></span>
+                      <span><i>Area</i><b>{fmt(t.sqft)} ft²</b></span>
+                    </div>
+                    {t.missing > 0
+                      ? <em className="bldgchip warn">⚠ {t.missing} room{t.missing === 1 ? "" : "s"} missing details</em>
+                      : <em className="bldgchip ok">✓ Room data complete</em>}
+                  </div>
+                </div>
+              );
+            })}
+            {!tiles.length && <p className="pnote">Nothing here yet — use ⬆ Import to bring rooms in.</p>}
+          </div>
+          {tiles.length > 0 && (
+            <div className="bldgtotals">
+              <span><b>{tiles.length}</b> building{tiles.length === 1 ? "" : "s"}</span>
+              <span><b>{spaces.length}</b> rooms</span>
+              <span><b>{new Set(spaces.map((sp) => String(sp.department ?? "").trim()).values()).size}</b> departments</span>
+              <span><b>{fmt(spaces.reduce((a, sp) => a + (Number(sp.squareFeet) || 0), 0))}</b> ft² total</span>
+            </div>
+          )}
+          {artFor !== null && (
+            <BuildingArtModal building={artFor} current={art[artFor] ?? ""}
+              onPick={(v) => {
+                commit((d) => setBuildingArt(d, artFor, v));
+                setArtFor(null);
+              }}
+              onClose={() => setArtFor(null)} />
+          )}
+        </>
       ) : (
         <div className="expltiles">
           {tiles.map((t) => (
@@ -507,6 +562,48 @@ export function SpaceExplorerView({ data, rules, commit, onEdit }: {
           {!tiles.length && <p className="pnote">Nothing here yet — use ⬆ Import to bring rooms in.</p>}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── the building-picture chooser: 8 preloaded renders, or your own photo ────
+
+function BuildingArtModal({ building, current, onPick, onClose }: {
+  building: string;
+  current: string;
+  onPick: (value: string) => void;
+  onClose: () => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [err, setErr] = useState("");
+  return (
+    <div className="pro-modalback" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="pro-modal artmodal">
+        <div className="pshead"><h2>Picture for {building || "this building"}</h2>
+          <button className="pbtn ghost" onClick={onClose}>✕</button></div>
+        <p className="pnote">Pick one of the preloaded looks, or upload a photo of the real building.</p>
+        <div className="artgrid">
+          {BUILDING_PRESETS.map((p) => (
+            <button key={p.id} className={"artopt" + (current === "preset:" + p.id ? " on" : "")}
+              onClick={() => onPick("preset:" + p.id)}>
+              <img src={p.url} alt={p.label} loading="lazy" />
+              <span>{p.label}</span>
+            </button>
+          ))}
+        </div>
+        <div className="prow">
+          <button className="pbtn" onClick={() => fileRef.current?.click()}>📷 Upload a photo…</button>
+          {current && <button className="pbtn ghost" onClick={() => onPick("")}>Back to automatic</button>}
+        </div>
+        {err && <p className="warntext">⚠ {err}</p>}
+        <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }}
+          onChange={async (e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (!f) return;
+            try { onPick(await fileToBuildingArt(f)); } catch (x) { setErr(String((x as Error)?.message ?? x)); }
+          }} />
+      </div>
     </div>
   );
 }

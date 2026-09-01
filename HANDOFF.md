@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-09-01 (§12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -335,6 +335,34 @@ Verified: 281 vitest tests green; 41-check Playwright pass across all seven surf
 every page, building gate + badge + remembered choice, sanitation dock pin and its refusal message,
 policing map, Scope colour coding/qualifiers/deletable chips, Floor Care straight-to-builder with the
 Needs card), no page errors.
+
+## 12n. THE DEEP THEME + BUILDING PICTURES (2026-09-01, Josh's aesthetic spec)
+
+Josh supplied three interface mockups and eight neon building renders: "everything deep, heavy
+and powerful, on every page, even on hover." Classic ALREADY wears this language (its own glassy
+dark design) — the hub was the flat one, so this pass makes the hub match classic, not the other
+way round.
+
+- **The theme layer** lives at the END of `src/pro/pro.css` ("THE DEEP THEME") as CSS-variable
+  tokens + overrides: near-black world with grid + glow washes, one glass-card family for every
+  panel, gradient primary buttons, segmented glass tabs, lift-and-glow hover physics everywhere,
+  neon-wireframe map rooms (fill-opacity 0.30, 5px stroke, glow on hover/selected), the floor
+  stack restyled into the mockups' vertical pill buttons, themed scrollbars/inputs/legends, and
+  glass for the Calibration Editor chrome. Unscheduled rooms read holo slate-blue (#517299 —
+  `GRAY` in MapsApp + `scheduleColor` default), not dead gray.
+- **The hub sidebar mirrors classic exactly**: brand tile (✻ OpsMatrix / powered by Max), all
+  16 destinations with monochrome inline-SVG line icons (`NAV_PATHS` in MapsApp — never emoji),
+  Ask Max tile (→ classic Dashboard, where Hey Max lives), version footer.
+- **Building pictures** (`src/pro/buildingArt.ts` + `public/buildings/b1–b8.webp`, Josh's eight
+  renders compressed 19MB→448KB): the Explorer's building level is now picture TILES (image
+  header, Floors/Rooms/Area stat boxes, completeness chip, totals bar) with a 🖼 Picture button →
+  chooser modal (8 presets + upload-a-photo, photos shrunk client-side to 960w webp). Every map's
+  BuildingPicker carries the same art. Choices persist in `opsmatrix_v7 → settings.buildingArt`
+  keyed by building name — rides existing sync/backup, NO new store, NO migration. Unpicked
+  buildings get a preset dealt deterministically from the name hash, so tiles never look empty.
+- Verified: 281 vitest green; 17-check Playwright sweep (all 11 surfaces load, tile drill-down,
+  picture pick + reload persistence, vector icons, zero page errors) + screenshot review of
+  Explorer/map/Sanitation/Scope/Floor Care against the mockups.
 
 ## 13. BUILD & DEPLOY WORKFLOW
 
