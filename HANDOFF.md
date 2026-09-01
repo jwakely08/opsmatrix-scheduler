@@ -360,6 +360,10 @@ way round.
   BuildingPicker carries the same art. Choices persist in `opsmatrix_v7 → settings.buildingArt`
   keyed by building name — rides existing sync/backup, NO new store, NO migration. Unpicked
   buildings get a preset dealt deterministically from the name hash, so tiles never look empty.
+- **The matrix renders as envisioned**: the stored plan drawing stays a light blueprint (prints
+  clean), but every map and the Editor's locked-matrix phase invert + colorize it at display time
+  (`.planimg` filter) into glowing cyan linework over the dark holo-table, room fills shining
+  through. The editor's edit/calibrate phases show the UPLOADED plan untouched.
 - Verified: 281 vitest green; 17-check Playwright sweep (all 11 surfaces load, tile drill-down,
   picture pick + reload persistence, vector icons, zero page errors) + screenshot review of
   Explorer/map/Sanitation/Scope/Floor Care against the mockups.
