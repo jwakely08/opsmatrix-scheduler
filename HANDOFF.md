@@ -435,6 +435,27 @@ Lives ONLY in Max Space → Map View (🚙 Rover Mode button, shown when a plan 
   voice confirm + thumb confirm, immediate persistence + repricing, spoken correction,
   green states, YOU pin, exit persistence, zero page errors. 296 unit tests green.
 
+## 12q. ROVER POLISH — MOBILE PARITY + ONE MENTION, BOTH FIELDS (2026-09-01, Josh's phone test)
+
+- **The map is now IDENTICAL on iPhone/iPad and desktop.** Room strokes use
+  `vector-effect: non-scaling-stroke` (constant 3.5px screen width at any zoom on any
+  device — a phone fitting the whole floor used to shrink them to hairlines); the
+  always-on per-path drop-shadow is gone (it janked iOS pans — glow now only on
+  hover/selected); the matrix image filter gained a 1.5px cyan drop-shadow so hairline
+  walls read at quarter scale; room labels' counter-scale floor moved 0.6 → 0.34 and
+  the visibility cutoff 60 → 44 screen px, so labels stay legible on a phone.
+- **The zoom-reset bug**: MapCanvas re-fit on EVERY resize — and iOS Safari fires a
+  resize when its URL bar collapses mid-gesture, yanking the view back to fitted.
+  Now `userDrove` (any pan/zoom/pinch/wheel) locks the view; resizes only re-fit an
+  untouched map; the ⤢ Fit button hands control back; a plan change resets. Same
+  guard in the Calibration Editor's canvas.
+- **Parser: one mention serves both fields** (Josh's catch): "101 Dr Smith's office
+  carpet" → type Office AND name "Dr Smith's Office"; "12 exam room one" → type Exam
+  Room AND name "Exam Room One". Rule: a type phrase spoken ONCE with a real word
+  right before it, or a short tag (number/letter) right after it, stays in the name;
+  spoken twice, first = type, second = name (unchanged); bare mention = type only.
+  21 parser tests.
+
 ## 13. BUILD & DEPLOY WORKFLOW
 
 ```

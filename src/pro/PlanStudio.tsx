@@ -101,6 +101,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   const [notice, setNotice] = useState(initialNotice ?? "");
   const [err, setErr] = useState("");
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
+  const userDrove = useRef(false); // resizes never yank a driven view (iOS URL bar)
   const undoStack = useRef<Shape[][]>([]);
   const redoStack = useRef<Shape[][]>([]);
   const pendingSeeds = useRef<AiRoomSeed[] | null>(initialAiRooms?.length ? initialAiRooms : null);
@@ -145,8 +146,9 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
       const k = Math.min(w / surfW, h / surfH) * 0.94;
       setView({ k, tx: (w - surfW * k) / 2, ty: (h - surfH * k) / 2 });
     };
+    userDrove.current = false;
     fit();
-    const ro = new ResizeObserver(fit);
+    const ro = new ResizeObserver(() => { if (!userDrove.current) fit(); });
     ro.observe(el);
     return () => ro.disconnect();
   }, [surfW, surfH]);
@@ -279,11 +281,11 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     const r = svgRef.current!.getBoundingClientRect();
     return { x: (e.clientX - r.left - view.tx) / view.k, y: (e.clientY - r.top - view.ty) / view.k };
   };
-  const zoomAt = (sx: number, sy: number, f: number) => setView((v) => {
+  const zoomAt = (sx: number, sy: number, f: number) => { userDrove.current = true; return setView((v) => {
     const k2 = Math.max(0.15, Math.min(14, v.k * f));
     const q = k2 / v.k;
     return { k: k2, tx: sx - (sx - v.tx) * q, ty: sy - (sy - v.ty) * q };
-  });
+  }); };
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -420,6 +422,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     const dx = e.clientX - d.x, dy = e.clientY - d.y;
     if (Math.hypot(dx, dy) > 2) d.moved = true;
     if (d.kind === "pan") {
+      userDrove.current = true;
       setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }));
     } else if (d.kind === "shape") {
       const px = dx / view.k, py = dy / view.k;

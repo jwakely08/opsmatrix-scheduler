@@ -119,3 +119,47 @@ describe("piecewise corrections merge", () => {
     expect(draft.roomName).toBeUndefined();
   });
 });
+
+describe("one mention serves both fields (Josh, 2026-09-01)", () => {
+  it("'101 Dr Smith's office carpet zero fixtures' — office is the type AND stays in the name", () => {
+    const { draft } = parse("101 Dr Smith's office carpet zero fixtures");
+    expect(draft.roomNumber).toBe("101");
+    expect(draft.roomType).toBe("Office");
+    expect(draft.roomName).toBe("Dr Smith's Office");
+    expect(draft.floorType).toBe("Carpet");
+    expect(draft.fixtureCount).toBe(0);
+  });
+
+  it("'12 exam room one tile one fixture' — Exam Room is the type, Exam Room One is the name", () => {
+    const { draft } = parse("12 exam room one tile one fixture");
+    expect(draft.roomNumber).toBe("12");
+    expect(draft.roomType).toBe("Exam Room");
+    expect(draft.roomName).toBe("Exam Room One");
+    expect(draft.floorType).toBe("Hard floor — finished");
+    expect(draft.fixtureCount).toBe(1);
+  });
+
+  it("'exam room b' keeps the letter tag in the name", () => {
+    const { draft } = parse("14 exam room b carpet");
+    expect(draft.roomType).toBe("Exam Room");
+    expect(draft.roomName).toBe("Exam Room B");
+  });
+
+  it("a bare type mention still leaves the name empty", () => {
+    const { draft } = parse("102 office carpet zero fixtures");
+    expect(draft.roomType).toBe("Office");
+    expect(draft.roomName).toBeUndefined();
+  });
+
+  it("two mentions still split cleanly: type from the first, name keeps the second", () => {
+    const { draft } = parse("102 office Dr Smith's office carpet zero fixtures");
+    expect(draft.roomType).toBe("Office");
+    expect(draft.roomName).toBe("Dr Smith's Office");
+  });
+
+  it("'102 office dr smith's clinic' — clinic name, office type consumed alone", () => {
+    const { draft } = parse("102 office dr smith's clinic carpet");
+    expect(draft.roomType).toBe("Office");
+    expect(draft.roomName).toBe("Dr Smith's Clinic");
+  });
+});
