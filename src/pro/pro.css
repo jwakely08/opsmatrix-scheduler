@@ -1072,16 +1072,20 @@ body {
 .pro-map { background: radial-gradient(1000px 520px at 50% 0%, #0a1424 0%, #050a15 55%, #030610 100%); }
 .proom path {
   fill-opacity: 0.30;
-  stroke-width: 5px;
-  filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.6));
+  /* CONSTANT screen width (vector-effect: non-scaling-stroke on the path):
+     the wireframe reads identically on a monitor, an iPad and an iPhone,
+     at every zoom. No always-on filter — per-path shadows janked iOS pans. */
+  stroke-width: 3.5px;
 }
 .proom:hover path {
   transform: scale(1.012);
   fill-opacity: 0.45;
-  filter: brightness(1.35) drop-shadow(0 0 16px rgba(34, 211, 238, 0.45)) drop-shadow(0 8px 18px rgba(0, 0, 0, 0.6));
+  stroke-width: 4.5px;
+  filter: brightness(1.35) drop-shadow(0 0 16px rgba(34, 211, 238, 0.45));
 }
 .proom.sel path {
   fill-opacity: 0.5;
+  stroke-width: 4.5px;
   filter: brightness(1.4) drop-shadow(0 0 18px rgba(45, 212, 191, 0.85));
 }
 .proom.dim path { opacity: 0.16; }
@@ -1286,7 +1290,10 @@ body {
    sees this (PrintSchedule renders the plan untouched). */
 .pro-map .planimg, .studio-canvas .planimg {
   mix-blend-mode: screen;
-  filter: invert(1) sepia(1) saturate(4.2) hue-rotate(153deg) brightness(1.22);
+  /* the trailing drop-shadow fattens the matrix's hairline walls so they
+     still read when a phone fits the whole floor at a quarter scale */
+  filter: invert(1) sepia(1) saturate(4.2) hue-rotate(153deg) brightness(1.22)
+    drop-shadow(0 0 1.5px rgba(103, 232, 249, 0.9));
 }
 
 /* overlays always win: portaled to <body> and above every stacking context */

@@ -106,6 +106,9 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
+  // once the user pans/zooms, resizes must never yank the view back —
+  // iOS Safari fires a resize when its URL bar collapses mid-gesture
+  const userDrove = useRef(false);
   // sx/sy = where the gesture STARTED: a tap is judged by total travel from
   // there, not per-event deltas. A fingertip naturally wobbles a few pixels,
   // so touch gets a much bigger tap slop than a mouse — without this, real
@@ -116,6 +119,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
   const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
 
   const zoomAt = (sx: number, sy: number, factor: number) => {
+    userDrove.current = true;
     setView((v) => {
       const k2 = Math.max(0.2, Math.min(12, v.k * factor));
       const f = k2 / v.k;
@@ -136,8 +140,9 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
       const k = Math.min(w / plan.w, h / plan.h) * 0.94;
       setView({ k, tx: (w - plan.w * k) / 2, ty: (h - plan.h * k) / 2 });
     };
+    userDrove.current = false; // a new plan starts fitted
     fit();
-    const ro = new ResizeObserver(fit);
+    const ro = new ResizeObserver(() => { if (!userDrove.current) fit(); });
     ro.observe(svg);
     return () => ro.disconnect();
   }, [plan]);
@@ -147,6 +152,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
     if (!svg) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      userDrove.current = true;
       const r = svg.getBoundingClientRect();
       const sx = e.clientX - r.left, sy = e.clientY - r.top;
       setView((v) => {
@@ -218,6 +224,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
           const travel = Math.hypot(e.clientX - drag.current.sx, e.clientY - drag.current.sy);
           if (travel > drag.current.slop) drag.current.moved = true;
           if (drag.current.moved) {
+            userDrove.current = true;
             setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }));
             drag.current.x = e.clientX; drag.current.y = e.clientY;
           }
@@ -253,7 +260,8 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
             return (
               <g key={sp.id} className={"proom" + (sp.id === selectedId ? " sel" : "") + (color === "#33404d" ? " dim" : "")}>
                 <path d={sh.path} fill={color} stroke={color}
-                  strokeWidth={WALL_STROKE} strokeLinejoin="round" />
+                  strokeWidth={WALL_STROKE} strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke" />
                 {overlay && (
                   <path d={sh.path} fill={"url(#st-" + overlay.slice(1) + ")"}
                     stroke="none" style={{ pointerEvents: "none", opacity: 0.8 }} />
@@ -277,10 +285,10 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
             const sh = shapes.get(sp.id);
             if (!sh) return null;
             const b = boundsOf(sh.pts);
-            if ((b.maxX - b.minX) * view.k < 60) return null;
+            if ((b.maxX - b.minX) * view.k < 44) return null;
             const mins = Number(sp.estimatedCleaningMinutes) || 0;
             return (
-              <g key={"l" + sp.id} className="prolabel" transform={`translate(${sh.c.x} ${sh.c.y}) scale(${1 / Math.max(0.6, view.k)})`}>
+              <g key={"l" + sp.id} className="prolabel" transform={`translate(${sh.c.x} ${sh.c.y}) scale(${1 / Math.max(0.34, view.k)})`}>
                 {flagFor?.(sp) && <text className="proflag" y={-22}>{flagFor(sp)}</text>}
                 <text y={-4}>{sp.roomNumber || sp.roomName}</text>
                 <text className="sub" y={12}>{Math.round(Number(sp.squareFeet) || 0)} ft² · {mins}m</text>
@@ -308,6 +316,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
         <button aria-label="Fit plan" onClick={() => {
           const svg = svgRef.current;
           if (!svg) return;
+          userDrove.current = false;
           const w = svg.clientWidth || 1000, h = svg.clientHeight || 640;
           const k = Math.min(w / plan.w, h / plan.h) * 0.94;
           setView({ k, tx: (w - plan.w * k) / 2, ty: (h - plan.h * k) / 2 });

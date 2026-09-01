@@ -157,16 +157,39 @@ export function parseRoverUtterance(text: string, rules: Rules): RoverParse {
   }
   if (!typed) {
     let best: { at: number; spoken: string; label: string } | null = null;
+    let hits = 0;
     for (const [spoken, label] of vocab) {
       const at = t.indexOf(" " + spoken + " ");
-      if (at >= 0 && (best === null || at < best.at ||
-        (at === best.at && spoken.length > best.spoken.length))) {
+      if (at < 0) continue;
+      // count every occurrence of the winning phrase later; here pick earliest
+      if (best === null || at < best.at || (at === best.at && spoken.length > best.spoken.length)) {
         best = { at, spoken, label };
       }
     }
     if (best) {
       draft.roomType = best.label;
-      t = t.slice(0, best.at) + " " + t.slice(best.at + best.spoken.length + 1);
+      const needle = " " + best.spoken + " ";
+      for (let i = t.indexOf(needle); i >= 0; i = t.indexOf(needle, i + 1)) hits++;
+      // Josh's rule (2026-09-01): one mention can serve BOTH fields. "Dr
+      // Smith's office" or "exam room one" names the room WITH its type in
+      // the phrase — so when the type phrase appears once and has a real
+      // word right before it (…smith's OFFICE) or a short tag right after
+      // it (exam room ONE / exam room B), it stays in the room NAME too.
+      // Said twice ("office dr smith's office"), the first is the type and
+      // only the second belongs to the name — exactly as before.
+      const before = t.slice(0, best.at).trim().split(/\s+/).filter(Boolean).pop() ?? "";
+      const after = t.slice(best.at + best.spoken.length + 2).trim().split(/\s+/)[0] ?? "";
+      const beforeIsWord = !!before && !FILLERS.has(before) && !/^\d/.test(before);
+      const afterIsTag = !!after && (/^\d+$/.test(after) || after in NUM_WORDS || /^[a-z]$/.test(after));
+      const keepInName = hits === 1 && (beforeIsWord || afterIsTag);
+      if (!keepInName) {
+        t = t.slice(0, best.at) + " " + t.slice(best.at + best.spoken.length + 1);
+      } else {
+        // bind the kept phrase into one token so the filler strip below
+        // can't eat its "room" ("exam~room" survives, then unbinds)
+        t = t.slice(0, best.at + 1) + best.spoken.replace(/ /g, "~") +
+          t.slice(best.at + 1 + best.spoken.length);
+      }
     }
   }
 
@@ -178,7 +201,7 @@ export function parseRoverUtterance(text: string, rules: Rules): RoverParse {
   if (!nameRaw) {
     nameRaw = t.split(/\s+/).filter((w) => w && !FILLERS.has(w)).join(" ");
   }
-  nameRaw = nameRaw.replace(/\s+s\b/g, "'s").replace(/\s+/g, " ").trim();
+  nameRaw = nameRaw.replace(/~/g, " ").replace(/\s+s\b/g, "'s").replace(/\s+/g, " ").trim();
   if (nameRaw) {
     // Title Case, keeping possessives ("dr smith's office" → "Dr Smith's Office")
     draft.roomName = nameRaw.split(" ")
