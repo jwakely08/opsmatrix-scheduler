@@ -20,7 +20,7 @@ OpsMatrix is Josh Wakely's hospital EVS (Environmental Services) operations plat
 ## Commands
 
 ```
-npm test               # vitest — 172 tests, must stay green
+npm test               # vitest — 193 tests, must stay green
 npm run build:classic  # REQUIRED after touching src/bridge/*, src/pro/rules.ts, or scripts/fusion-*.js — else classic.html ships stale (the #1 gotcha)
 npm run build          # MPA build: index.html + maps.html
 npm run dev            # vite dev server on 5173 (serves /classic.html and /test-fixtures/* too)

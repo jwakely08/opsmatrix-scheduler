@@ -1,0 +1,11 @@
+# Cloudflare Pages redirects (GitHub Pages ignores this file — it deploys as
+# a plain text asset there, harmlessly).
+#
+# The site root used to serve the DEPRECATED early scheduler (surface C),
+# which cost the first staging smoke test real confusion: the bare domain
+# looked like "the app lost all its features." The real product entrance is
+# classic.html (the Dashboard) — its sign-in gate takes over from there.
+# Cloudflare also normalizes /index.html to /, so this fences off the old
+# prototype on cloud deployments entirely; full retirement is tracked in the
+# roadmap backlog.
+/ /classic.html 302

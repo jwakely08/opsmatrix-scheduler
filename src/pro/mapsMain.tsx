@@ -1,15 +1,23 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { MapsApp } from "./MapsApp";
+import { AuthGate } from "./AuthGate";
 import { buildClassicDemo, demoStamp } from "../bridge/fusionEntry";
 import { healApiKey, loadApiKey } from "./classicStore";
+import { initMonitoring } from "../lib/logger";
 import "./pro.css";
 import "./print.css";
 
+// error tracking — a no-op unless the build carries VITE_SENTRY_DSN
+initMonitoring();
+
 // Any entrance can restore the demo: ?demo=1 seeds when the saved data is a
 // stale/absent demo (stamped — never touches real imported work).
+// CLOUD builds never seed: demo data must not sync itself into a customer's
+// organization (the demo is the public LOCAL deployment's job).
+import { cloudConfigured } from "./cloudConfig";
 const DEMO_STAMP_KEY = "opsmatrix_v7_demo_stamp";
-if (/[?&]demo=1/.test(window.location.search)) {
+if (!cloudConfigured && /[?&]demo=1/.test(window.location.search)) {
   try {
     const stamp = demoStamp();
     let isDemo = true;
@@ -45,6 +53,10 @@ healApiKey();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <MapsApp />
+    {/* AuthGate is transparent in local/demo builds (no Supabase env) —
+        it only fronts the app in cloud-configured builds */}
+    <AuthGate>
+      <MapsApp />
+    </AuthGate>
   </React.StrictMode>
 );

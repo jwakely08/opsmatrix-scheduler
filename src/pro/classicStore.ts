@@ -21,6 +21,15 @@ import { resolvePendingRoomTypes, loadAliases } from "./roomListImport";
 export type Priority = "High" | "Medium" | "Low";
 export const PRIORITIES: Priority[] = ["High", "Medium", "Low"];
 
+/**
+ * Josh's house numbering: priority is spoken as 1 / 2 / 3, not words.
+ * 1 = must clean (High), 2 = standard (Medium), 3 = can slide (Low).
+ */
+export const PRIORITY_NUM: Record<Priority, string> = { High: "1", Medium: "2", Low: "3" };
+export const PRIORITY_WORD: Record<Priority, string> = {
+  High: "1 — top priority", Medium: "2 — standard", Low: "3 — low"
+};
+
 export interface ClassicSpace {
   id: string;
   roomNumber?: string;
@@ -78,6 +87,9 @@ export interface ClassicPlan {
   img: string;
   w: number;
   h: number;
+  /** the plan's scale: pixels per foot (set when the plan was built to scale).
+   *  Absent = unscaled, so on-plan distances can't be turned into feet. */
+  ratio?: number;
   rooms?: { spaceId: string; pts: { x: number; y: number }[] }[];
   [k: string]: unknown;
 }
@@ -85,9 +97,15 @@ export interface ClassicPlan {
 export interface NonSpaceTask {
   id: string;
   name: string;
+  /** total hours — legacy sizing, and kept in sync for counted tasks */
   hours: number;
   scheduleId: string;
   roomIds: string[];
+  /** counted (2026-08-31) model: which Scope def, how many occurrences */
+  defId?: string;
+  count?: number;
+  /** minutes per occurrence at add time (def minutes + qualifiers) */
+  minutesPer?: number;
 }
 
 const V7 = "opsmatrix_v7";
@@ -270,6 +288,9 @@ export function coverageForSpace(data: ClassicData, spaceId: string): Coverage[]
   const out: Coverage[] = [];
   for (const sched of data.v7.schedules ?? []) {
     if (sched.projectNoteId) continue;
+    // a Sanitation/Policing route VISITS rooms — it never covers their
+    // cleaning tasks, so it stays out of coverage entirely
+    if (sched.routeOnly) continue;
     if (!(sched.spaceOrder ?? []).includes(spaceId)) continue;
     const { primary, tasks } = fromClassicRoomTasks(sched.roomTasks?.[spaceId]);
     out.push({ scheduleId: sched.id, primary, tasks });
@@ -355,8 +376,11 @@ export function coverageMinutes(rules: Rules, space: ClassicSpace, cov: Coverage
 
 export function scheduleMinutes(data: ClassicData, rules: Rules, sched: ClassicSchedule): number {
   // a schedule shipped from Max Floor Care carries its equipment-priced
-  // total (a rider scrubs a corridor far faster than the generic task rate)
+  // total (a rider scrubs a corridor far faster than the generic task rate);
+  // Sanitation/Policing routes carry their distance/pass-priced total the
+  // same way
   if (Number(sched.floorCareMinutes) > 0) return Number(sched.floorCareMinutes);
+  if (Number(sched.fixedMinutes) > 0) return Number(sched.fixedMinutes);
   const spaces = data.v7.spaces ?? [];
   let total = 0;
   for (const id of sched.spaceOrder ?? []) {
@@ -366,16 +390,24 @@ export function scheduleMinutes(data: ClassicData, rules: Rules, sched: ClassicS
     total += computeMinutes(rules, sp, { tasks, includeBase: primary }).total;
   }
   for (const t of data.nonSpace) {
-    if (t.scheduleId === sched.id) total += t.hours * 60;
+    if (t.scheduleId === sched.id) total += nonSpaceTaskMinutes(t);
   }
   return total;
 }
 
+/** one non-space entry's minutes: counted model when present, else the block */
+export function nonSpaceTaskMinutes(t: NonSpaceTask): number {
+  if (Number(t.count) > 0 && Number(t.minutesPer) > 0) {
+    return Number(t.count) * Number(t.minutesPer);
+  }
+  return (Number(t.hours) || 0) * 60;
+}
+
 // ── schedule CRUD ────────────────────────────────────────────────────────────
 
-const SCHED_COLORS = ["#22c55e", "#3b82f6", "#eab308", "#ec4899", "#8b5cf6", "#14b8a6", "#f97316", "#06b6d4"];
+export const SCHED_COLORS = ["#22c55e", "#3b82f6", "#eab308", "#ec4899", "#8b5cf6", "#14b8a6", "#f97316", "#06b6d4"];
 
-export function createSchedule(data: ClassicData, name: string, shift: string, employeeId: string): ClassicSchedule {
+export function createSchedule(data: ClassicData, name: string, shift: string, employeeId: string, color?: string): ClassicSchedule {
   const scheds = data.v7.schedules ?? (data.v7.schedules = []);
   const used = scheds.map((s) => s.color);
   const emp = (data.v7.employees ?? []).find((e) => e.id === employeeId);
@@ -385,7 +417,7 @@ export function createSchedule(data: ClassicData, name: string, shift: string, e
     name, shift,
     employeeId: employeeId || "",
     employee: emp ? String(emp.displayName ?? "") : "",
-    color: SCHED_COLORS.find((c) => !used.includes(c)) ?? SCHED_COLORS[scheds.length % SCHED_COLORS.length],
+    color: color || (SCHED_COLORS.find((c) => !used.includes(c)) ?? SCHED_COLORS[scheds.length % SCHED_COLORS.length]),
     targetHours: 8,
     spaceOrder: [], roomTasks: {}, tasks: [], notes: "",
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
@@ -406,7 +438,7 @@ export function deleteSchedule(data: ClassicData, scheduleId: string) {
 
 export function scheduleColor(schedules: ClassicSchedule[], id: string | undefined): string {
   const s = schedules.find((x) => x.id === id);
-  return (s?.color as string) || "#64748b";
+  return (s?.color as string) || "#517299"; // unscheduled reads holo slate-blue
 }
 
 /**
@@ -432,6 +464,46 @@ export function moveInSchedule(data: ClassicData, scheduleId: string, spaceId: s
   [order[i], order[j]] = [order[j], order[i]];
   sched.spaceOrder = order;
   sched.updatedAt = new Date().toISOString();
+}
+
+/**
+ * Remove a room everywhere it is referenced: the space list, every schedule's
+ * running order and task map, and any non-space task's linked rooms. Deleting
+ * from a table must never leave a schedule pointing at a ghost.
+ */
+export function deleteSpace(data: ClassicData, spaceId: string) {
+  data.v7.spaces = (data.v7.spaces ?? []).filter((s) => s.id !== spaceId);
+  for (const sched of data.v7.schedules ?? []) {
+    if ((sched.spaceOrder ?? []).includes(spaceId)) {
+      sched.spaceOrder = (sched.spaceOrder ?? []).filter((id) => id !== spaceId);
+    }
+    if (sched.roomTasks && sched.roomTasks[spaceId]) delete sched.roomTasks[spaceId];
+  }
+  for (const t of data.nonSpace) {
+    t.roomIds = (t.roomIds ?? []).filter((id) => id !== spaceId);
+  }
+}
+
+/**
+ * Copy a room's DATA — number gets a "-copy" suffix so it is findable and
+ * obviously needs renaming. The copy never inherits geometry (two rooms on
+ * the same outline would be un-clickable) or any schedule assignment.
+ */
+export function duplicateSpace(data: ClassicData, spaceId: string): ClassicSpace | null {
+  const src = (data.v7.spaces ?? []).find((s) => s.id === spaceId);
+  if (!src) return null;
+  const copy: ClassicSpace = {
+    ...JSON.parse(JSON.stringify(src)),
+    id: "sp-" + Math.random().toString(36).slice(2, 9),
+    roomNumber: String(src.roomNumber ?? "") + "-copy",
+    assignedScheduleId: "",
+    updatedAt: new Date().toISOString()
+  };
+  delete copy.visualPts;
+  delete copy.visualPlanId;
+  delete copy.source; // the copy is manual data, not the import's row
+  (data.v7.spaces ?? []).push(copy);
+  return copy;
 }
 
 /** the three floor finishes (wax or no wax, plus carpet) */

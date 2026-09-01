@@ -36,11 +36,35 @@ export interface RoomTypeRule {
   builtIn?: boolean;
 }
 
-/** reusable non-space work definitions (discharges, sanitation routes, porters) */
+/**
+ * Reusable non-space work definitions (discharges, porters). Reworked
+ * 2026-08-31 (Josh): a non-space task is priced PER OCCURRENCE — minutes for
+ * one discharge — plus its attached qualifiers (travel time between
+ * discharges). Schedules pick a def and a COUNT in Max Schedules; adding to
+ * a schedule from Scope is gone.
+ */
 export interface NonSpaceDef {
   id: string;
   label: string;
+  /** legacy flat-block sizing (pre-2026-08-31 schedules still carry hours) */
   defaultHours: number;
+  /** minutes ONE occurrence takes (one discharge, one run) */
+  minutes: number;
+  /** qualifiers added per occurrence (e.g. travel time) */
+  qualifierIds: string[];
+  builtIn?: boolean;
+}
+
+/**
+ * A per-occurrence add-on for non-space tasks. Travel time is built in: no
+ * published industry standard breaks it out separately (terminal-clean
+ * standards fold it into the 35–45 min figure), so the 5-minute default is
+ * an honest editable starting point, not gospel.
+ */
+export interface NonSpaceQualifier {
+  id: string;
+  label: string;
+  minutes: number;
   builtIn?: boolean;
 }
 
@@ -61,8 +85,19 @@ export interface BreakRule {
 export interface Rules {
   version: number;
   general: {
-    hardSqftPerMin: number;    // includes damp mop on hard floor
-    carpetSqftPerMin: number;  // includes vacuuming pass
+    hardSqftPerMin: number;    // includes damp mop on hard floor (unless mopIncluded is off)
+    carpetSqftPerMin: number;  // includes vacuuming pass (unless vacuumIncluded is off)
+    /** does the hard-floor rate include mopping? off = schedule Mopping as its own task */
+    mopIncluded: boolean;
+    /** does the carpet rate include vacuuming? off = schedule Vacuuming as its own task */
+    vacuumIncluded: boolean;
+    /**
+     * The nuclear option: the General Clean formula itself was deleted in
+     * Scope. Rooms then price ONLY their explicit tasks + type qualifier —
+     * the warning in Scope says exactly that until it's restored or a
+     * replacement per-sq-ft task exists.
+     */
+    formulaOff?: boolean;
     minMinutes: number;
     /**
      * Productive cleaning minutes in one shift, breaks and setup excluded.
@@ -76,6 +111,7 @@ export interface Rules {
   tasks: TaskRule[];
   roomTypes: RoomTypeRule[];
   nonSpaceDefs: NonSpaceDef[];
+  nonSpaceQualifiers: NonSpaceQualifier[];
   breaks: BreakRule[];
 }
 
@@ -88,7 +124,10 @@ export const RULES_KEY = "opsmatrix_fusion_rules";
 export function defaultRules(): Rules {
   return {
     version: 1,
-    general: { hardSqftPerMin: 33, carpetSqftPerMin: 40, minMinutes: 3, productiveMinutes: 420, shiftsPerWeekPerFte: 5 },
+    general: {
+      hardSqftPerMin: 33, carpetSqftPerMin: 40, mopIncluded: true, vacuumIncluded: true,
+      minMinutes: 3, productiveMinutes: 420, shiftsPerWeekPerFte: 5
+    },
     tasks: [
       // floor-tech work (Max Floor Care owns scheduling these)
       { id: "auto-scrub", label: "Machine Scrubbing", sqftPerMin: 200, flatMin: 0, autoFor: ["corridor", "hallway"], addable: true, floorCare: true, builtIn: true },
@@ -98,7 +137,12 @@ export function defaultRules(): Rules {
       { id: "machine-carpet", label: "Machine Carpet Cleaning", sqftPerMin: 180, flatMin: 0, autoFor: [], addable: true, floorCare: true, builtIn: true },
       // everyone-else tasks
       { id: "high-dusting", label: "High Dusting", sqftPerMin: 120, flatMin: 0, autoFor: [], addable: true, builtIn: true },
-      { id: "trash-pull", label: "Trash Pull", sqftPerMin: null, flatMin: 2, autoFor: [], addable: true, builtIn: true }
+      { id: "trash-pull", label: "Trash Pull", sqftPerMin: null, flatMin: 2, autoFor: [], addable: true, builtIn: true },
+      // standalone mopping/vacuuming (Josh, 2026-08-31): normally the General
+      // Clean rate includes them, but with the formula toggles off — or the
+      // formula deleted — these price the work as explicit space tasks
+      { id: "damp-mop", label: "Mopping", sqftPerMin: 60, flatMin: 0, autoFor: [], addable: true, builtIn: true },
+      { id: "vacuum", label: "Vacuuming", sqftPerMin: 55, flatMin: 0, autoFor: [], addable: true, builtIn: true }
     ],
     roomTypes: [
       { id: "office", label: "Office", qualifierMin: 0, frequency: "5x / week", builtIn: true },
@@ -127,10 +171,15 @@ export function defaultRules(): Rules {
       { id: "shell-space", label: "Shell Space", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true },
       { id: "roof", label: "Roof", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true }
     ],
+    // Sanitation Route left this list 2026-08-31 — routes are built in the
+    // Max Sanitation engine now, not booked as a flat block of hours.
     nonSpaceDefs: [
-      { id: "discharge", label: "Discharges", defaultHours: 2, builtIn: true },
-      { id: "sanitation-route", label: "Sanitation Route", defaultHours: 3, builtIn: true },
-      { id: "day-porter", label: "Day Porter", defaultHours: 8, builtIn: true }
+      // 40 min = the middle of the published 35–45 min terminal-clean range
+      { id: "discharge", label: "Discharges", defaultHours: 2, minutes: 40, qualifierIds: ["travel-time"], builtIn: true },
+      { id: "day-porter", label: "Day Porter", defaultHours: 8, minutes: 480, qualifierIds: [], builtIn: true }
+    ],
+    nonSpaceQualifiers: [
+      { id: "travel-time", label: "Travel time", minutes: 5, builtIn: true }
     ],
     breaks: [
       { id: "break-am", label: "Morning Break", minutes: 15, start: "9:30 AM", builtIn: true },
@@ -140,27 +189,44 @@ export function defaultRules(): Rules {
   };
 }
 
+/** ids of built-ins the account deliberately deleted — stamped by saveRules
+ *  so loadRules doesn't resurrect them on the next visit */
+interface DeletedBuiltIns {
+  tasks?: string[]; roomTypes?: string[]; nonSpaceDefs?: string[]; nonSpaceQualifiers?: string[];
+}
+
 export function loadRules(): Rules {
   try {
     const raw = localStorage.getItem(RULES_KEY);
     if (!raw) return defaultRules();
     const parsed = JSON.parse(raw);
     const def = defaultRules();
-    // merge: keep user edits, guarantee every built-in exists
+    const gone: DeletedBuiltIns = (parsed.deletedBuiltIns && typeof parsed.deletedBuiltIns === "object")
+      ? parsed.deletedBuiltIns : {};
+    // merge: keep user edits, guarantee every built-in exists — EXCEPT the
+    // ones the account deleted on purpose (the tombstones saveRules stamps)
     const rules: Rules = {
       version: 1,
       general: { ...def.general, ...(parsed.general ?? {}) },
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : def.tasks,
       roomTypes: Array.isArray(parsed.roomTypes) ? parsed.roomTypes : def.roomTypes,
       nonSpaceDefs: def.nonSpaceDefs,
+      nonSpaceQualifiers: Array.isArray(parsed.nonSpaceQualifiers) ? parsed.nonSpaceQualifiers : def.nonSpaceQualifiers,
       // an account that predates break setup keeps the standard ones
       breaks: Array.isArray(parsed.breaks) ? parsed.breaks : def.breaks
     };
     rules.nonSpaceDefs = Array.isArray(parsed.nonSpaceDefs) ? parsed.nonSpaceDefs : def.nonSpaceDefs;
+    // Sanitation Route retired 2026-08-31: the Max Sanitation engine builds
+    // routes now. The stock def goes away; a renamed/custom one stays.
+    rules.nonSpaceDefs = rules.nonSpaceDefs.filter(
+      (x: NonSpaceDef) => !(x.id === "sanitation-route" && x.builtIn && x.label === "Sanitation Route"));
     const OLD_TASK_LABELS: Record<string, string> = { "auto-scrub": "Auto Scrub", "dust-mop": "Dust Mop" };
     for (const t of def.tasks) {
       const saved = rules.tasks.find((x: TaskRule) => x.id === t.id);
-      if (!saved) { rules.tasks.push(t); continue; }
+      if (!saved) {
+        if (!gone.tasks?.includes(t.id)) rules.tasks.push(t);
+        continue;
+      }
       // floor-care membership is structural, not a per-account edit
       if (t.floorCare) saved.floorCare = true;
       // accounts saved before the rename keep custom labels, but the old
@@ -168,13 +234,33 @@ export function loadRules(): Rules {
       if (saved.label === OLD_TASK_LABELS[t.id]) saved.label = t.label;
     }
     for (const rt of def.roomTypes) {
-      if (!rules.roomTypes.some((x: RoomTypeRule) => x.id === rt.id)) rules.roomTypes.push(rt);
+      if (!rules.roomTypes.some((x: RoomTypeRule) => x.id === rt.id) && !gone.roomTypes?.includes(rt.id)) {
+        rules.roomTypes.push(rt);
+      }
     }
     for (const rt of rules.roomTypes) {
       if (!rt.frequency) rt.frequency = def.roomTypes.find((x) => x.id === rt.id)?.frequency ?? "7x / week";
     }
     for (const ns of def.nonSpaceDefs) {
-      if (!rules.nonSpaceDefs.some((x: NonSpaceDef) => x.id === ns.id)) rules.nonSpaceDefs.push(ns);
+      if (!rules.nonSpaceDefs.some((x: NonSpaceDef) => x.id === ns.id) && !gone.nonSpaceDefs?.includes(ns.id)) {
+        rules.nonSpaceDefs.push(ns);
+      }
+    }
+    for (const q of def.nonSpaceQualifiers) {
+      if (!rules.nonSpaceQualifiers.some((x: NonSpaceQualifier) => x.id === q.id) && !gone.nonSpaceQualifiers?.includes(q.id)) {
+        rules.nonSpaceQualifiers.push(q);
+      }
+    }
+    // per-occurrence migration: defs saved before minutes existed derive it
+    // from their hours block (their built-in default when they still match)
+    for (const ns of rules.nonSpaceDefs) {
+      if (!(Number(ns.minutes) > 0)) {
+        ns.minutes = def.nonSpaceDefs.find((x) => x.id === ns.id)?.minutes
+          ?? (Math.round((Number(ns.defaultHours) || 0) * 60) || 30);
+      }
+      if (!Array.isArray(ns.qualifierIds)) {
+        ns.qualifierIds = def.nonSpaceDefs.find((x) => x.id === ns.id)?.qualifierIds ?? [];
+      }
     }
     return rules;
   } catch {
@@ -183,7 +269,33 @@ export function loadRules(): Rules {
 }
 
 export function saveRules(rules: Rules) {
-  localStorage.setItem(RULES_KEY, JSON.stringify(rules));
+  // stamp the tombstones: built-ins missing from the lists were DELETED by
+  // the account, and must not come back on the next load
+  const def = defaultRules();
+  const missing = (defs: { id: string }[], cur: { id: string }[]) =>
+    defs.filter((d) => !cur.some((c) => c.id === d.id)).map((d) => d.id);
+  const stamped = {
+    ...rules,
+    deletedBuiltIns: {
+      tasks: missing(def.tasks, rules.tasks),
+      roomTypes: missing(def.roomTypes, rules.roomTypes),
+      nonSpaceDefs: missing(def.nonSpaceDefs, rules.nonSpaceDefs),
+      nonSpaceQualifiers: missing(def.nonSpaceQualifiers, rules.nonSpaceQualifiers ?? [])
+    }
+  };
+  localStorage.setItem(RULES_KEY, JSON.stringify(stamped));
+}
+
+/**
+ * Minutes a schedule spends on `count` occurrences of a non-space task:
+ * count × (the task's own minutes + every attached qualifier's minutes).
+ * Five discharges at 40 min with 5-min travel = 5 × 45 = 225.
+ */
+export function nonSpaceOccurrenceMinutes(rules: Rules, def: NonSpaceDef): number {
+  const qual = (def.qualifierIds ?? [])
+    .map((id) => rules.nonSpaceQualifiers.find((q) => q.id === id)?.minutes ?? 0)
+    .reduce((s, m) => s + m, 0);
+  return (Number(def.minutes) || 0) + qual;
 }
 
 export function typeIdFromLabel(rules: Rules, label: string): string {
@@ -295,12 +407,34 @@ export interface SpaceLike {
   spaceTasks?: string[];
   /** legacy field name, migrated on read */
   fusionTasks?: string[];
+  /** floor-care tasks the manager marked "does not need" for this room */
+  fcNotNeeded?: string[];
 }
 
 export function requiredTasks(rules: Rules, space: SpaceLike): string[] {
   const explicit = space.spaceTasks ?? space.fusionTasks;
   if (Array.isArray(explicit)) return explicit;
   return autoTasksFor(rules, typeIdFromLabel(rules, space.roomType ?? ""));
+}
+
+/** is this task the floor crew's (scheduled ONLY in Max Floor Care)? */
+export function isFloorCareTask(rules: Rules, taskId: string): boolean {
+  return Boolean(rules.tasks.find((t) => t.id === taskId)?.floorCare);
+}
+
+/**
+ * A room's required tasks split by WHO schedules them (Josh's rule,
+ * 2026-08-28: floor-care work — machine scrubbing, dust mopping, burnishing,
+ * machine sweeping, machine carpet cleaning, and anything a manager flags as
+ * floor care in Scope — can never be put on a schedule in Max Schedules;
+ * it belongs to Max Floor Care exclusively).
+ */
+export function splitRequiredTasks(rules: Rules, space: SpaceLike): { cleaning: string[]; floorCare: string[] } {
+  const req = requiredTasks(rules, space);
+  return {
+    cleaning: req.filter((id) => !isFloorCareTask(rules, id)),
+    floorCare: req.filter((id) => isFloorCareTask(rules, id))
+  };
 }
 
 export interface MinuteOptions {
@@ -324,10 +458,13 @@ export function computeMinutes(
   const includeBase = opts?.includeBase !== false;
   const lines: MinuteLine[] = [];
 
-  if (includeBase) {
+  if (includeBase && !rules.general.formulaOff) {
     const per = carpet ? rules.general.carpetSqftPerMin : rules.general.hardSqftPerMin;
+    const included = carpet
+      ? (rules.general.vacuumIncluded !== false ? "carpet, vacuuming included" : "carpet")
+      : (rules.general.mopIncluded !== false ? "hard floor, mopping included" : "hard floor");
     lines.push({
-      label: `General cleaning — 1 min per ${per} sq ft (${carpet ? "carpet, vacuuming included" : "hard floor, mopping included"})`,
+      label: `General cleaning — 1 min per ${per} sq ft (${included})`,
       minutes: per > 0 ? sqft / per : 0
     });
     const rt = rules.roomTypes.find((x) => x.id === typeIdFromLabel(rules, space.roomType ?? ""));

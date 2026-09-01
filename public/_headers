@@ -1,0 +1,15 @@
+# Security headers, served by Cloudflare Pages (GitHub Pages ignores this
+# file — it deploys as a plain text file there, harmlessly).
+#
+# The CSP ships REPORT-ONLY first (roadmap Stage 10): watch the console in
+# staging for a week, then promote the same policy to enforcing by renaming
+# the header to Content-Security-Policy. script-src needs 'unsafe-inline'
+# because classic.html is a generated single file with inline scripts;
+# style-src likewise (React inline styles + the archive's styles).
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: camera=(), geolocation=(), microphone=(self)
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://api.anthropic.com https://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'

@@ -7,13 +7,14 @@
 // SUGGESTIONS the user approves; approvals are saved as aliases so the same
 // question is never asked twice. Same API, key and conventions as the floor
 // plan reader — no second AI provider, no second key.
-import { AiPlanError } from "./aiPlanImport";
+import { AiPlanError, anthropicRequest, type AiProxy } from "./aiPlanImport";
 
-const API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-fable-5";
 
 export interface SuggestOptions {
   apiKey: string;
+  /** cloud builds: route through the server-side proxy instead of the key */
+  proxy?: AiProxy | null;
   /** source room names that need a home, e.g. ["FLUORO CONTROL", "PACS"] */
   names: string[];
   /** the account's Room Type labels, exactly as they exist in Scope */
@@ -59,21 +60,17 @@ const PROMPT = (names: string[], labels: string[]) =>
  */
 export async function suggestRoomTypes(opts: SuggestOptions): Promise<Map<string, string | null>> {
   const key = (opts.apiKey || "").trim();
-  if (!key) throw new AiPlanError("No Anthropic API key saved yet. Save one first — one time only.");
+  if (!key && !opts.proxy) throw new AiPlanError("No Anthropic API key saved yet. Save one first — one time only.");
   const names = [...new Set(opts.names.map((n) => n.trim()).filter(Boolean))].slice(0, 200);
   if (!names.length) return new Map();
 
+  const t = anthropicRequest(key, opts.proxy, "room-types");
   let res: Response;
   try {
-    res = await fetch(API_URL, {
+    res = await fetch(t.url, {
       method: "POST",
       signal: opts.signal,
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
+      headers: t.headers,
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 8000,

@@ -1,77 +1,164 @@
-// "Read a floor plan with Max" — pick a picture or PDF of any floor plan and
-// let Claude Fable 5 turn it into a real OpsMatrix plan: rooms traced, room
-// numbers and printed areas captured, and the whole thing redrawn in the app's
-// own style so it looks like every other plan in the system.
-import React, { useRef, useState } from "react";
-import { importPlanFromImage, AiPlanError } from "../bridge/aiPlanImport";
-import { attachPlanToRooms } from "./roomListImport";
+// The ONE front door for floor plans (picture, PDF, or CAD/DXF). One
+// consistent order, every time (Josh's spec, 2026-08-28):
+//   1. Building + floor.
+//   2. THE QUESTION — does the file state room sizes?
+//      • Yes → Max reads everything, plan arrives to scale (unchanged flow).
+//      • No  → the PLAN STUDIO opens: trace a room you know with the snap
+//        engine, type its square footage (that's the calibration), then let
+//        Max draw the rest — sized from YOUR calibration, every AI shape
+//        draggable and re-snappable. Max never reads before you calibrate.
+//   3. Either way the plan is rebuilt matrix-style; the upload is never
+//      shown back.
+import React, { useEffect, useRef, useState } from "react";
+import { readPlanWithAI, locateDrawing, padBox, AiPlanError } from "../bridge/aiPlanImport";
+import { createPortal } from "react-dom";
 import { planFileToImage, isPdf } from "./planFile";
+import { dxfToPicture, isDxf, isDwg } from "./dxfRaster";
 import { loadApiKey, saveApiKey } from "./classicStore";
+import { aiProxy } from "./aiTransport";
+import { PlanStudio, type StudioPicture, type AiRoomSeed } from "./PlanStudio";
 import type { ClassicData } from "./classicStore";
+import type { Rules } from "./rules";
 
 type Phase = "form" | "working" | "done" | "error";
+type ReadMode = "read" | "calibrate";
 
-/**
- * Controlled modal — the ⬆ Upload hub owns the trigger. There is exactly one
- * way a floor plan comes into OpsMatrix: Max reads it. (Josh's order,
- * 2026-08-24: no manual "upload as a picture" path.)
- */
-export function AiPlanImport({ commit, onImported, open, onClose }: {
+export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, rules }: {
   commit: (mut: (d: ClassicData) => void) => void;
   onImported: () => void;
   open: boolean;
   onClose: () => void;
+  /** open straight into one mode (e.g. classic's "no sizes" tile) */
+  defaultMode?: ReadMode;
+  rules: Rules;
 }) {
   const [phase, setPhase] = useState<Phase>("form");
+  const [step, setStep] = useState<"choice" | "form">(defaultMode ? "form" : "choice");
+  const [mode, setMode] = useState<ReadMode>(defaultMode ?? "read");
+  const [studioPic, setStudioPic] = useState<StudioPicture | null>(null);
+  const [studioSeeds, setStudioSeeds] = useState<AiRoomSeed[]>([]);
+  const [studioNotice, setStudioNotice] = useState("");
+  const [studioSized, setStudioSized] = useState(false);
+  // the hierarchy is entered UP FRONT (Josh: account → building → floor,
+  // departments are chosen per room later): account prefills from what the
+  // device already knows
+  const [account, setAccount] = useState(() => {
+    try {
+      const v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") ?? "{}") ?? {};
+      const systems = [...new Set(((v7.spaces ?? []) as { system?: string }[])
+        .map((sp) => String(sp.system ?? "").trim()).filter(Boolean))];
+      if (systems.length === 1) return systems[0];
+      return String((v7.settings ?? {}).orgName ?? (v7.settings ?? {}).campus ?? "").trim();
+    } catch { return ""; }
+  });
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [apiKey, setApiKey] = useState<string>(() => loadApiKey());
   const [keySaved, setKeySaved] = useState<boolean>(() => Boolean(loadApiKey()));
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
-  const [result, setResult] = useState<{ rooms: number; printed: number; scaled: boolean } | null>(null);
+  const [result, setResult] = useState<{ rooms: number; printed: number; scaled: boolean; calibrated: boolean } | null>(null);
+  // cloud accounts: AI reading is included — the server holds the key
+  const [proxied, setProxied] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const close = () => { setPhase("form"); setError(""); setStatus(""); setResult(null); onClose(); };
+  useEffect(() => { void aiProxy().then((p) => setProxied(Boolean(p))); }, []);
+
+  const close = () => {
+    setPhase("form");
+    setStep(defaultMode ? "form" : "choice");
+    setMode(defaultMode ?? "read");
+    setStudioPic(null);
+    setError(""); setStatus(""); setResult(null);
+    onClose();
+  };
+
+  // There is no second write path any more: EVERY plan — read or calibrated —
+  // is shipped by the Calibration Editor (PlanStudio.ship), so the manager
+  // always sees and approves the rooms before they land in Max Space.
+
+  /** any accepted file → a picture (photos, PDFs rasterised, DXF drawn) */
+  async function fileToPicture(file: File) {
+    if (isDwg(file)) {
+      throw new AiPlanError(
+        "DWG is a closed format this browser can't open. Export the drawing as DXF or as a PDF and upload that instead."
+      );
+    }
+    if (isDxf(file)) {
+      setStatus("Drawing the CAD file…");
+      return { ...dxfToPicture(await file.text()), renderRegion: undefined };
+    }
+    setStatus(isPdf(file) ? "Opening the PDF…" : "Opening the image…");
+    return planFileToImage(file);
+  }
 
   async function handleFile(file: File) {
     setPhase("working");
     setError("");
     try {
-      setStatus(isPdf(file) ? "Opening the PDF…" : "Opening the image…");
-      const picture = await planFileToImage(file);
+      const picture = await fileToPicture(file);
 
+      // BOTH modes go through the Calibration Editor now (Josh, 2026-08-31:
+      // "I want the same process in place, the same editor and everything,
+      // for when you upload floor plans or CAD files WITH information — the
+      // only difference is all the data is preloaded"). Max reads first;
+      // the editor opens with whatever it found, and approval happens on
+      // 🚀 Ship to Max Space either way.
       const key = apiKey.trim();
       if (key && key !== loadApiKey()) saveApiKey(key);
-
-      const imported = await importPlanFromImage({
-        apiKey: key,
-        imageDataUrl: picture.dataUrl,
-        imageWidth: picture.width,
-        imageHeight: picture.height,
-        aspect: picture.aspect,
-        renderRegion: picture.renderRegion,
-        building,
-        floor,
-        onProgress: setStatus
+      const proxy = await aiProxy();
+      let seeds: AiRoomSeed[] = [];
+      let noticeMsg = "";
+      let read = false;
+      // read mode (Josh, 2026-09-01): the sheet often carries legends, title
+      // blocks and notes — Max first LOCATES the floor plan itself and the
+      // rest of the page is cropped away, so only the interior rooms are
+      // read and only the drawing shows in the editor
+      let pic = picture;
+      if (mode === "read" && (key || proxy)) {
+        try {
+          setStatus("Max is finding the floor plan on the page…");
+          const box = await locateDrawing({ apiKey: key, proxy, imageDataUrl: picture.dataUrl });
+          const rr = (picture as { renderRegion?: (b: ReturnType<typeof padBox>, t: number) => Promise<typeof picture> }).renderRegion;
+          if (box && rr) pic = await rr(padBox(box), 2576);
+        } catch { /* the crop is an optimisation — read the full page instead */ }
+      }
+      if (key || proxy) {
+        try {
+          setStatus(mode === "read" ? "Max is reading the floor plan…" : "Max is drawing the floor plan…");
+          const reading = await readPlanWithAI({
+            apiKey: key, proxy,
+            imageDataUrl: pic.dataUrl,
+            imageWidth: pic.width, imageHeight: pic.height,
+            building, floor, onProgress: setStatus
+          });
+          seeds = reading.rooms.map((r) => ({
+            name: r.name, roomNumber: r.roomNumber, roomType: r.roomType, polygon: r.polygon,
+            // read mode keeps the sizes stated on the plan; calibrate mode
+            // ignores them (there weren't any to state)
+            squareFeet: mode === "read" ? r.squareFeet : 0
+          }));
+          read = mode === "read" && seeds.some((s) => Number(s.squareFeet) > 0);
+          if (mode === "read" && !read) {
+            noticeMsg = "Max didn't find a square footage stated for any room. " +
+              "Calibrate up to three rooms you know instead, then measure them all.";
+          }
+        } catch (e) {
+          noticeMsg = "Max couldn't read this plan (" +
+            (e instanceof AiPlanError ? e.message : String((e as Error)?.message ?? e)) +
+            ") — trace the rooms by hand, or try ✨ Max draws the rooms again.";
+        }
+      } else {
+        noticeMsg = "No API key saved, so Max can't draw yet — trace the rooms by hand, or save a key and use ✨ Max draws the rooms.";
+      }
+      setPhase("form");
+      setStudioSeeds(seeds);
+      setStudioNotice(noticeMsg);
+      setStudioSized(read);
+      setStudioPic({
+        dataUrl: pic.dataUrl, width: pic.width,
+        height: pic.height, aspect: pic.aspect
       });
-
-      commit((d) => {
-        // rooms already imported from a room list get the GEOMETRY attached
-        // to them — a later floor plan never duplicates existing rooms
-        d.v7.spaces = d.v7.spaces ?? [];
-        attachPlanToRooms(d.v7.spaces as never, imported as never);
-        d.plans.push(imported.plan as never);
-        localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans));
-      });
-
-      const printed = imported.spaces.filter((s) => Number(s.squareFeet) > 0).length;
-      setResult({
-        rooms: imported.spaces.length,
-        printed,
-        scaled: Boolean((imported.plan as { ratio?: number }).ratio)
-      });
-      setPhase("done");
     } catch (e) {
       setError(e instanceof AiPlanError ? e.message : String((e as Error)?.message || e));
       setPhase("error");
@@ -80,7 +167,24 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
 
   if (!open) return null;
 
-  return (
+  // the Calibration Editor is full-screen and owns the whole flow —
+  // including shipping to Max Space and saving the editable set
+  if (studioPic) {
+    return (
+      <PlanStudio picture={studioPic} account={account} building={building} floor={floor}
+        rules={rules} initialAiRooms={studioSeeds} initialNotice={studioNotice}
+        sizesFromFile={studioSized}
+        onShipped={(rooms, setSaved) => {
+          setStudioPic(null);
+          setResult({ rooms, printed: rooms, scaled: true, calibrated: true });
+          if (!setSaved) setStatus("Note: the editable calibration set could not be saved (storage full) — the floor plan itself is in.");
+          setPhase("done");
+        }}
+        onCancel={() => setStudioPic(null)} />
+    );
+  }
+
+  return createPortal(
     <>
       {(
         <div className="pro-modalback" onClick={(e) => {
@@ -88,36 +192,68 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
         }}>
           <div className="pro-modal aiplan">
             <div className="pshead">
-              <h2>✨ Read a floor plan with Max</h2>
+              <h2>🗺 Upload a floor plan</h2>
               {phase !== "working" && <button className="pbtn ghost" onClick={close}>✕</button>}
             </div>
 
-            {(phase === "form" || phase === "error") && (
+            {(phase === "form" || phase === "error") && step === "choice" && (
               <>
                 <p className="pnote">
-                  Pick a picture or PDF of any floor plan. Max reads the rooms, their numbers and
-                  any square footage printed on it, then OpsMatrix redraws the plan in its own
-                  style — colours, furniture and title blocks from the original are ignored.
+                  One question first: does the file state its measurements — room sizes or
+                  square footage readable on the plan (or in the CAD data)?
+                </p>
+                <button className="upltile" onClick={() => { setMode("read"); setStep("form"); }}>
+                  <b>✨ Yes — the sizes are in the file</b>
+                  <span>
+                    Max reads the rooms, numbers and square footage, then the Calibration Editor
+                    opens with everything already filled in — check it over and ship it.
+                  </span>
+                </button>
+                <button className="upltile" onClick={() => { setMode("calibrate"); setStep("form"); }}>
+                  <b>📐 No — it's just the floor plan, no sizes</b>
+                  <span>
+                    Max draws every room first, automatically. Then the Calibration Editor opens:
+                    correct the drawing (move, reshape, merge, trace), calibrate up to three rooms
+                    you KNOW, and measure everything from your calibration.
+                  </span>
+                </button>
+              </>
+            )}
+
+            {(phase === "form" || phase === "error") && step === "form" && (
+              <>
+                <p className="pnote">
+                  {mode === "calibrate"
+                    ? "Pick the file — picture, PDF, or CAD (DXF). Max draws the rooms first; the Calibration Editor opens with them ready to correct."
+                    : "Pick the file — picture, PDF, or CAD (DXF). Max reads the rooms, their numbers and the stated square footage; the Calibration Editor opens with all of it filled in, ready to check and ship."}
                 </p>
 
+                {/* the hierarchy, up front: account → building → floor.
+                    Departments are picked per room later, in the editor. */}
                 <div className="prow">
-                  <label className="pfield">Building <small>optional</small>
-                    <input value={building} placeholder="read from the plan if left blank"
+                  <label className="pfield">Account <small>your hospital system</small>
+                    <input value={account} placeholder="e.g. Summa Health"
+                      onChange={(e) => setAccount(e.target.value)} />
+                  </label>
+                  <label className="pfield">Building
+                    <input value={building} placeholder="e.g. Crawfordsville"
                       onChange={(e) => setBuilding(e.target.value)} />
                   </label>
-                  <label className="pfield">Floor <small>optional</small>
-                    <input value={floor} placeholder="e.g. 4 East"
+                  <label className="pfield">Floor
+                    <input value={floor} placeholder="e.g. 2nd Floor"
                       onChange={(e) => setFloor(e.target.value)} />
                   </label>
                 </div>
 
-                {keySaved ? (
+                {proxied ? (
+                  <p className="pnote keysaved">✓ AI reading is included with your OpsMatrix account.</p>
+                ) : keySaved ? (
                   <p className="pnote keysaved">
                     ✓ API key saved on this device{apiKey.length > 4 ? ` (…${apiKey.slice(-4)})` : ""} ·{" "}
                     <button className="plink" onClick={() => { setKeySaved(false); setApiKey(""); }}>change</button>
                   </p>
                 ) : (
-                  <label className="pfield">Anthropic API key
+                  <label className="pfield">Anthropic API key{mode === "calibrate" ? <small>needed only for "Max draws the rest"</small> : null}
                     <span className="keyrow">
                       <input type="password" value={apiKey} placeholder="sk-ant-api…"
                         onChange={(e) => setApiKey(e.target.value)} />
@@ -135,14 +271,21 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
 
                 {error && <p className="warntext">⚠ {error}</p>}
 
-                <button className="pbtn primary wide" disabled={!keySaved}
+                <button className="pbtn primary wide"
+                  disabled={!account.trim() || !building.trim() || !floor.trim() || (mode === "read" && !keySaved && !proxied)}
                   onClick={() => fileRef.current?.click()}>
-                  Choose floor plan (image or PDF)
+                  {mode === "calibrate" ? "Choose the file — open the Calibration Editor" : "Choose floor plan (image, PDF or DXF)"}
                 </button>
-                {!keySaved && <small className="pnote">Save the API key above first — one time only.</small>}
+                {(!account.trim() || !building.trim() || !floor.trim()) &&
+                  <small className="pnote">Fill in account, building and floor first — that's where this plan files itself.</small>}
+                {!(!account.trim() || !building.trim() || !floor.trim()) && mode === "read" && !keySaved && !proxied &&
+                  <small className="pnote">Save the API key above first — one time only.</small>}
+                <p className="pnote">
+                  <button className="plink" onClick={() => setStep("choice")}>‹ Back to the question</button>
+                </p>
 
                 <input ref={fileRef} type="file" style={{ display: "none" }}
-                  accept="image/*,application/pdf,.pdf"
+                  accept="image/*,application/pdf,.pdf,.dxf,.dwg"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     e.target.value = "";
@@ -163,14 +306,11 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
 
             {phase === "done" && result && (
               <>
-                <p className="pnote big">✓ {result.rooms} rooms read and drawn.</p>
+                <p className="pnote big">✓ {result.rooms} rooms on the new floor plan.</p>
                 <p className="pnote">
-                  {result.printed > 0
-                    ? `${result.printed} of them had a square footage printed on the plan, so those areas were used as-is`
-                    : "No square footage was printed on the plan, so the rooms were measured from the drawing"}
-                  {result.scaled
-                    ? " — the plan is already to scale, so there is nothing to measure by hand."
-                    : ". Set the scale once on the plan if you want exact areas."}
+                  Shipped to Max Space — drawn in OpsMatrix's own style, every room measured, and
+                  filed under {[account, building, floor].filter(Boolean).join(" → ")}. The set
+                  stays editable in Max Space → Calibration Editor.
                 </p>
                 <p className="pnote">
                   Check the room numbers and types on the map, then start tapping rooms onto schedules.
@@ -183,6 +323,7 @@ export function AiPlanImport({ commit, onImported, open, onClose }: {
           </div>
         </div>
       )}
-    </>
+    </>,
+    document.body
   );
 }

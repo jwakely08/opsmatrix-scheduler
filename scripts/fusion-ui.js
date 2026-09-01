@@ -25,7 +25,11 @@
 
   function ensureButton() {
     hideClassicPlanUploadButtons();
+    hideCloudManagedSettings();
     ensureNavLink();
+    fixArchivePages();
+    ensureBackButton();
+    wireMaxQuality();
   }
 
   // Max Schedules IS the consolidated hub now: the classic nav item opens it.
@@ -34,6 +38,31 @@
     for (var i = 0; i < navBtns.length; i++) {
       var b = navBtns[i];
       var t = (b.textContent || "").trim();
+      // Max Space lives in the hub now (Explorer + Room List + Map View,
+      // rebuilt 2026-08-28 with every data point Josh asked for). The
+      // archive's own Max Space stays reachable ONLY for Floor Plans /
+      // calibration, via flags set before this button is clicked.
+      if (t === "Max Space" && !b.getAttribute("data-fusion-space-wired")) {
+        b.setAttribute("data-fusion-space-wired", "1");
+        b.addEventListener("click", function (e) {
+          if (/[?&]fp=1/.test(window.location.search)) return;           // deep link to Floor Plans
+          e.preventDefault();
+          e.stopPropagation();
+          window.location.href = "./maps.html#spaces";
+        }, true);
+      }
+      // the archive's Explorer/Table strip buttons (visible on its Floor
+      // Plans screen) land on the rebuilt hub views
+      if ((t === "Explorer" || t === "Table") && !b.getAttribute("data-fusion-wired")) {
+        b.setAttribute("data-fusion-wired", "1");
+        (function (label) {
+          b.addEventListener("click", function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.location.href = "./maps.html#spaces?view=" + (label === "Table" ? "list" : "explorer");
+          }, true);
+        })(t);
+      }
       if (t === "Max Schedules" && !b.getAttribute("data-fusion-wired")) {
         b.setAttribute("data-fusion-wired", "1");
         b.addEventListener("click", function (e) {
@@ -45,20 +74,47 @@
         // Same anatomy as the classic app's own items (nav-icon + nav-label
         // spans, 16px stroke icon) so it looks native — a floor machine
         // outline, not an emoji.
-        if (!document.getElementById("fusion-nav-floorcare") && b.parentNode) {
-          var fcBtn = document.createElement("button");
-          fcBtn.id = "fusion-nav-floorcare";
-          fcBtn.type = "button";
-          fcBtn.className = b.className;
-          fcBtn.innerHTML =
+        // The three route engines sit right under Max Schedules, in the
+        // order a manager thinks about them: floors, then sanitation, then
+        // policing. Injected newest-last so they read top-to-bottom.
+        var ENGINES = [
+          {
+            id: "fusion-nav-floorcare", label: "Max Floor Care", hash: "#floorcare",
+            svg: '<path d="M17 3l-6 8"/><circle cx="10" cy="16" r="5"/><path d="M4 22h16"/>'
+          },
+          {
+            id: "fusion-nav-sanitation", label: "Max Sanitation", hash: "#sanitation",
+            // a collection cart with its handle
+            svg: '<path d="M3 5h3l2 10h10"/><path d="M8 8h12l-1.5 7"/><circle cx="10" cy="19" r="1.6"/><circle cx="17" cy="19" r="1.6"/>'
+          },
+          {
+            id: "fusion-nav-policing", label: "Max Policing", hash: "#policing",
+            // a porter's bell
+            svg: '<path d="M5 17h14"/><path d="M6.5 17a5.5 5.5 0 0 1 11 0"/><path d="M12 6.5v-1"/><path d="M4 20h16"/>'
+          }
+        ];
+        var after = b;
+        for (var e2 = 0; e2 < ENGINES.length; e2++) {
+          var eng = ENGINES[e2];
+          var existing = document.getElementById(eng.id);
+          if (existing) { after = existing; continue; }
+          if (!after.parentNode) break;
+          var engBtn = document.createElement("button");
+          engBtn.id = eng.id;
+          engBtn.type = "button";
+          engBtn.className = b.className;
+          engBtn.innerHTML =
             '<span class="nav-icon">' +
             '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" ' +
             'stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">' +
-            '<path d="M17 3l-6 8"/><circle cx="10" cy="16" r="5"/><path d="M4 22h16"/>' +
+            eng.svg +
             "</svg></span>" +
-            '<span class="nav-label">Max Floor Care</span>';
-          fcBtn.addEventListener("click", function () { window.location.href = "./maps.html#floorcare"; });
-          b.parentNode.insertBefore(fcBtn, b.nextSibling);
+            '<span class="nav-label">' + eng.label + "</span>";
+          (function (hash) {
+            engBtn.addEventListener("click", function () { window.location.href = "./maps.html" + hash; });
+          })(eng.hash);
+          after.parentNode.insertBefore(engBtn, after.nextSibling);
+          after = engBtn;
         }
       }
       // retire the sections Scope now owns
@@ -75,6 +131,45 @@
           e.stopPropagation();
           showUploadHub();
         }, true); // capture: beat the classic app's own handler
+      }
+      // cloud builds, signed in: a Sign out item at the bottom of the nav —
+      // same anatomy as the other items, visible on every classic screen.
+      // The session check resolves ONCE into a cached answer; injection then
+      // happens on whichever observer pass comes next, with a fresh anchor
+      // (React rebuilds the sidebar constantly — never trust a stale node).
+      if (t === "Admin Settings" && !document.getElementById("fusion-nav-signout") &&
+          b.parentNode && window.OpsMatrixFusion &&
+          typeof window.OpsMatrixFusion.hasCloudSession === "function" &&
+          window.OpsMatrixFusion.cloudConfigured) {
+        if (window.__fusionHasSession === undefined) {
+          window.__fusionHasSession = null; // resolving…
+          window.OpsMatrixFusion.hasCloudSession()
+            .then(function (yes) {
+              window.__fusionHasSession = yes;
+              // the app may be idle (no DOM mutations → no observer passes) —
+              // force one pass now so the button appears immediately
+              if (yes) ensureButton();
+            })
+            .catch(function () { window.__fusionHasSession = false; });
+        }
+        if (window.__fusionHasSession === true) {
+          var so = document.createElement("button");
+          so.id = "fusion-nav-signout";
+          so.type = "button";
+          so.className = b.className;
+          so.innerHTML =
+            '<span class="nav-icon">' +
+            '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+            'stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">' +
+            '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>' +
+            "</svg></span>" +
+            '<span class="nav-label">Sign out</span>';
+          so.addEventListener("click", function () {
+            if (!confirm("Sign out? Synced data is removed from this device (it stays safe in your organization's account).")) return;
+            window.OpsMatrixFusion.cloudSignOut();
+          });
+          b.parentNode.insertBefore(so, b.nextSibling);
+        }
       }
       // Admin Settings → scope opens the Scope manager (the one source of truth)
       if (t === "scope" && !b.getAttribute("data-fusion-wired")) {
@@ -94,6 +189,17 @@
           wiBtn.addEventListener("click", function () { window.location.href = "./maps.html#workload"; });
           b.parentNode.insertBefore(wiBtn, b.nextSibling);
         }
+        // …and Exporting (§12g): any slice of the inventory out as Excel —
+        // a readable report, or a file ⬆ Import takes back losslessly
+        if (!document.getElementById("fusion-admin-export") && b.parentNode) {
+          var exBtn = document.createElement("button");
+          exBtn.id = "fusion-admin-export";
+          exBtn.type = "button";
+          exBtn.className = b.className;
+          exBtn.textContent = "exporting";
+          exBtn.addEventListener("click", function () { window.location.href = "./maps.html#exporting"; });
+          b.parentNode.insertBefore(exBtn, b.nextSibling);
+        }
       }
     }
     // Max Space gains a Map View tab, but Floor Plans STAYS: it owns uploading
@@ -111,24 +217,211 @@
         mapBtn.type = "button";
         mapBtn.className = anchor.className;
         mapBtn.textContent = "🗺 Map View";
-        mapBtn.addEventListener("click", function () { window.location.href = "./maps.html#spaces"; });
+        mapBtn.addEventListener("click", function () { window.location.href = "./maps.html#spaces?view=map"; });
         anchor.parentNode.insertBefore(mapBtn, anchor.nextSibling);
       }
-      // ⬆ Upload: ONE front door for bringing space data in, so nobody has to
-      // know which tab owns which file type before they can start
-      if (!document.getElementById("fusion-upload-any") && anchor.parentNode) {
-        var upBtn = document.createElement("button");
-        upBtn.id = "fusion-upload-any";
-        upBtn.type = "button";
-        upBtn.className = anchor.className;
-        upBtn.textContent = "⬆ Upload";
-        upBtn.addEventListener("click", showUploadHub);
-        anchor.parentNode.insertBefore(upBtn, anchor.parentNode.firstChild);
+      // NOTE (2026-08-28): the ⬆ Upload strip button is gone — Josh's call.
+      // The two entry points are ⬆ Import and ＋ Add Room, kept side by side.
+      // The archive's Floor Plans screen has neither, so it gets an Add Room
+      // that opens the hub's editor.
+      var hasArchiveAdd = false;
+      for (var k2 = 0; k2 < navBtns.length; k2++) {
+        if ((navBtns[k2].textContent || "").trim() === "Add Room") { hasArchiveAdd = true; break; }
+      }
+      var fAdd = document.getElementById("fusion-space-addroom");
+      if (!hasArchiveAdd && !fAdd && anchor.parentNode) {
+        // ⬆ Import and ＋ Add Room travel as a pair, here like everywhere
+        var fImp = document.createElement("button");
+        fImp.id = "fusion-space-import";
+        fImp.type = "button";
+        fImp.className = anchor.className;
+        fImp.textContent = "⬆ Import";
+        fImp.addEventListener("click", showUploadHub);
+        anchor.parentNode.appendChild(fImp);
+        fAdd = document.createElement("button");
+        fAdd.id = "fusion-space-addroom";
+        fAdd.type = "button";
+        fAdd.className = anchor.className;
+        fAdd.textContent = "＋ Add Room";
+        fAdd.addEventListener("click", function () { window.location.href = "./maps.html#spaces?view=list&add=1"; });
+        anchor.parentNode.appendChild(fAdd);
+      } else if (hasArchiveAdd && fAdd && fAdd.parentNode) {
+        fAdd.parentNode.removeChild(fAdd);
+        var fImp2 = document.getElementById("fusion-space-import");
+        if (fImp2 && fImp2.parentNode) fImp2.parentNode.removeChild(fImp2);
       }
       // undo the old hiding for anyone whose browser cached that build
       if (anchor.style.display === "none") anchor.style.display = "";
       openFloorPlansIfRequested(anchor);
     }
+  }
+
+  // NOTE (2026-08-28 night): the archive's Add Floor Plan tracer is fully
+  // retired for NEW plans — the hub's Plan Studio owns tracing, snapping and
+  // calibration now. Floor Plans in classic remains the viewer of saved plans.
+
+  // ── the ONE back button + the shared navigation trail ─────────────────────
+  // classic.html and maps.html keep one back-stack in sessionStorage
+  // (om_nav_stack — see src/pro/nav.ts for the hub's twin). Tokens:
+  //   "classic:<sidebar label>"  a page inside classic
+  //   "hub:<view>"               a maps.html view
+  var NAV_KEY = "om_nav_stack";
+  function navStack() {
+    try {
+      var a = JSON.parse(sessionStorage.getItem(NAV_KEY) || "[]");
+      return Array.isArray(a) ? a : [];
+    } catch (e) { return []; }
+  }
+  function navSave(s) { try { sessionStorage.setItem(NAV_KEY, JSON.stringify(s.slice(-60))); } catch (e) { /* full */ } }
+  function navVisit(tok) {
+    if (!tok) return;
+    var s = navStack();
+    if (s[s.length - 1] === tok) return;
+    s.push(tok);
+    navSave(s);
+  }
+  function navBackTarget() {
+    var s = navStack();
+    s.pop();               // the page we are on
+    var t = s.pop() || null; // where back goes (it re-registers on arrival)
+    navSave(s);
+    return t;
+  }
+  function hubHash(tok) {
+    var v = tok.replace(/^hub:/, "");
+    if (v === "map") return "";
+    if (v === "schedules" || v === "rooms") return "#tab-" + v;
+    if (v.indexOf("spaces") === 0) return "#spaces?view=" + (v.split("/")[1] || "explorer");
+    return "#" + v;
+  }
+  function clickNav(label) {
+    var btns = document.querySelectorAll(".sidebar button, #fusion-bottomnav button");
+    for (var i = 0; i < btns.length; i++) {
+      if ((btns[i].textContent || "").trim() === label) { btns[i].click(); return true; }
+    }
+    return false;
+  }
+  function fusionGoBack() {
+    var t = navBackTarget();
+    if (!t) return;
+    if (t.indexOf("hub:") === 0) { window.location.href = "./maps.html" + hubHash(t); return; }
+    var label = t.split(":")[1] || "Dashboard";
+    if (!clickNav(label)) navVisit(t); // page vanished? put it back, do nothing
+  }
+  function ensureBackButton() {
+    var host = document.querySelector(".sidebar > div");
+    var show = navStack().length >= 2;
+    var btn = document.getElementById("fusion-back");
+    if (!btn) {
+      if (!host) return;
+      btn = document.createElement("button");
+      btn.id = "fusion-back";
+      btn.type = "button";
+      btn.textContent = "‹ Back";
+      btn.setAttribute("style",
+        "margin-top:8px;display:block;padding:6px 16px;border:none;border-radius:999px;" +
+        "background:#0d9488;color:#fff;font:600 12.5px 'Segoe UI',sans-serif;cursor:pointer;");
+      btn.addEventListener("click", fusionGoBack);
+      host.appendChild(btn);
+    }
+    btn.style.display = show ? "" : "none";
+  }
+
+  // fresh-session goto: the hub's back button (or a rewire) names the classic
+  // page to land on after the reload
+  var gotoTries = 0;
+  function ensureGotoPage() {
+    var label = sessionStorage.getItem("fusion-goto-page");
+    if (!label) return;
+    if (gotoTries++ > 30) { sessionStorage.removeItem("fusion-goto-page"); return; }
+    if (clickNav(label)) sessionStorage.removeItem("fusion-goto-page");
+  }
+
+  // ── archive page fixes that must stay DOM-side (the archive is read-only) ──
+  function fixArchivePages() {
+    var btns = document.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) {
+      var t = (btns[i].textContent || "").trim();
+      // Dashboard: "Manage Training" led to Admin Settings — confusing, gone
+      if (t === "Manage Training" && btns[i].style.display !== "none") {
+        btns[i].style.display = "none";
+      }
+      // Max Calendar project tiles: the "Schedules" button duplicated what
+      // already happens automatically, and projects carry NO priority level
+      if (t === "Schedules" && btns[i].parentElement) {
+        var col = btns[i].parentElement;
+        var sibs = col.querySelectorAll("button");
+        var hasNote = false;
+        for (var j = 0; j < sibs.length; j++) {
+          if ((sibs[j].textContent || "").trim() === "Note") hasNote = true;
+        }
+        if (hasNote && sibs.length === 2) {
+          if (btns[i].style.display !== "none") btns[i].style.display = "none";
+          hideProjectPriorityBadge(col);
+        }
+      }
+    }
+  }
+  function hideProjectPriorityBadge(actionsCol) {
+    var card = actionsCol;
+    for (var up = 0; up < 4 && card; up++) {
+      card = card.parentElement;
+      if (card && card.textContent && card.textContent.indexOf("Assigned schedule") >= 0) break;
+    }
+    if (!card || !card.querySelectorAll) return;
+    var words = { medium: 1, normal: 1, high: 1, low: 1, critical: 1 };
+    var spans = card.querySelectorAll("span,div");
+    for (var i = 0; i < spans.length; i++) {
+      var tx = (spans[i].textContent || "").trim().toLowerCase();
+      if (words[tx] && spans[i].children.length === 0 && spans[i].style.display !== "none") {
+        spans[i].style.display = "none";
+      }
+    }
+  }
+
+  // ── Max reply quality: full answers, real dates, prompt caching ───────────
+  // The archive clamped every reply to 90 characters + "…" (maxCleanReply)
+  // and 320/420 output tokens — that's the truncation Josh saw. It also never
+  // told the model today's date, so "tomorrow night" earned a lecture about
+  // YYYY-MM-DD. Both fixed here; the archive stays untouched.
+  function wireMaxQuality() {
+    if (window.__fusionMaxQuality) return;
+    if (typeof window.maxFetchMessage !== "function" || typeof window.maxCleanReply !== "function") return;
+    window.__fusionMaxQuality = true;
+
+    window.maxCleanReply = function (text, fallback) {
+      var s = String(text || "").replace(/```[\s\S]*?```/g, "").trim();
+      return s || fallback || "Done.";
+    };
+
+    var origFetchMsg = window.maxFetchMessage;
+    window.maxFetchMessage = function (key, settings, body) {
+      var b = Object.assign({}, body || {});
+      // room to finish a sentence — the callers asked for 320/420
+      b.max_tokens = Math.max(Number(b.max_tokens) || 0, 1000);
+      var now = new Date();
+      var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+      var iso = function (d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); };
+      var tomorrow = new Date(now.getTime() + 86400000);
+      var extra = "\n\nCURRENT DATE & TIME: " +
+        now.toLocaleString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" }) +
+        ". Today is " + iso(now) + "; tomorrow is " + iso(tomorrow) +
+        ". Resolve relative dates (today, tonight, tomorrow, next Tuesday) yourself — never ask the user to spell a date out." +
+        "\nYour whole reply is shown to the user. Keep answers short but COMPLETE — full sentences, never cut off.";
+      if (typeof b.system === "string") {
+        // block form + cache_control: the big fixed prompt (system + tools)
+        // is cached between the tool-loop's round trips — most of the 45s
+        // Josh measured was re-reading it on every hop
+        b.system = [{ type: "text", text: b.system + extra, cache_control: { type: "ephemeral" } }];
+      }
+      if (Array.isArray(b.tools) && b.tools.length) {
+        b.tools = b.tools.slice();
+        var lastT = Object.assign({}, b.tools[b.tools.length - 1]);
+        lastT.cache_control = { type: "ephemeral" };
+        b.tools[b.tools.length - 1] = lastT;
+      }
+      return origFetchMsg(key, settings, b);
+    };
   }
 
   // ── ⬆ Upload: route by what the user has, not by which screen owns it ──────
@@ -167,7 +460,12 @@
     function close() { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }
     wrap.addEventListener("click", function (e) { if (e.target === wrap) close(); });
     document.getElementById("fusion-hub-cancel").addEventListener("click", close);
-    document.getElementById("fusion-hub-plan").addEventListener("click", function () { close(); openPlanUpload(); });
+    // ONE plan flow for the whole app (Josh: consistency) — the hub's
+    // upload modal owns pictures/PDFs/CAD, the question, and the editor
+    document.getElementById("fusion-hub-plan").addEventListener("click", function () {
+      close();
+      window.location.href = "./maps.html#spaces?plan=1";
+    });
     document.getElementById("fusion-hub-excel").addEventListener("click", function () {
       close();
       openRoomListPicker();
@@ -188,121 +486,30 @@
   }
 
   // bounded: the observer fires on every re-render, so give up rather than
-  // clicking forever if a future Classic build stops showing Floor Plans
+  // clicking forever if a future Classic build stops showing Floor Plans.
+  // Two ways in: ?fp=1 (deep link) or the one-shot fusion-goto-space flag
+  // (set by e.g. the room-list import's "Open the rooms" button so a reload
+  // lands ON the rooms, not the dashboard).
   var spaceTries = 0;
   function ensureSpaceScreen() {
-    if (!/[?&]fp=1/.test(window.location.search) || deepLinked) return;
+    // the ONE road into the ARCHIVE's Max Space (the Floor Plans viewer):
+    // the ?fp=1 deep link. Everything else lives in the hub.
+    var wantSpace = /[?&]fp=1/.test(window.location.search);
+    if (!wantSpace || deepLinked) return;
     if (spaceTries++ > 20) { deepLinked = true; return; }
     var btns = document.querySelectorAll("button");
     for (var i = 0; i < btns.length; i++) {
-      if ((btns[i].textContent || "").trim() === "Max Space") { btns[i].click(); return; }
+      if ((btns[i].textContent || "").trim() === "Max Space") {
+        navVisit("classic:Max Space");
+        btns[i].click();
+        return;
+      }
     }
-  }
-
-  // ── PDF floor plans ────────────────────────────────────────────────────────
-  // pdf.js is vendored to our origin (scripts/copy-pdfjs.cjs) because this
-  // page's localStorage holds the user's API key — no third-party scripts.
-  // Loaded lazily: nobody downloads 1.7MB of pdf.js unless they pick a PDF.
-
-  var PDFJS_URL = "./pdfjs/pdf.min.mjs";
-  var PDF_WORKER_URL = "./pdfjs/pdf.worker.min.mjs";
-  var pdfLibPromise = null;
-
-  function loadPdfLib() {
-    if (!pdfLibPromise) {
-      pdfLibPromise = import(PDFJS_URL).then(function (lib) {
-        lib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
-        return lib;
-      });
-    }
-    return pdfLibPromise;
-  }
-
-  /** a box within a box → the same box on the original source */
-  function composeBoxes(outer, inner) {
-    var w = outer.x1 - outer.x0, h = outer.y1 - outer.y0;
-    return {
-      x0: outer.x0 + inner.x0 * w, y0: outer.y0 + inner.y0 * h,
-      x1: outer.x0 + inner.x1 * w, y1: outer.y0 + inner.y1 * h
-    };
-  }
-
-  /**
-   * Any plan file → { dataUrl, width, height, aspect, renderRegion } for the
-   * AI reader. renderRegion re-renders a slice of the SOURCE at full quality,
-   * which is what lets the reader zoom in on the drawing part of an
-   * architect's sheet — PDFs re-rasterise from vectors, images crop from the
-   * original pixels.
-   */
-  function fileToPlanImage(file) {
-    if (isPdf(file)) {
-      return loadPdfLib()
-        .then(function (lib) { return file.arrayBuffer().then(function (buf) { return lib.getDocument({ data: buf }).promise; }); })
-        .then(function (doc) { return doc.getPage(1); })
-        .then(function (page) {
-          var base = page.getViewport({ scale: 1 });
-          function renderAt(box, target) {
-            var bw = (box.x1 - box.x0) * base.width;
-            var bh = (box.y1 - box.y0) * base.height;
-            var scale = Math.min(8, Math.max(1, target / Math.max(bw, bh)));
-            var viewport = page.getViewport({
-              scale: scale,
-              offsetX: -box.x0 * base.width * scale,
-              offsetY: -box.y0 * base.height * scale
-            });
-            var canvas = document.createElement("canvas");
-            canvas.width = Math.round(bw * scale);
-            canvas.height = Math.round(bh * scale);
-            var ctx = canvas.getContext("2d");
-            ctx.fillStyle = "#ffffff";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            return page.render({ canvasContext: ctx, viewport: viewport, canvas: canvas }).promise
-              .then(function () {
-                return {
-                  dataUrl: canvas.toDataURL("image/png"),
-                  width: canvas.width, height: canvas.height,
-                  aspect: canvas.width / canvas.height,
-                  renderRegion: function (b, t) { return renderAt(composeBoxes(box, b), t); }
-                };
-              });
-          }
-          return renderAt({ x0: 0, y0: 0, x1: 1, y1: 1 }, 2000);
-        });
-    }
-    return new Promise(function (resolve, reject) {
-      var url = URL.createObjectURL(file);
-      var img = new Image();
-      img.onload = function () {
-        function renderAt(box, target) {
-          var sx = box.x0 * img.width, sy = box.y0 * img.height;
-          var sw = (box.x1 - box.x0) * img.width, sh = (box.y1 - box.y0) * img.height;
-          var scale = Math.min(1, target / Math.max(sw, sh)); // never upscale pixels
-          var canvas = document.createElement("canvas");
-          canvas.width = Math.max(1, Math.round(sw * scale));
-          canvas.height = Math.max(1, Math.round(sh * scale));
-          var ctx = canvas.getContext("2d");
-          ctx.fillStyle = "#ffffff";
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-          return Promise.resolve({
-            dataUrl: canvas.toDataURL("image/jpeg", 0.92),
-            width: canvas.width, height: canvas.height,
-            aspect: canvas.width / canvas.height,
-            renderRegion: function (b, t) { return renderAt(composeBoxes(box, b), t); }
-          });
-        }
-        renderAt({ x0: 0, y0: 0, x1: 1, y1: 1 }, 2000).then(resolve, reject);
-      };
-      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("That image could not be opened.")); };
-      img.src = url;
-    });
   }
 
   // ── the Anthropic API key: entered once, kept forever on this device ───────
   // Two slots: opsmatrix_v7.settings.maxApiKey (what the classic app reads)
-  // + a dedicated backup the classic app never rewrites. Classic's save
-  // effect used to clobber a key saved from here; the backup + the pre-app
-  // heal in fusion-seed.js make the key survive saves and demo reseeds.
+  // + a dedicated backup the classic app never rewrites (see §4 in HANDOFF).
   var KEY_BACKUP = "opsmatrix_max_api_key";
   function getApiKey() {
     try {
@@ -321,156 +528,10 @@
       return true;
     } catch (e) { return false; }
   }
-  function keyTail(key) { return key.length > 4 ? "…" + key.slice(-4) : ""; }
 
-  function isPdf(file) {
-    return file && (file.type === "application/pdf" || /\.pdf$/i.test(file.name || ""));
-  }
-
-  // ── 🗺 floor plan upload: Max reads it, always — there is no manual path ───
-  // (Josh's rule, 2026-08-24: floor plans come in through the API, period.
-  // The old flow — Classic's Building/Floor form, then a "read it with Max
-  // or upload as a picture?" choice — is gone.)
-  var SMART_ID = "fusion-smart";
-
-  function openPlanUpload() {
-    if (document.getElementById(SMART_ID)) return;
-    var wrap = document.createElement("div");
-    wrap.id = SMART_ID;
-    wrap.setAttribute("style",
-      "position:fixed;inset:0;z-index:99999;background:rgba(15,23,32,.55);" +
-      "display:flex;align-items:center;justify-content:center;padding:20px;");
-    var card = document.createElement("div");
-    card.setAttribute("style",
-      "background:#fff;border-radius:14px;max-width:520px;width:100%;padding:24px;" +
-      "font-family:'Segoe UI',sans-serif;color:#1c2b33;box-shadow:0 18px 60px rgba(0,0,0,.35);");
-    card.innerHTML =
-      "<h3 style='margin:0 0 6px;font-size:17px'>🗺 Upload a floor plan</h3>" +
-      "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>Pick a picture or PDF. Max reads the rooms, " +
-      "their numbers and any square footage printed on the plan, then OpsMatrix redraws it in its own clean " +
-      "style. If the plan states its sizes, there is nothing to calibrate or measure.</p>" +
-      "<div style='display:flex;gap:8px;margin-bottom:10px'>" +
-      "<label style='flex:1;font-size:11px;letter-spacing:.05em;color:#8fa3b0;text-transform:uppercase'>Building" +
-      "<input id='fusion-plan-building' type='text' placeholder='read from the plan if left blank' " +
-      "style='display:block;width:100%;margin-top:4px;padding:9px 10px;border:1px solid #d8e0e6;border-radius:7px;font-size:13px'/></label>" +
-      "<label style='flex:1;font-size:11px;letter-spacing:.05em;color:#8fa3b0;text-transform:uppercase'>Floor" +
-      "<input id='fusion-plan-floor' type='text' placeholder='e.g. 4 East' " +
-      "style='display:block;width:100%;margin-top:4px;padding:9px 10px;border:1px solid #d8e0e6;border-radius:7px;font-size:13px'/></label>" +
-      "</div>" +
-      "<div id='fusion-keyrow'></div>" +
-      "<button id='fusion-smart-go' type='button' style='width:100%;padding:11px;border:none;background:#0f6b62;color:#fff;" +
-      "border-radius:8px;font-size:14px;font-weight:600;cursor:pointer'>Choose floor plan (image or PDF)</button>" +
-      "<input id='fusion-plan-file' type='file' accept='image/*,application/pdf,.pdf' style='display:none'/>" +
-      "<div id='fusion-smart-status' style='min-height:18px;font-size:12.5px;color:#0f6b62;margin-top:10px'></div>" +
-      "<div style='text-align:right;margin-top:4px'>" +
-      "<button id='fusion-smart-cancel' type='button' style='padding:7px 14px;border:none;background:none;" +
-      "font-size:12.5px;color:#8fa3b0;cursor:pointer'>Cancel</button></div>";
-    wrap.appendChild(card);
-    document.body.appendChild(wrap);
-
-    renderKeyRow(getApiKey());
-
-    function renderKeyRow(key) {
-      var row = document.getElementById("fusion-keyrow");
-      if (!row) return;
-      if (key) {
-        row.innerHTML =
-          "<p style='margin:0 0 10px;font-size:12.5px;color:#0f6b62'>✓ API key saved on this device (" +
-          esc(keyTail(key)) + ") <button id='fusion-key-change' type='button' style='border:none;background:none;" +
-          "color:#5b7083;text-decoration:underline;cursor:pointer;font-size:12px'>change</button></p>";
-        var chg = document.getElementById("fusion-key-change");
-        if (chg) chg.addEventListener("click", function () { renderKeyRow(""); });
-      } else {
-        row.innerHTML =
-          "<div style='display:flex;gap:8px;margin-bottom:10px'>" +
-          "<input id='fusion-key-input' type='password' placeholder='Anthropic API key (sk-ant-api…)' " +
-          "style='flex:1;padding:9px 10px;border:1px solid #d8e0e6;border-radius:7px;font-size:13px'/>" +
-          "<button id='fusion-key-save' type='button' style='padding:9px 14px;border:none;background:#123c47;color:#fff;" +
-          "border-radius:7px;font-size:13px;cursor:pointer'>Save</button></div>";
-        var save = document.getElementById("fusion-key-save");
-        if (save) save.addEventListener("click", function () {
-          var v = (document.getElementById("fusion-key-input").value || "").trim();
-          if (!v) { setSmartStatus("Paste the API key first.", true); return; }
-          if (setApiKey(v)) { renderKeyRow(v); setSmartStatus("✓ Key saved on this device."); }
-          else setSmartStatus("Could not save the key (storage unavailable).", true);
-        });
-      }
-    }
-
-    function close() { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }
-    wrap.addEventListener("click", function (ev) { if (ev.target === wrap) close(); });
-    document.getElementById("fusion-smart-cancel").addEventListener("click", close);
-
-    var fileInput = document.getElementById("fusion-plan-file");
-    document.getElementById("fusion-smart-go").addEventListener("click", function () {
-      if (!getApiKey()) { setSmartStatus("Save the API key above first — one time only.", true); return; }
-      fileInput.click();
-    });
-    fileInput.addEventListener("change", function () {
-      var file = fileInput.files && fileInput.files[0];
-      fileInput.value = "";
-      if (!file) return;
-      var building = (document.getElementById("fusion-plan-building").value || "").trim();
-      var floor = (document.getElementById("fusion-plan-floor").value || "").trim();
-      runSmartImport(file, building, floor, getApiKey(), close);
-    });
-  }
-
-  function setSmartStatus(msg, isErr) {
-    var el = document.getElementById("fusion-smart-status");
-    if (el) { el.textContent = msg; el.style.color = isErr ? "#c34444" : "#0f6b62"; }
-  }
-
-  function runSmartImport(file, building, floor, key, closeOverlay) {
-    var go = document.getElementById("fusion-smart-go");
-    if (go) { go.disabled = true; go.textContent = "Working…"; }
-    setSmartStatus("Opening " + file.name + "…");
-    fileToPlanImage(file).then(function (picture) {
-      return window.OpsMatrixFusion.importPlanFromImage({
-        apiKey: key,
-        imageDataUrl: picture.dataUrl,
-        imageWidth: picture.width,
-        imageHeight: picture.height,
-        aspect: picture.aspect,
-        renderRegion: picture.renderRegion,
-        building: building,
-        floor: floor,
-        onProgress: function (m) { setSmartStatus(m); }
-      });
-    }).then(function (result) {
-      persistImport(result);
-      var printed = 0;
-      for (var i = 0; i < result.spaces.length; i++) {
-        if (Number(result.spaces[i].squareFeet) > 0) printed++;
-      }
-      var scaled = result.plan && result.plan.ratio;
-      setSmartStatus("✓ " + result.spaces.length + " rooms read and drawn" +
-        (scaled ? " — already to scale, nothing to calibrate" : "") + ". Reloading…");
-      setTimeout(function () { window.location.reload(); }, 1400);
-    }).catch(function (err) {
-      if (go) { go.disabled = false; go.textContent = "Choose floor plan (image or PDF)"; }
-      setSmartStatus((err && err.message ? err.message : String(err)), true);
-    });
-  }
-
-  /** write an ImportResult into the classic stores (shared with magicplan).
-   *  Rooms that already exist (a room-list import) get the geometry ATTACHED
-   *  to them instead of being duplicated. */
-  function persistImport(result) {
-    var v7 = {};
-    try { v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") || "{}") || {}; } catch (e) { v7 = {}; }
-    v7.spaces = v7.spaces || [];
-    try {
-      window.OpsMatrixFusion.attachPlanToRooms(v7.spaces, result);
-    } catch (eAttach) {
-      v7.spaces = v7.spaces.concat(result.spaces); // never lose an import over matching
-    }
-    localStorage.setItem("opsmatrix_v7", JSON.stringify(v7));
-    var plans = [];
-    try { plans = JSON.parse(localStorage.getItem("opsmatrix_v7_plans") || "[]") || []; } catch (e2) { plans = []; }
-    plans.push(result.plan);
-    localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(plans));
-  }
+  // NOTE (2026-08-28 night): the classic-side plan reader (openPlanUpload /
+  // runSmartImport and its pdf.js loader) is GONE — floor plans have exactly
+  // one flow now, the hub's upload modal + Calibration Editor.
 
   // ── 📊 Room list (Excel/CSV) → canonical rooms, right here in Classic ──────
   function openRoomListPicker() {
@@ -557,16 +618,16 @@
       "<h3 style='margin:0 0 2px;font-size:17px'>✓ Room list imported</h3>" +
       "<p style='margin:0 0 12px;font-size:13px;color:#5b7083'>" + s.rows + " rooms/spaces processed.</p>" +
       lines + warns +
-      "<div style='display:flex;gap:10px;justify-content:flex-end;margin-top:16px'>" +
-      "<button id='fusion-rl-wi' type='button' style='padding:9px 14px;border:1px solid #d8e0e6;background:#fff;" +
-      "border-radius:8px;font-size:13px;cursor:pointer;color:#39505c'>Open Workload Intelligence</button>" +
+      "<p style='margin:12px 0 0;font-size:12px;color:#8fa3b0'>Workload analysis for these rooms lives in " +
+      "Admin Settings → workload intelligence.</p>" +
+      "<div style='display:flex;gap:10px;justify-content:flex-end;margin-top:14px'>" +
       "<button id='fusion-rl-ok' type='button' style='padding:9px 16px;border:none;background:#0d9488;color:#fff;" +
       "border-radius:8px;font-size:13px;font-weight:600;cursor:pointer'>Open the rooms</button></div>";
     wrap.appendChild(card);
     document.body.appendChild(wrap);
-    document.getElementById("fusion-rl-ok").addEventListener("click", function () { window.location.reload(); });
-    document.getElementById("fusion-rl-wi").addEventListener("click", function () {
-      window.location.href = "./maps.html#workload";
+    // land ON the rooms — the hub's Room List is where they live now
+    document.getElementById("fusion-rl-ok").addEventListener("click", function () {
+      window.location.href = "./maps.html#spaces?view=list";
     });
   }
 
@@ -712,11 +773,37 @@
         return s.num + " — " + (s.name || "") + " (" + (s.shift || "") + ")";
       }).join("; ") || "none yet";
     }
-    function findRoom(cx, roomNumber) {
+    /**
+     * Room lookup a person would recognize: exact number first, then
+     * suffix match ("1230" finds "C-1230"), narrowed by building/campus
+     * when given ("room 1230 in Crawfordsville" resolves itself).
+     */
+    function findRoom(cx, roomNumber, buildingHint) {
       var rn = String(roomNumber || "").trim().toLowerCase();
-      return (cx.spaces || []).find(function (s) {
+      if (!rn) return null;
+      var all = cx.spaces || [];
+      var strip = function (s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, ""); };
+      var pick = all.filter(function (s) {
         return String(s.roomNumber || "").trim().toLowerCase() === rn;
-      }) || null;
+      });
+      if (!pick.length) {
+        var rs = strip(rn);
+        if (rs) {
+          pick = all.filter(function (s) {
+            var v = strip(s.roomNumber);
+            return v && (v === rs || (v.length > rs.length && v.slice(-rs.length) === rs));
+          });
+        }
+      }
+      if (pick.length > 1 && buildingHint) {
+        var bh = String(buildingHint).trim().toLowerCase();
+        var byB = pick.filter(function (s) {
+          return String(s.building || "").toLowerCase().indexOf(bh) >= 0 ||
+            String(s.campus || "").toLowerCase().indexOf(bh) >= 0;
+        });
+        if (byB.length) pick = byB;
+      }
+      return pick[0] || null;
     }
     /** any floor wording → the fusion trio; "" when it can't be told */
     function fusionFloor(value) {
@@ -883,6 +970,7 @@
             hours: { type: "number", description: "estimated duration, 1–8" },
             team_members: { type: "number", description: "how many people, 1–8" },
             room_number: { type: "string", description: "the room it happens in (any room)" },
+            building: { type: "string", description: "building or campus the room is in — include it when the user names one" },
             note: { type: "string" }
           }
         }
@@ -1247,7 +1335,7 @@
         var hours = Math.max(1, Math.min(8, parseInt(inp.hours) || 0));
         var team = Math.max(1, Math.min(8, parseInt(inp.team_members) || 0));
         if (!hours || !team) return { success: false, error: "Hours and team members must each be 1–8." };
-        var room = inp.room_number ? findRoom(cx, inp.room_number) : null;
+        var room = inp.room_number ? findRoom(cx, inp.room_number, inp.building) : null;
         if (inp.room_number && !room) return { success: false, error: "Space " + inp.room_number + " not found" };
         var manHours = hours * team;
         var noteId = uid2("fcnote");
@@ -1506,6 +1594,88 @@
     }
   }
   wireMaxFusionTools();
+  wireMaxQuality();
+
+  // ── the Claude proxy bridge for the ARCHIVE's own Max assistant ────────────
+  // On cloud builds, the archive's chat/voice assistant must not need (or
+  // expose) a browser API key: this page's calls to api.anthropic.com are
+  // re-routed to the server-side claude-proxy, which holds the organization's
+  // key and meters usage. The archive is untouched — only fetches to that
+  // ONE exact URL are redirected.
+  //
+  // The wrapper installs SYNCHRONOUSLY at boot and resolves the proxy FRESH
+  // on every call. (The first version installed it asynchronously after a
+  // session probe — the staging smoke test proved that leaves a window where
+  // the placeholder key can leak to Anthropic as an "invalid API key". This
+  // design makes that impossible: with no session and no real key, the call
+  // is answered locally with a plain-English sign-in message.)
+  var CLOUD_KEY_PLACEHOLDER = "managed-by-opsmatrix-cloud";
+
+  function wireAiProxy() {
+    if (window.__fusionAiProxyWired) return;
+    var F = window.OpsMatrixFusion;
+    if (!F || typeof F.aiProxy !== "function" || !F.cloudConfigured) return;
+    window.__fusionAiProxyWired = true;
+
+    var origFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      var url = typeof input === "string" ? input : (input && input.url) || "";
+      if (url !== "https://api.anthropic.com/v1/messages") return origFetch(input, init);
+      return F.aiProxy().catch(function () { return null; }).then(function (p) {
+        var headers = new Headers((init && init.headers) || {});
+        if (p) {
+          headers.delete("x-api-key");
+          headers.delete("anthropic-dangerous-direct-browser-access");
+          headers.set("authorization", "Bearer " + p.token);
+          if (!headers.get("x-opsmatrix-feature")) headers.set("x-opsmatrix-feature", "max-chat");
+          return origFetch(p.url, Object.assign({}, init, { headers: headers }));
+        }
+        var key = headers.get("x-api-key") || "";
+        if (key && key !== CLOUD_KEY_PLACEHOLDER) return origFetch(input, init); // a real personal key
+        // no proxy session and no real key: answer here, in plain English —
+        // the placeholder must NEVER reach Anthropic as an "invalid key"
+        return new Response(JSON.stringify({
+          error: {
+            type: "authentication_error",
+            message: "Sign in to OpsMatrix to use Max — open Max Schedules, sign in, then try again."
+          }
+        }), { status: 401, headers: { "content-type": "application/json" } });
+      });
+    };
+
+    // The archive enables its Max features only when a key is saved; under
+    // the proxy the ACCOUNT is the key. Seed the marker once a session is
+    // confirmed (the wrapper above guarantees it can never leak), with one
+    // guarded reload so the archive sees it at load time.
+    F.aiProxy().then(function (p) {
+      if (!p || getApiKey()) return;
+      setApiKey(CLOUD_KEY_PLACEHOLDER);
+      if (!sessionStorage.getItem("fusion-proxy-reloaded")) {
+        sessionStorage.setItem("fusion-proxy-reloaded", "1");
+        window.location.reload();
+      }
+    }).catch(function () { /* stays keyless until sign-in — wrapper still guards */ });
+  }
+
+  // In cloud mode the API key and model are managed by OpsMatrix (the server
+  // holds the org key; the proxy pins the model) — the archive's "Max AI"
+  // settings block (key field + model picker) must not be shown to users.
+  // The administrator controls AI centrally, not per-browser.
+  function hideCloudManagedSettings() {
+    var F = window.OpsMatrixFusion;
+    if (!F || !F.cloudConfigured) return;
+    var input = document.querySelector("input[placeholder='sk-ant-api...']");
+    if (!input) return;
+    var el = input;
+    for (var i = 0; i < 8 && el; i++) {
+      el = el.parentElement;
+      if (el && el.textContent.indexOf("Max Operator Model") >= 0 &&
+          el.textContent.indexOf("Anthropic API Key") >= 0) {
+        if (el.style.display !== "none") el.style.display = "none";
+        return;
+      }
+    }
+  }
 
   // ── phone bottom nav: one strip that slides, EVERY destination on it ───────
   // Classic's own mobile bar shows four items plus a "More" grid; on a phone
@@ -1546,6 +1716,13 @@
     if (host.getAttribute("data-sig") === sig) return;
     host.setAttribute("data-sig", sig);
     host.innerHTML = "";
+    // the universal back button rides the phone strip too, always first
+    var backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.textContent = "‹ Back";
+    backBtn.style.color = "#2dd4bf";
+    backBtn.addEventListener("click", fusionGoBack);
+    host.appendChild(backBtn);
     sidebarBtns.forEach(function (b) {
       var btn = document.createElement("button");
       btn.type = "button";
@@ -1557,11 +1734,69 @@
 
   // the classic app re-renders constantly; keep our button present cheaply
   // (demo seeding lives in fusion-seed.js, injected BEFORE the app's script)
-  var mo = new MutationObserver(function () { ensureSpaceScreen(); ensureButton(); ensureMobileNav(); });
+  var mo = new MutationObserver(function () { ensureSpaceScreen(); ensureGotoPage(); ensureButton(); ensureMobileNav(); });
   function boot() {
+    // legacy ?calibrate=1 links: the Plan Studio (hub) owns calibration now
+    if (/[?&]calibrate=1/.test(window.location.search)) {
+      window.location.replace("./maps.html#spaces?view=map&plancal=1");
+      return;
+    }
+    // the navigation trail: classic always boots on the Dashboard unless a
+    // goto flag immediately moves it (those pushes happen on arrival)
+    if (!sessionStorage.getItem("fusion-goto-page") &&
+        !/[?&]fp=1/.test(window.location.search)) {
+      navVisit("classic:Dashboard");
+    }
+    // record every sidebar navigation (capture — before React re-renders);
+    // pages that leave for the hub push their own token on arrival instead
+    document.addEventListener("click", function (e) {
+      var el = e.target;
+      while (el && el.nodeName !== "BUTTON") el = el.parentElement;
+      if (!el) return;
+      var p = el, inNav = false;
+      while (p && p !== document.body) {
+        var cn = String(p.className || "");
+        if (cn.indexOf("sidebar") >= 0 || p.id === "fusion-bottomnav") { inNav = true; break; }
+        p = p.parentElement;
+      }
+      if (!inNav) return;
+      var label = (el.textContent || "").trim();
+      if (!label || label === "‹ Back") return;
+      if (label.indexOf("Ask Max") >= 0 || label === "Sign out") return;
+      if (label === "Max Schedules" || label === "Max Floor Care" || label === "Max Space") return; // hub pages
+      navVisit("classic:" + label);
+    }, true);
+    // Dashboard's "Schedule Reminders" tile belongs to Max Calendar (Josh:
+    // "clicking it takes you to Max Team, which doesn't make sense")
+    document.addEventListener("click", function (e) {
+      var el = e.target;
+      while (el && el !== document.body) {
+        if (String(el.className || "").indexOf("ops-tile") >= 0) {
+          if ((el.textContent || "").indexOf("Schedule Reminders") >= 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            clickNav("Max Calendar");
+          }
+          return;
+        }
+        el = el.parentElement;
+      }
+    }, true);
     ensureSpaceScreen();
+    ensureGotoPage();
     ensureButton();
     ensureMobileNav();
+    // cloud builds only (all no-ops on local/demo builds):
+    // 1. signed-out visitors go to the sign-in screen
+    // 2. mirror this page's data to the organization
+    // 3. the Claude proxy bridge (installed synchronously — see wireAiProxy)
+    if (window.OpsMatrixFusion && typeof window.OpsMatrixFusion.enforceCloudSignIn === "function") {
+      try { window.OpsMatrixFusion.enforceCloudSignIn(); } catch (e) { /* stay */ }
+    }
+    if (window.OpsMatrixFusion && typeof window.OpsMatrixFusion.startCloudSync === "function") {
+      try { window.OpsMatrixFusion.startCloudSync(); } catch (e) { /* stays local */ }
+    }
+    wireAiProxy();
     // characterData too: React swaps some labels (e.g. the plan picker's) by
     // rewriting the text node in place, which is not a childList mutation.
     // Our relabels are guarded by an exact-match test, so this cannot loop.

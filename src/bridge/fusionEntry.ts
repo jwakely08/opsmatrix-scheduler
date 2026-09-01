@@ -207,7 +207,9 @@ import csvRaw from "../../test-fixtures/Test_project_Statistics.csv?raw";
 export function demoStamp(): string {
   // v4: Bedroom 1 carries Machine Carpet Cleaning so Max Floor Care has an
   // eligible room to demo (carpet alone no longer qualifies, 2026-08-24)
-  return "classic-demo-v4:" + dxfRaw.length + ":" + csvRaw.length;
+  // v5 (2026-08-28): floor-care tasks came OFF the demo's cleaning schedules
+  // (they belong to Max Floor Care exclusively — Josh's rule)
+  return "classic-demo-v5:" + dxfRaw.length + ":" + csvRaw.length;
 }
 
 /** demo floor finishes: real values on most rooms, ONE genuinely missing so
@@ -267,9 +269,11 @@ export function buildClassicDemo() {
   const groupA = ids.slice(0, half), groupB = ids.slice(half);
   const tasksFor = (spId: string) => {
     const sp = spaces.find((s) => s.id === spId)!;
+    // NEVER a floor-care task here (dust-mop et al. are Max Floor Care's) —
+    // cleaning schedules carry cleaning work only
     return String(sp.roomType) === "Restroom"
       ? ["general-cleaning", "trash-pull", "wet-mop"]
-      : ["general-cleaning", "trash-pull", "dust-mop"];
+      : ["general-cleaning", "trash-pull", "high-dusting"];
   };
   const mkSched = (num: string, name: string, emp: typeof employees[0], color: string, group: string[]) => ({
     id: `sched-demo-${num}`,
@@ -354,3 +358,74 @@ export {
   loadFloorCare, saveFloorCare, fcTiming, floorCareTasks, FC_PROJECT_TASKS
 } from "../pro/floorcare";
 export { EQUIPMENT, DUST_MOP_SIZES, brandsFor, modelsFor } from "../pro/equipment";
+
+// Cloud sync for classic.html: mirrors this page's workspace to the org when
+// the build is cloud-configured AND a fully-verified session exists (people
+// sign in on the hub; same origin, shared session). Local/demo builds and
+// signed-out sessions: silent no-op — classic behaves exactly as always.
+import { startBackgroundSync, clearSyncMeta, SIGNOUT_PENDING_KEY, type SyncEngine } from "../pro/syncEngine";
+import { cloud as cloudClient, cloudConfigured as isCloudConfigured, authStorageKey } from "../pro/cloud";
+import { WORKSPACE_KEYS } from "../pro/workspaceStore";
+export const cloudConfigured = isCloudConfigured;
+
+let classicEngine: SyncEngine | null = null;
+
+export function startCloudSync(): void {
+  if (!isCloudConfigured) return;
+  void startBackgroundSync({ cloud: cloudClient })
+    .then((engine) => { classicEngine = engine; })
+    .catch(() => undefined);
+}
+
+/** does a signed-in session exist on this device? (cheap, local-storage read) */
+export async function hasCloudSession(): Promise<boolean> {
+  if (!isCloudConfigured) return false;
+  try {
+    const sb = cloudClient();
+    if (!sb) return false;
+    const { data } = await sb.auth.getSession();
+    return Boolean(data.session);
+  } catch { return false; }
+}
+
+/**
+ * Sign out from classic.html: push any unsaved work, end the session, and
+ * clear the organization's data from this device (a shared computer must
+ * not keep it), then land on the sign-in screen.
+ */
+export async function cloudSignOut(): Promise<void> {
+  if (!isCloudConfigured) return;
+  const sb = cloudClient();
+  if (!sb) return;
+  try { await classicEngine?.flush(); classicEngine?.stop(); } catch { /* best effort */ }
+  // the flag survives any autosave race — the sign-in screen sweeps on it
+  localStorage.setItem(SIGNOUT_PENDING_KEY, "1");
+  try { await sb.auth.signOut(); } catch { /* still sign out locally */ }
+  const authKey = authStorageKey();
+  if (authKey) localStorage.removeItem(authKey);
+  for (const k of WORKSPACE_KEYS) localStorage.removeItem(k);
+  clearSyncMeta();
+  window.location.replace("./maps.html");
+}
+
+// AI transport for classic.html: null in local builds or signed-out sessions
+// (→ the direct user-key mode, unchanged), or {url, token} for the
+// server-side claude-proxy on cloud builds (fresh token per call).
+export { aiProxy } from "../pro/aiTransport";
+
+/**
+ * Cloud builds: classic.html is for signed-in users — a signed-out visitor
+ * is sent to the hub's sign-in screen (after signing in they are returned
+ * to the Dashboard). Local builds: no-op, the app opens directly as always.
+ */
+export function enforceCloudSignIn(): void {
+  if (!isCloudConfigured) return;
+  void (async () => {
+    try {
+      const sb = cloudClient();
+      if (!sb) return;
+      const { data } = await sb.auth.getSession();
+      if (!data.session) window.location.replace("./maps.html");
+    } catch { /* can't tell — leave the page alone */ }
+  })();
+}

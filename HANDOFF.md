@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-08-24 (cleanup session: ONE upload flow §12, Floor Care eligibility + industry-real machine times §12c, API key that survives everything §4, React/Tailwind vendored — zero CDN on classic.html). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-09-01 latest (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -51,6 +51,8 @@ OpsMatrix is Josh Wakely's hospital EVS (Environmental Services) operations plat
 | `opsmatrix_fusion_nonspace` | hub | `[{id, name, hours, scheduleId, roomIds[]}]` non-space task instances |
 | `opsmatrix_fusion_aliases` | importer + WI | approved source-name → room/floor type mappings (`{roomTypes:{}, floorTypes:{}}`) |
 | `opsmatrix_fusion_floorcare` | Max Floor Care | `{schedules:[FcSchedule], projects:[FcProject]}` (§12c) |
+| `opsmatrix_fusion_planstudio` | Calibration Editor | `[StudioSet]` — the editable calibration sets (§12j) |
+| `opsmatrix_fusion_routes` | Max Sanitation + Max Policing | `{sanitation:[SanRoute], policing:[PoliceRoute]}` (§12m) |
 | `opsmatrix_max_api_key` | fusion (both pages) | dedicated API-key backup slot — see below |
 | `opsmatrix_sched_v1` | old React app | its own AppState (irrelevant to Classic) |
 
@@ -97,7 +99,7 @@ The user's Anthropic API key lives in TWO slots (fixed 2026-08-24 — Josh's key
 4. Face↔room assignment: one-to-one, by contained label text (fuzzy `matchLabel`) ranked by CSV-area agreement — survives duplicate names (real scan has 3 rooms named "Bedroom"). Unique-area rescue for missing labels; `hullClosureStrips` (inward-biased) for open scan sides.
 - Real-scan results (locked in tests): Bedroom 420.25→421.41 (0.28%), Bedroom 141.53→141.46, Bedroom 71.84→71.96, Other 20.60→18.11 (magicplan counts doorway-threshold floor; tolerance = 5% OR 3 sq ft absolute, documented).
 - `mergeShapes` unions rooms through their doorways (door patches as bridges; refuses if no connecting door); walls between merged rooms survive as holes.
-- **Ground truth fixtures**: `test-fixtures/Test_project_-_1st_Floor.dxf` + `Test_project_Statistics.csv` are **Josh's REAL magicplan exports (READ-ONLY — never regenerate/substitute)**. History note: earlier fixtures were synthetic stand-ins I generated (fully disclosed + audited on 2026-08-05); Josh then provided the real files and everything was rebuilt/validated against them. **172 vitest tests green (`npm test`)**: parsers, geometry (incl. damaged-scan robustness), compute engine of the old React app, schedule-doc generation (§10), the AI plan reader (§11), and the CAD room-list importer + workload engine (§12a).
+- **Ground truth fixtures**: `test-fixtures/Test_project_-_1st_Floor.dxf` + `Test_project_Statistics.csv` are **Josh's REAL magicplan exports (READ-ONLY — never regenerate/substitute)**. History note: earlier fixtures were synthetic stand-ins I generated (fully disclosed + audited on 2026-08-05); Josh then provided the real files and everything was rebuilt/validated against them. **193 vitest tests green (`npm test`)**: parsers, geometry (incl. damaged-scan robustness), compute engine of the old React app, schedule-doc generation (§10), the AI plan reader (§11), and the CAD room-list importer + workload engine (§12a).
 
 ## 9. DEMO SEED (critical for Josh's client demos)
 
@@ -180,10 +182,284 @@ Every hub view (Map, Schedules, #spaces, #scope, #workload, #floorcare) now has 
 - Verified at iPhone viewport (393×852, touch): 13/13 — no horizontal overflow on any view, sheet interactions, zoom buttons, stacked builder.
 - **Real-device fixes (Josh's iPhone testing)**: (1) tap slop — a fingertip wobbles, so touch taps get a 14px total-travel budget before counting as a drag (mouse keeps 5px); without it real thumbs couldn't select rooms. (2) During legend-assign mode on phones the room sheet stays CLOSED so rooms can be tapped rapid-fire (recolor = feedback); a plain tap still opens the sheet. (3) Classic's mobile bottom bar (4 items + "More" grid) is hidden on ≤767px and replaced by `#fusion-bottomnav` (fusion-ui `ensureMobileNav`): one horizontally sliding strip built FROM the sidebar's buttons, so every destination — fusion additions like Max Floor Care included — is one thumb-slide away, and anything added to the sidebar later appears automatically.
 
+## 12e. PRODUCTION CLOUD MODE (added 2026-08-26 — dormant until activated)
+
+**The mode rule:** a build with no `VITE_SUPABASE_*` env vars is LOCAL mode — exactly the app described everywhere above, demo included, verified bit-identical (no login, no cloud code even downloaded). Cloud mode exists only in builds made with those vars (staging/production pipelines). Activation is human steps in **`SETUP_PRODUCTION.md`** — nothing is live yet.
+
+- **Data**: `src/pro/workspaceStore.ts` defines THE workspace (7 localStorage stores; the API key is stripped from anything that leaves the device — tested). Scope page has a **Data backup** card (download/restore one file). `src/pro/syncEngine.ts` mirrors the workspace to org-scoped `workspaces` rows (migration `0002_production.sql`) with `state_rev` optimistic concurrency, delta pushes, pure-truth-table decisions (unit-tested), honest conflict prompts, staff=view-only, audit rows per push. localStorage stays the working copy — the app itself is untouched.
+- **Auth**: `AuthGate`/`CloudGate` (lazy chunk) — sign in, org create / 24-char-invite join (RPCs), **TOTP MFA required for directors** (QR enroll, native Supabase). classic.html shares the session (same origin) and syncs via `OpsMatrixFusion.startCloudSync()`; sign-out clears the workspace from the device.
+- **AI**: `anthropicRequest()` in aiPlanImport picks DIRECT (user key, unchanged, test-locked) or PROXY per call. `supabase/functions/claude-proxy` holds the org key server-side, checks session→org, enforces `AI_MONTHLY_TOKEN_BUDGET`, meters into `ai_usage` (service-role-only writes), CORS via `ALLOWED_ORIGINS`. All call sites wired incl. the archive's Max via a one-URL fetch bridge in fusion-ui (cloud+signed-in only; placeholder key marker `managed-by-opsmatrix-cloud` satisfies the archive's key check).
+- **RLS proof**: `supabase/tests/rls-isolation.test.sql` — 10 cross-tenant assertions, PASSED against real Postgres 16 with both migrations in this session.
+- **Pipelines**: `deploy-staging.yml` (`staging` branch) / `deploy-production.yml` (`main`, GitHub environment approval) → Cloudflare Pages, cloud-mode builds; old `deploy.yml` (GitHub Pages) stays the LOCAL demo. `public/_headers` ships security headers + report-only CSP. `initMonitoring()` (logger) lazy-loads Sentry only when `VITE_SENTRY_DSN` is set. Staging origin: `https://staging.opsmatrix.pages.dev` (project `opsmatrix`).
+- **STAGING STATUS SNAPSHOT (2026-08-28, end of debugging session)**: staging is deployed and healthy at `https://staging.opsmatrix.pages.dev` (Cloudflare Pages project `opsmatrix`, `staging` branch alias; root `/` redirects to classic.html via `public/_redirects` — the deprecated surface-C scheduler at `/` confused the first smoke test). Supabase staging ref `gwszrrbazfnnnogtdyzg`; proxy deployed with health check (`GET /claude-proxy`) and `?selftest=1` (server-side 1-token Anthropic test). **The entire staging AI outage traced to ONE root cause**: the stored ANTHROPIC_API_KEY contained invisible characters from a bad one-time copy (Anthropic shows keys once; the truncated/mangled clipboard copy was recycled through every re-paste) → Deno threw "failed to parse header value" on every upstream call, masked variously as "key rejected"/502/"cannot reach Claude". The proxy now sanitizes the key to printable ASCII on read and reports `stray_characters`; the runbook §2 block mints-fresh → sanitizes → verifies against Anthropic → stores ONLY on 200. **NEXT STEP when this session resumes: Josh mints a fresh staging key, runs the gated block, selftest should return upstream_status 200, then the 7-item smoke retest** (bare domain→Dashboard, Max question, plan upload, Excel→"Open the rooms", ai_usage rows model=claude-fable-5, sign-out/in, invite code), then flip OFF "Allow new users to sign up" in staging Auth, then production activation (runbook §7: prod pull+deploy+fresh key via ritual, real origins replacing pending.invalid, PITR, privatize repo, approval-gated main deploy). Operational lessons now encoded in the runbook: git pull BEFORE every `functions deploy` (the site builds from GitHub, the function ships from the local folder — stale deploys burned two debugging rounds); keys are verified before storing, ever.
+- **Staging smoke-test fixes (2026-08-28, Josh's findings)**: (1) the Claude fetch bridge on classic.html installs SYNCHRONOUSLY and resolves the proxy per call — the original async install left a race where the placeholder key (`managed-by-opsmatrix-cloud`) leaked to Anthropic as "invalid API key" (reproduced + fixed + regression-tested); with no session and no real key the wrapper answers locally with a plain-English sign-in message. (2) Cloud flow: fresh sign-in on maps.html lands on the DASHBOARD (classic.html); signed-out visitors to classic.html are sent to the sign-in; ?demo=1 never seeds on cloud builds (would sync into the org). (3) The archive's "Max AI" settings block (API key + model picker) is hidden on cloud builds — AI is account-managed, and the proxy PINS the model server-side (`FORCE_MODEL`, default claude-fable-5). (4) Room-list import result: single "Open the rooms" button that lands ON Max Space (via one-shot `fusion-goto-space` flag); the Workload-Intelligence button removed (WI lives in Admin Settings, noted in the dialog).
+- **xlsx security**: SheetJS 0.18.5→0.20.3 via npm alias `@e965/xlsx`; `copy-xlsx.cjs` refuses <0.20.2; `verify-xlsx.yml` proves the republish byte-identical to cdn.sheetjs.com on every dep change + weekly.
+
+## 12f. STAGING UX PUNCH LIST (2026-08-28 — Josh's smoke-test feedback, all shipped)
+
+Verified by a 57-check Playwright run against the dev server; 203 vitest tests green.
+
+- **Max Space moved to the hub** (`maps.html#spaces`, `src/pro/SpacesApp.tsx`): the archive's Explorer/Table/edit-modal screens are retired (they lacked floor type, fixtures, priority, cleanability — the numbers the engine runs on — and their DOM can't be safely reshaped from outside React). Hub Max Space has tabs **Explorer | Room List | Map View | Floor Plans** (last one links back to the archive's plans/calibration screen via `classic.html?fp=1`). Classic's "Max Space" nav, and the archive strip's Explorer/Table buttons, are capture-rewired to the hub (`?fp=1`/calibration flags pass through to the archive). Room List + Explorer's room level share one table: room #, name (never the building — the filters own that), department, room type, floor type, fixtures, sq ft, **priority chip 1/2/3** (`PRIORITY_NUM/WORD` in classicStore; 1=High/2=Medium/3=Low internally so printing is untouched), **cleanable checkbox** (writes `cleanability`, reprices), 📝 note flag, and **✏ edit / ⧉ duplicate / ✕ delete** (`duplicateSpace`/`deleteSpace` in classicStore — delete scrubs schedules + non-space roomIds; duplicate never copies geometry/schedule). NO scheduling controls in Max Space. Filters: building/floor/department/room type/floor type/priority + a full-width search row (no schedule filter, no cryptic mini-box). **RoomEditor** modal (add+edit): Basic = number/name/type/priority/fixtures/floor type; sqft (+vacuum days on carpet); cleanable; tasks chips; notes. Campus/building/floor are read-only on existing rooms (the import owns them; shown only when ADDING a room). No minutes shown — that's Max Schedules' business.
+- **The ONE back button**: `src/pro/nav.ts` + its ES5 twin in fusion-ui keep a shared back-trail in sessionStorage (`om_nav_stack`; tokens `classic:<sidebar label>` / `hub:<view>`). Every hub header carries the same blue `‹ Back` bubble (replaces "← OpsMatrix"); classic gets one injected under the logo (`#fusion-back`, hidden until there's history) and first on the phone strip. Back goes to the EXACT previous view — hub hashes are now the source of truth (`#tab-rooms`, `#tab-schedules`, `#spaces?view=…`, reactive hashchange) so views are addressable. Cross-document hops use `fusion-goto-page`.
+- **Max Schedules**: tabs are **Map | Rooms | Schedules**. Rooms = list scheduling (needs chips with ⚠, colored coverage chips with ✕, "＋ Add to…" per row — same `setCoverage` semantics as the map). Map sidebar speaks plain language ("Who cleans this room", "Nobody yet — tap ＋ Add to schedule"), surfaces the room's notes (own `space.notes` + linked manager notes — `notesForSpace`), and **＋ Add to schedule is always there** (the old block vanished when no schedules existed), including an inline "＋ Make a new schedule…" mini-form with the 8-color picker. Create row on the Schedules tab: color picker + "Worker — add later (optional)" (the confusing "— assign later —" is gone); every card has a color dot that changes the schedule's color in place. "edit room details →" goes to hub `#spaces?view=map` (proper Max Space header) with the room still selected; ‹ Back returns to the Max Schedules map.
+- **Floor Care builder map picking**: Map | List toggle (map default when a plan + eligible geometry exist). Same `MapCanvas` (now its own file `src/pro/MapCanvas.tsx`); eligible rooms selectable (colored by assigned tech once tapped), everything else `#33404d` and inert; tap = add stop for the active tech (multi-task rooms get a chooser strip).
+- **Max chat quality** (fusion-ui `wireMaxQuality`, archive untouched): `maxCleanReply` override kills the 90-char "…" clamp; `maxFetchMessage` wrapper raises `max_tokens` 320/420→≥1000, appends CURRENT DATE & TIME (+explicit today/tomorrow ISO — "carpet extraction tomorrow night" now resolves itself, no YYYY-MM-DD lectures), and adds **prompt caching** (`cache_control` on system + last tool) so the tool loop's round trips stop re-reading the whole 43-tool prompt — the main driver of the 45–50s replies. `findRoom` (Max tools) is fuzzy now: exact → suffix ("1230" finds "C-1230") → narrowed by new `building` param on `add_floor_care_project`, so project notes arrive pre-linked to the right room.
+- **Projects carry no priority**: the Max Calendar tile's priority chip AND its "Schedules" button are hidden (fusion DOM fix — scoped to tiles that pair with a "Note" button).
+- **Dashboard**: "Manage Training" hidden; "Schedule Reminders" tile capture-rewired to Max Calendar.
+- **Upload → Import**: the injected "⬆ Upload" strip tab is GONE; the two entry points are **⬆ Import** (same 3-option hub, classic + hub headers) and **＋ Add Room** side by side. The archive plans screen gets an injected ＋ Add Room (hub editor). Room-list import's "Open the rooms" lands on the hub Room List.
+- **Calibration is back**: both plan-upload dialogs offer "📐 Calibrate it yourself instead" → the archive's original Add Floor Plan flow (trace a known room, border detection, measuring) via `fusion-goto-plans`/`fusion-goto-addplan` flags or `classic.html?calibrate=1`.
+- Still archive-reachable but rewired-away: the old Explorer/Table screens (only via Max voice `navigate('space')`, acceptable); their retirement is DOM-level only, data untouched.
+
+## 12g. EXPORTING + THE CALIBRATE-OR-READ QUESTION (2026-08-28 evening, Josh's asks)
+
+- **Admin Settings → Exporting** (`maps.html#exporting`, UI `src/pro/ExportApp.tsx`, pure row-building `src/pro/exportData.ts`; classic Admin Settings gains an injected "exporting" sub-tab next to scope/workload intelligence). Scope pickers cascade Building → Floor → Department → Room (each optional — export everything down to one room). Two formats, both written client-side with the vendored SheetJS:
+  - **📄 Clean report**: Summary sheet (scope, room count, total/cleanable sqft, weekly minutes, needs-review counts) + Rooms sheet with every data point (type, floor type, fixtures, sqft, priority 1-3, cleanability, tasks, minutes/clean, frequency, weekly minutes, notes), fitted column widths.
+  - **🔁 Re-import file**: headers drawn from the importer's own vocabulary (`REIMPORT_HEADERS`), Internal Handle = source key or space id so re-imports match by key; cost-center-keyed departments (`cc:*`) go out through Cost Center/Description columns so `departmentIdentity` reproduces the exact same key; Gross/Net S.F. deliberately NOT exported (area-column selection could prefer them; gross is display-only). **Round trip proven in `exportData.test.ts`**: re-import into the same data = 0 created / 0 updated / 0 clobbered; into an empty system = every field faithfully recreated; a manager's newer edit still wins over a stale export. Task lists are not columns — they follow Scope's room-type rules wherever the file lands (said in the UI).
+  - **Importer upgrades that make the round trip possible** (`roomListImport.ts`, all covered by tests): Fixture Count is now APPLIED (was detected but dropped); new optional columns Priority (1/2/3/high/…, `parsePriorityCell`), Cleanable (yes/no/needs review, `parseCleanableCell`), Notes — all riding the same manual-edit-wins machinery; `normalizeFloorType` round-trips OpsMatrix's own three labels ("Hard floor — finished" used to come back blank).
+- **Plan upload now OPENS with the question** (Josh: the calibrate path must be a prompt, not a footnote): both dialogs (classic `openPlanUpload`, hub `AiPlanImport`) start with two tiles — "✨ Yes, the sizes are printed — Max reads it" → the AI flow; "📐 No, just the floor plan" → the archive's calibrate flow (trace 1–3 known rooms, border detection, Max/auto-detect measures the rest) via the `fusion-goto-plans`/`fusion-goto-addplan` flags. Classic's Floor Plans screen also gained the ⬆ Import + ＋ Add Room pair (Import was missing there once the Upload tab died).
+- Verified: 211 vitest tests green (18 new), 17-check Playwright pass (export tab + downloads parsed back and header-verified + both choice flows end-to-end).
+
+## 12h. FLOOR-CARE EXCLUSIVITY, SCHEDULING COMPLETENESS, SCOPE REWORK, CALIBRATE-WITH-MAX (2026-08-28 night, Josh's asks)
+
+- **Floor-care tasks are Max Floor Care's ALONE** (`isFloorCareTask`/`splitRequiredTasks` in rules.ts): every Max Schedules scheduling control excludes them — coverage-row toggles, sidebar instant-add, the inline new-schedule add, the Rooms tab add, the map legend-assign click, and the Task filter. They still SHOW everywhere as dashed 🧽 chips ("waiting on a Max Floor Care schedule" when unbooked) and coverage from SHIPPED floor-care schedules counts, so `uncovered()` stays the one truth. FC-shipped schedule rows in the room sidebar are read-only with an "edit in Max Floor Care" link; FC schedules are excluded from every add-to list. **The demo seed itself was the leak Josh caught** — its cleaning schedules carried `dust-mop`; now they carry high-dusting instead, stamp bumped to `classic-demo-v5`.
+- **Scope's floor-care toggle**: every space-task row has "🧽 Floor care only" (writes `task.floorCare`), the create row has the same checkbox — the toggle decides which scheduler a task can appear in, everywhere, with zero extra plumbing.
+- **Completeness indicators**: MapCanvas gained `flagFor` — Max Schedules' map shows ⚠ on any room whose base clean or tasks (floor care included) aren't all scheduled; Floor Care's builder map shows ⚠ on rooms with unbooked floor-care tasks (booked = stops on the current draft OR any other saved FC schedule). Coverage filter gains **"Fully scheduled"**.
+- **Scope reworked** (ScopeTab + pure `scopeDraft.ts`, tested): all explainer prose gone; plain headers; **a Save button per section** editing a shared draft but committing ONLY its own slice (Room types owns task `autoFor` chips; Space tasks owns rates/labels/floorCare/existence — isolation is unit-tested); **everything deletable, built-ins included** (confirms spell out consequences; deletions land on Save); breaks moved to the bottom; **the general cleaning formula renders only for the account administrator** — `accountRole.ts`: local build = "owner", cloud = profiles.role, `canEditFormula` = owner|director. This is the FIRST BRICK of the role system; Josh will spec the full administrator/director/manager/supervisor matrix later.
+- **Export reshaped**: format 1 is now the **Data export** — one row per room, columns exactly like the tree (Building, Floor, Department, Room Number, Room Name, Room Type, Floor Type, Fixtures, Square Feet, Priority (1-3), Internal Handle), no summary, no totals ("that's for actual reports"). The Re-import file is unchanged (still the lossless round-trip format).
+- **Calibrate-with-Max replaces hand tracing as the no-sizes default** (`planCalibrate.ts`, tested): the "No — just the floor plan" tile now stays in the reader — Max reads and draws every room (the §11 two-pass pipeline, much stronger than the archive's one-shot AI detect), then a calibration step asks for the square footage of **1–3 rooms the manager knows** (median of per-anchor √(pxArea/sqft) sets `plan.ratio`, anchors keep their typed numbers, every other room = pxArea/ratio²), and the plan lands **matrix-style like every other import** — Josh's "create floor plan" ask falls out for free. Entry points: hub choice tile, and classic's tile → `maps.html#spaces?view=map&plancal=1` (UploadHub auto-opens the reader in calibrate mode). The archive's hand-tracing editor stays behind "Trace it by hand" links / `?calibrate=1` for worst-case plans. **Deferred, flagged to Josh**: undo/edit-in-place inside the archive tracer and drag-and-snap adjustment of AI shapes need a fusion-owned plan editor (the archive is read-only) — that's the next sizeable build if the calibrate flow doesn't cover his blurry-plan cases.
+- Verified: 222 vitest tests green (19 new: scope section isolation, floor-care split, calibration math), 27-check Playwright pass (exclusivity incl. storage-level assert, flags on both maps, scope save isolation live, data-export download, both calibrate entry points).
+
+## 12i. THE PLAN STUDIO (2026-08-28, late night — replaces §12h's blind calibrate step AND the archive tracer)
+
+Josh's spec verbatim: one consistent tool, plan on screen the whole time, calibrate BEFORE Max reads anything, Max's shapes selectable/draggable/re-snappable, output always the matrix-style plan. The §12h calibrate step (read first, type square footage blind) is gone — it was backwards.
+
+- **The flow, same order every time**: ⬆ Import → 🗺 Floor plan → building/floor → THE QUESTION (sizes in the file?) → **Yes** = the unchanged Max-reads-everything path; **No** = the **Plan Studio** opens full-screen on the file. **CAD accepted**: `.dxf` is parsed (`src/pro/dxfRaster.ts` — LINE/LWPOLYLINE/POLYLINE/ARC/CIRCLE, tested) and drawn to a clean picture, then the pipeline is identical to a photo/PDF; `.dwg` gets a plain-English "export as DXF or PDF". No API key is needed to OPEN the Studio — only "Max draws the rest" uses one.
+- **`src/pro/planSnap.ts`** — the archive's wall-detection/snap engine ported verbatim to TS (buildGray/snapToWalls/rectify/rdp/autoDetectRooms), pure over a Gray struct and unit-tested on synthetic plans (rough taps land ≤7px from true walls; traced area within ~2%). The archive stays untouched; its Add Floor Plan tracer is fully retired for new plans (goto-plans/addplan flags and goToCalibrate removed; legacy `?calibrate=1` redirects to the Studio; Floor Plans in classic remains the viewer of saved plans — this also kills the "clicked a room and it asked me to schedule it" archive-editor weirdness Josh hit).
+- **`src/pro/PlanStudio.tsx`** — full-screen portal. Trace mode: rough corner taps (floating bar shows count), **↩ Undo point / ⌫**, Enter or double-click finishes → `snapToWalls` seats the shape. Typing a traced room's square footage = a ⚓ calibration anchor (median across anchors, `calibrateFromKnownRooms`); every other shape's ft² renders live from the calibration. **"✨ Max draws the rest" is disabled until calibrated** — it runs `readPlanWithAI` on the exact picture on screen, skips rooms whose centre the manager already traced, auto-snaps each arrival, and colors them amber vs the manager's teal. Every shape: click selects (info form pops — number/name/type/sqft), **drag moves it, arrow keys nudge, ⌖ Snap re-seats it, ✕ deletes**; global ↩ Undo/Ctrl-Z covers all shape operations. **✓ Create floor plan** → `buildPlanFromRooms` (the same matrix-style redraw every import uses; `plan.ratio` from the calibrated sqft) → persisted via the normal attach path. Manual-only usage (trace every room, never call Max) is a first-class path.
+- `aiPlanImport.ts` untouched except re-exporting `ImportResult`; request shape and its locked tests unchanged.
+- **SUPERSEDED same night by §12j** — Josh's 16-step spec reshaped this into the Calibration Editor (two-phase Confirm Matrix → details → Ship, multi-select, saved editable sets, account hierarchy). §12i's core (planSnap port, one flow, matrix output) carries forward.
+- Verified: 233 vitest tests green (11 new: snap engine on synthetic plans, DXF parsing), 26-check Playwright e2e driving the REAL Studio — synthetic 2-room plan uploaded, room traced with deliberately-off taps (snap lands 59,100px² vs 60,000 true), calibrated at 600 ft², second room auto-measured ≈400 ft², dragged off and ⌖-re-snapped back, Create floor plan → SVG matrix plan with ratio persisted, legacy routes redirect. The AI-assist leg reuses the test-locked reader + the tested snap; Josh exercises it on staging with the real blurry plan.
+
+## 12j. THE CALIBRATION EDITOR, TO JOSH'S 16-STEP SPEC (2026-08-28, final pass)
+
+The Plan Studio became the **Calibration Editor** — Josh's exact operational sequence, now the ONLY plan flow in the app (the classic-side duplicate reader `openPlanUpload`/`runSmartImport` was excised from fusion-ui; classic's Floor-plan tile redirects to `maps.html#spaces?plan=1`, which opens the hub modal at the question).
+
+- **The sequence (steps 1–6)**: Max Space → ⬆ Import → three options → Floor plan → **Account → Building → Floor entered UP FRONT and REQUIRED** (account = the hospital system, tops the hierarchy `account → building → floor → department → room`; prefills from the device's existing system/orgName; `space.system` carries it, both modes) → THE QUESTION (sizes in the file?) → No = the Calibration Editor opens on the file. Departments are NOT chosen at upload — they're per-room in the details phase.
+- **Draw phase (7–13)**: trace → snap → THEN enter info (sqft = calibration anchor; every anchor sharpens the measuring; repeat at will). "✨ Max draws the rest" arms only after calibration; its boxes arrive auto-snapped and ALL SELECTED, explicitly *not data yet* — **shift-click multi-select, "▣ Select all of Max's boxes", group drag, arrow nudge, and ⌖ Snap selected as the double-check**.
+- **✓ Confirm Matrix (14)**: boxes lock, every ft² computed from the calibration, and the canvas switches to the FINAL matrix rendering (buildPlanFromRooms preview). "‹ Back to adjusting" unlocks.
+- **Details phase (15)**: select each room on the matrix and enter the Max Space fields — number, name, **Scope** room type, floor type, fixtures, **department** (datalist of existing) — rooms missing a department show "dept?" in the rail.
+- **🚀 Ship to Max Space (16)**: writes the stores DIRECTLY (loadClassic → applyStudioShip → saveClassic + plans setItem, `studioSets.ts`) — the importer pattern, immune to React updater timing/StrictMode double-runs (a real bug found by e2e: shipping through `commit()` saved an empty id-map and never wrote the plans store). Ship also **attaches to rooms that already exist** (room number within building) instead of duplicating. Rooms the Studio creates get their own ids (`sp-studio-*`; buildPlanFromRooms' Date.now stamps can collide across builds — caught by test).
+- **Calibration sets** (`opsmatrix_fusion_planstudio`, in the workspace/backup/sync store list): every ship saves the source picture + shapes + anchors + hierarchy + the shape→space id map. **Max Space → "Calibration Editor" tab** (`#spaces?view=studio`) is the home screen: sets listed, ✏ Edit reopens the editor, and **re-shipping a remodel lands on the SAME room ids** (contract-tested in `studioSets.test.ts`): moved shapes update geometry/sqft/details in place, added shapes become new rooms on the same plan, deleted shapes leave their rooms in Max Space minus the drawing; the plan record updates under its original id, so Map View and schedules never break.
+- Verified: 237 vitest tests green (4 new set-contract tests), **26-check Playwright e2e of the literal 16 steps** — required hierarchy gate, trace→snap→calibrate order, shift-click group drag + re-snap (areas land back within tolerance), Confirm Matrix swaps in the SVG rendering, details incl. department, ship files `Summa Health → Crawfordsville → 2nd Floor → Oncology (7 East) → 101`, re-edit from the nav moves a box and re-ships onto identical ids with one plan updated in place, classic tile lands in the one hub flow.
+
+## 12k. CALIBRATION EDITOR REV 2 — MAX-FIRST + THE TOOLBAR (2026-08-29, Josh's revision)
+
+Order flipped and the editor became a real editing tool:
+
+- **Max draws EVERYTHING first, automatically**: picking the file in the no-sizes flow runs the reader immediately ("Max is drawing the floor plan…") and the editor opens with the boxes ready to correct. No key / unreadable plan → the editor opens EMPTY with a plain-English notice; tracing by hand stays first-class, and "✨ Max draws the rooms" can be retried inside.
+- **THE HARD NO-OVERLAP RULE**: incoming AI boxes are snapped, sorted by size, and any box covering >35% of an already-kept box is DROPPED (`overlapRatio` in planSnap — rasterized intersection/min-area, tested). The notice reports how many were dropped.
+- **The toolbar** (edit phase, floats top-left): ↩ Undo / ↪ Redo (full redo stack; Ctrl+Z / Ctrl+Shift+Z) · ☝ Select · ✏ Trace · **⬒ Reshape** · **⧉ Merge** · ⌖ Snap (selection) · ✕ Delete (selection).
+  - **Reshape**: pins on the selected room — square edge-handles slide the whole edge along its own normal (clean horizontal/vertical pulls on square rooms, clean angled pulls on angled ones); round vertex-pins drag freely but click onto a neighbour's x/y when close (symmetry for free); double-click an edge adds a pin (curves = many pins), double-click a pin removes it.
+  - **Merge**: tap two rooms → one outline via `unionPolygons` (rasterize → morphological CLOSE with k=9 so rooms separated by a real wall thickness still join, boundary comes back true — L-shapes keep their notch, tested) — refuses rooms that don't touch. Merged room keeps the first-tapped identity; its calibration anchor is cleared (the shape changed).
+- **Faint plans**: `stretchGray` (in buildGray) boosts the ink population itself — the 75th-percentile ink level scales to solid — so light-gray/washed-out walls snap like crisp ones (percentiles over ALL pixels fail because lines are <2% of a plan; tested).
+- **Phases now: EDIT → ✓ Finish editing → CALIBRATE (select up to 3 rooms, each gets a "Calibration measurement" field, counter shows n of 3, no square footage shown anywhere before this) → 📏 MEASURE ALL ROOMS (locks the matrix rendering, fills every room's ft²) → DETAILS (unchanged: number/name/Scope type/floor type/fixtures/department) → 🚀 Ship.**
+- Verified: 242 vitest tests green (stretch/overlap/union added), 19-check Playwright e2e — Max-first entry incl. the keyless notice, toolbar present, no ft² in edit phase, edge pull slides straight (-40px X, Y untouched) with undo AND redo round trip, pin added by double-click, merge of two wall-separated rooms → one shape at combined area then undone, calibrate counter + measure-all gate, ship with hierarchy + calibrated areas + saved set.
+
+## 12l. CALIBRATION EDITOR POLISH (2026-08-31, Josh's nitpick pass — "so close to perfect")
+
+- **▣ All** on the toolbar selects every room (the rail keeps "Select all of Max's boxes" for the AI subset).
+- **Re-snap no longer reverts**: `snapToWalls` gained `maxOffset` — the toolbar's ⌖ Snap on an established shape searches only ±14px (a refinement), so a reshaped or merged room can't get yanked back to the wall the user deliberately left. Fresh traces and AI arrivals keep the full search reach. Tested with a two-wall synthetic (tight snap seats on the near wall, never reverts).
+- **Border-to-border rule**: new `alignEdgesToNeighbors` (planSnap, tested) runs after every snap — an edge running almost along a neighbouring room's edge (sliver gap OR slight overlap, ±12px) moves onto that neighbour's line exactly. Applied on toolbar ⌖ Snap, trace finish, and AI ingestion, so shared walls are actually shared and nothing draws over shell spaces.
+- **Departments are creatable in the details phase** — the field says so ("pick one, or type a NEW department"); typing a new name creates it on ship.
+- **Blanks ship**: the name-or-number gate on 🚀 Ship is gone — the only hard requirement is the calibration (already enforced by 📏 Measure all rooms). Blank rooms land in Max Space flagged for validation, exactly the intended workflow; anything Max READ off the plan (numbers/names) still arrives preloaded.
+- Verified: 246 vitest tests green, 6-check Playwright pass (Select All, border-to-border after a deliberate 10px drag, no far-wall reversion, new-department creation, blank room shipped).
+
+## 12m. THE ROUTE ENGINES + NAVIGATION + SCOPE REWORK (2026-08-31 night, Josh's batch)
+
+**MAX SANITATION** (`src/pro/SanitationApp.tsx`, logic in `src/pro/routes.ts` — pure and tested).
+A soiled-utility collection route, built on the map like Max Floor Care but with its own rules:
+only soiled utility / soiled hold rooms are selectable (`isSoiledUtility` — matches the room name
+or type), and the manager first drops a **sanitation dock pin** anywhere on the plan. Clicking rooms
+records the running order; `sanTiming` prices every leg by REAL distance — centroid-to-centroid on
+the plan, converted through the plan's own `ratio` (px per foot) at `SAN_FT_PER_MIN = 250` (3 mph
+walking, derated for pushing a cart) — plus `SAN_PICKUP_MINUTES = 3` per room and
+`SAN_UNLOAD_MINUTES = 4` per dock unload. The trip home is always included; **⏎ Return to dock**
+inserts a mid-route unload (cart full → dump → carry on). An unscaled plan says so plainly instead
+of inventing distances. Shipping writes a real schedule (`routeOnly`, `fixedMinutes`,
+`routeStopMinutes`) that prints and reports like any other, but **never counts as cleaning
+coverage** — visiting a room is not cleaning it.
+
+**MAX POLICING** (`src/pro/PolicingApp.tsx`) — the day-porter engine, built as the shell Josh asked
+for. Only lobbies, restrooms, waiting rooms and corridors are selectable (`POLICE_TYPES`), only
+non-floor-care tasks are offered, and repeat passes accumulate. Ships the same way. **Still to
+spec:** the frequency model (how many passes a day), cart stocking, coverage windows.
+
+**Navigation.** A persistent left menu (`SideNav` in MapsApp) carries every Max destination on every
+hub page, mirroring classic's sidebar; classic's own sidebar gained Sanitation and Policing under
+Floor Care. **Building first** on every map (`BuildingPicker` / `BuildingBadge` in MapCanvas): with
+plans in more than one building nothing draws until a building is chosen, the floor stack then lists
+only that building's plans, the choice is remembered across pages (`om_map_building`, sessionStorage),
+and the building name sits in the map's top-right corner at all times.
+
+**Scope.** No more sponge icons — cleaning tasks read green, floor-care blue (`.tname`, `.ptask.fc`).
+Room types show their automatic tasks as individually deletable chips with a ＋ picker. The general
+formula gained **mopping / vacuuming inclusion toggles**, and standalone `Mopping` / `Vacuuming`
+space tasks exist for when they're switched off. **General Clean is visible under Space tasks** and
+deletable past a loud warning (`general.formulaOff` — room times then count only explicit tasks and
+type minutes, with a restore link). Built-ins deleted in Scope now STAY deleted (`deletedBuiltIns`
+tombstones in saveRules) instead of resurrecting on the next load.
+
+**Non-space tasks, reworked.** Priced **per occurrence** (`minutes`) plus attached **qualifiers** —
+a new Scope section with **Travel time** built in at 5 minutes. (No published industry standard
+breaks travel out: terminal-clean figures of 35–45 min fold it in, so the default is an honest,
+editable starting point and says so on screen.) Schedules add a non-space task **with a count** in
+Max Schedules — 5 discharges = 5 × (40 + 5) = 225 minutes — and the count is editable on the card.
+Sanitation Route left the non-space list entirely; the engine above replaces it.
+
+**Max Floor Care.** Opens straight into the builder (no "Build a schedule" landing). Clicking a room
+opens a card with **Needs** on top and **Does not need** below (`fcNotNeeded`, saved on the room), and
+**dust mopping ↔ machine sweeping are mutually exclusive** (`FC_EXCLUSIVE`) — the same pass, one with
+a machine and one without, so booking either removes the other and says why.
+
+**Plan uploads.** Both answers to the calibrate-or-read question now land in the Calibration Editor.
+A file that STATES its sizes arrives fully preloaded — numbers, names, Scope-mapped room types and
+the stated square footage as each room's calibration measurement (`sizesFromFile` lifts the 3-anchor
+ceiling and rewords the step) — and approval happens on 🚀 Ship to Max Space. The old direct-write
+import path is deleted: there is exactly one way rooms enter Max Space from a plan.
+
+**Migrations.** Two new synced stores meant two migrations — `0003_planstudio_store.sql` (the fix for
+the staging sync error) and `0004_routes_store.sql`. `workspaceSchema.test.ts` parses the migration
+files and fails CI if `WORKSPACE_KEYS` and the DB whitelist ever drift again.
+
+Verified: 281 vitest tests green; 41-check Playwright pass across all seven surfaces (left nav on
+every page, building gate + badge + remembered choice, sanitation dock pin and its refusal message,
+policing map, Scope colour coding/qualifiers/deletable chips, Floor Care straight-to-builder with the
+Needs card), no page errors.
+
+## 12n. THE DEEP THEME + BUILDING PICTURES (2026-09-01, Josh's aesthetic spec)
+
+Josh supplied three interface mockups and eight neon building renders: "everything deep, heavy
+and powerful, on every page, even on hover." Classic ALREADY wears this language (its own glassy
+dark design) — the hub was the flat one, so this pass makes the hub match classic, not the other
+way round.
+
+- **The theme layer** lives at the END of `src/pro/pro.css` ("THE DEEP THEME") as CSS-variable
+  tokens + overrides: near-black world with grid + glow washes, one glass-card family for every
+  panel, gradient primary buttons, segmented glass tabs, lift-and-glow hover physics everywhere,
+  neon-wireframe map rooms (fill-opacity 0.30, 5px stroke, glow on hover/selected), the floor
+  stack restyled into the mockups' vertical pill buttons, themed scrollbars/inputs/legends, and
+  glass for the Calibration Editor chrome. Unscheduled rooms read holo slate-blue (#517299 —
+  `GRAY` in MapsApp + `scheduleColor` default), not dead gray.
+- **The hub sidebar mirrors classic exactly**: brand tile (✻ OpsMatrix / powered by Max), all
+  16 destinations with monochrome inline-SVG line icons (`NAV_PATHS` in MapsApp — never emoji),
+  Ask Max tile (→ classic Dashboard, where Hey Max lives), version footer.
+- **Building pictures** (`src/pro/buildingArt.ts` + `public/buildings/b1–b8.webp`, Josh's eight
+  renders compressed 19MB→448KB): the Explorer's building level is now picture TILES (image
+  header, Floors/Rooms/Area stat boxes, completeness chip, totals bar) with a 🖼 Picture button →
+  chooser modal (8 presets + upload-a-photo, photos shrunk client-side to 960w webp). Every map's
+  BuildingPicker carries the same art. Choices persist in `opsmatrix_v7 → settings.buildingArt`
+  keyed by building name — rides existing sync/backup, NO new store, NO migration. Unpicked
+  buildings get a preset dealt deterministically from the name hash, so tiles never look empty.
+- **The matrix renders as envisioned**: the stored plan drawing stays a light blueprint (prints
+  clean), but every map and the Editor's locked-matrix phase invert + colorize it at display time
+  (`.planimg` filter) into glowing cyan linework over the dark holo-table, room fills shining
+  through. The editor's edit/calibrate phases show the UPLOADED plan untouched.
+- Verified: 281 vitest green; 17-check Playwright sweep (all 11 surfaces load, tile drill-down,
+  picture pick + reload persistence, vector icons, zero page errors) + screenshot review of
+  Explorer/map/Sanitation/Scope/Floor Care against the mockups.
+
+## 12o. WITH-INFO UPLOADS: EDIT → SHIP, NO CALIBRATION (2026-09-01, Josh's correction)
+
+Two fixes after Josh's staging pass:
+
+- **The Import popup was trapped in the header.** The Deep Theme gave `.pro-head` a
+  backdrop-filter, which (per CSS spec) makes it the CONTAINING BLOCK for its
+  `position: fixed` descendants — and the ⬆ Import chooser, the room-list progress
+  dialog and the whole AiPlanImport modal rendered inside the header. Result: popups
+  squeezed into the top strip and losing the z-order war to tiles/menus. Fix: those
+  modals render through `createPortal(document.body)` (like PrintSchedule and the
+  Studio always did) + `.pro-modalback { z-index: 1000 }`. RULE: any `.pro-modalback`
+  must portal to body — never render one inside a filtered/blurred/transformed ancestor.
+- **WITH-info uploads don't calibrate — ever.** The point of "Yes — the sizes are in
+  the file" is checking the matrix, not measuring it. The flow is now: upload →
+  `locateDrawing` + `renderRegion` CROP the sheet to the floor plan itself (legends,
+  title blocks, side notes are cut away — this step existed in the old reader and had
+  been lost) → Max pre-draws every room with number/name/type/sq ft preloaded → the
+  editor opens with the FULL toolset and the room panel shows all details incl. an
+  editable Square feet field (hand-traced rooms type theirs in; blanks ship blank and
+  get the existing missing-info flags in Max Space) → the edit-phase button IS
+  **🚀 Ship to Max Space**. No calibrate phase, no measure-all. **Merging sums the
+  square footage** (300+120 → 420). PlanStudio's `direct` mode = `sizesFromFile` prop
+  or `StudioSet.readMode` (persisted, so re-editing a read-mode set from the
+  Calibration Editor home skips calibration too). The NO-info flow is untouched —
+  verified by walking it end-to-end (drew → finish editing → calibrate → measure all
+  → details → ship).
+- Verified: 21-check e2e of the WITH-info flow against a stubbed Anthropic response
+  (popup centred+topmost on explorer/list/map, preloaded fields, merge sum, direct
+  ship, stored sq ft + plan ratio + readMode set) and an 8-check e2e of the NO-info
+  flow; 281 unit tests green.
+
+## 12p. ROVER MODE (2026-09-01 — Josh's final pre-launch feature)
+
+Full-screen, voice-first SPACE VALIDATION for walking the hospital with an iPad/iPhone.
+Lives ONLY in Max Space → Map View (🚙 Rover Mode button, shown when a plan exists).
+
+- **Flow**: toggle on → full screen (portal overlay always; native fullscreen where the
+  browser allows — iOS Safari doesn't, the overlay IS the fullscreen there) → tap a room →
+  the mic opens and the bottom sheet shows the five data points (number, name, type,
+  floor type, fixtures) → speak plainly, labeled ("room number 101 room type office…")
+  or terse ("102 office Dr Smith's office carpet zero fixtures") → fields fill live →
+  say **"confirm"** (also: next / save it / looks good) or thumb the big button → the
+  room SAVES IMMEDIATELY (applyRoomType + syncSpaceMinutes — repriced on the spot) and
+  turns green → tap the next room. "clear" resets the card, "cancel" closes it.
+  ✓ Save & Exit just leaves — every confirm already persisted, so a dead battery in the
+  east wing loses nothing.
+- **Speed architecture (Josh asked)**: the device's OWN recognizer (Web Speech API —
+  on-device, streaming, works in dead zones; iOS ends recognition at every pause so
+  RoverMode transparently restarts it while a room is open) + a LOCAL grammar
+  (`src/pro/roverParse.ts`, pure + 15 unit tests) over Scope's own vocabulary: room-type
+  labels + spoken aliases (OR room, bathroom…), floor synonyms (tile/VCT/concrete…),
+  number words ("one oh two" → 102, "seventeen fixtures"). NO AI round-trip per room —
+  deliberately: 1–3s of network per room would be slower than walking, and hospitals
+  have dead zones. Utterances MERGE, so a spoken correction ("room type exam room")
+  overrides just that field.
+- **📍 My location**: tap the button, tap the plan — a YOU pin marks the spot (manual;
+  re-tap as you move). Automatic dead-reckoning was deliberately dropped per Josh's own
+  out-clause: phone motion sensors drift metres within a corridor and a dot that lies is
+  worse than no dot.
+- Map colors in Rover: green = validated this walk, teal = data complete, amber ⚠ =
+  still missing details (spaceIncomplete). Voice-unsupported browsers get an honest
+  banner and the fields still type.
+- Verified: 24-check Playwright walk on an iPhone viewport (fake recognizer driven by
+  the test): button only in Map View, mic gates on room selection, both spoken forms,
+  voice confirm + thumb confirm, immediate persistence + repricing, spoken correction,
+  green states, YOU pin, exit persistence, zero page errors. 296 unit tests green.
+
+## 12q. ROVER POLISH — MOBILE PARITY + ONE MENTION, BOTH FIELDS (2026-09-01, Josh's phone test)
+
+- **The map is now IDENTICAL on iPhone/iPad and desktop.** Room strokes use
+  `vector-effect: non-scaling-stroke` (constant 3.5px screen width at any zoom on any
+  device — a phone fitting the whole floor used to shrink them to hairlines); the
+  always-on per-path drop-shadow is gone (it janked iOS pans — glow now only on
+  hover/selected); the matrix image filter gained a 1.5px cyan drop-shadow so hairline
+  walls read at quarter scale; room labels' counter-scale floor moved 0.6 → 0.34 and
+  the visibility cutoff 60 → 44 screen px, so labels stay legible on a phone.
+- **The zoom-reset bug**: MapCanvas re-fit on EVERY resize — and iOS Safari fires a
+  resize when its URL bar collapses mid-gesture, yanking the view back to fitted.
+  Now `userDrove` (any pan/zoom/pinch/wheel) locks the view; resizes only re-fit an
+  untouched map; the ⤢ Fit button hands control back; a plan change resets. Same
+  guard in the Calibration Editor's canvas.
+- **Parser: one mention serves both fields** (Josh's catch): "101 Dr Smith's office
+  carpet" → type Office AND name "Dr Smith's Office"; "12 exam room one" → type Exam
+  Room AND name "Exam Room One". Rule: a type phrase spoken ONCE with a real word
+  right before it, or a short tag (number/letter) right after it, stays in the name;
+  spoken twice, first = type, second = name (unchanged); bare mention = type only.
+  21 parser tests.
+
 ## 13. BUILD & DEPLOY WORKFLOW
 
 ```
-npm test                                      # 172 tests must stay green
+npm test                                      # 193 tests must stay green
 npm run build:classic                         # rebuild public/classic.html (after fusion/bridge/rules changes!)
 npm run build                                 # MPA: index.html + maps.html
 git add -A && git commit && git push          # Pages deploys automatically (~35s)
@@ -232,6 +508,12 @@ git add -A && git commit && git push          # Pages deploys automatically (~35
 
 ## 15. OPEN ITEMS / NEXT CANDIDATES
 
+- **Max Policing needs its real spec** (2026-08-31): the shell ships (room eligibility, non-floor-care
+  passes, timing, ship-to-schedules). Josh still owes the frequency model (passes per day), cart
+  stocking and coverage windows.
+- **The role matrix** (admin / director / manager / supervisor) — Josh said he'd explain it later.
+  Today only `canEditFormula` (owner|director) gates the general formula and the General Clean delete.
+
 - **Josh demos to a potential client** — the demo link must stay pristine; bump the seed stamp whenever the demo should refresh on his devices.
 - Non-space task instances count toward schedule totals in the HUB legend/cards; Classic's own schedule cards count room minutes only (known, communicated).
 - Sidebar add-flow: dropdown was fully replaced by the tap-list; Josh may still ask for a compact variant.
@@ -245,6 +527,7 @@ git add -A && git commit && git push          # Pages deploys automatically (~35
 - Privacy note (flagged to Josh): the repo is public and contains his real home scan + it's visible in the public demo. The Akron hospital CAD workbook used to build/verify the room-list importer was deliberately NOT committed (real hospital data, public repo) — keep it out.
 - ~~The ARCHIVE loads React 18.2 + Tailwind 2 from cdnjs~~ — **DONE 2026-08-24**: React, ReactDOM (production UMD, from the repo's own react 18.3 dependency) and Tailwind 2.2.19 (devDep alias `tailwindcss-v2`) are vendored by `scripts/copy-vendor.cjs`; `make-classic.cjs` rewrites all four cdnjs tags and fails the build if any CDN reference survives. classic.html is now fully self-hosted (hard rule 7 complete).
 - Supabase/multi-user path exists only in surface C; if Classic needs multi-user, that's a big future project.
+- **Post-launch UX backlog (Josh, staging smoke test 2026-08-28)**: ~~consistent one-step "back" affordance across screens~~ — **DONE 2026-08-28** (§12f universal back button); an undo for edits (explicitly deferred until after launch); Sentry on classic.html (hub-only today); Hey Max VOICE on the staging domain reported not picking up — first suspect is the browser's mic permission for the new origin (padlock icon → allow microphone), `Permissions-Policy: microphone=(self)` already allows it; verify before treating as a code bug.
 
 ## 16. HARD RULES (violate none of these)
 

@@ -326,8 +326,9 @@ function ValidationTab({ spaces, rules, commit }: {
     if (!unnamed.length) { setAi({ phase: "error", msg: "Every room name is already classified." }); return; }
     setAi({ phase: "working" });
     try {
+      const { aiProxy } = await import("./aiTransport");
       const out = await suggestRoomTypes({
-        apiKey: loadApiKey(), names: unnamed,
+        apiKey: loadApiKey(), proxy: await aiProxy(), names: unnamed,
         typeLabels: rules.roomTypes.map((rt) => rt.label)
       });
       setAi({ phase: "done", out: [...out.entries()] });
