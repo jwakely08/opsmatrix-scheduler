@@ -466,6 +466,32 @@ export function unionPolygons(a: XY[], b: XY[]): XY[] | null {
 
 
 /**
+ * The snap's failure mode (seen live, 2026-09-02): in a corridor, each edge
+ * independently picks the STRONGEST wall line in reach — when one wall reads
+ * darker than the other, both long edges of a traced box land on the same
+ * line and the box collapses to a sliver. A snap may refine a shape, never
+ * destroy it: this detector compares the result against what was drawn, and
+ * the caller keeps the drawn shape when the snap ate it.
+ */
+export function snapCollapsed(before: XY[], after: XY[]): boolean {
+  if (before.length < 3) return false;
+  if (after.length < 3) return true;
+  const areaB = shoelacePx(before);
+  if (!(areaB > 0)) return false;
+  if (shoelacePx(after) < areaB * 0.3) return true;
+  const dims = (pts: XY[]) => {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of pts) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    }
+    return { w: maxX - minX, h: maxY - minY };
+  };
+  const db = dims(before), da = dims(after);
+  return (db.w > 8 && da.w < db.w * 0.25) || (db.h > 8 && da.h < db.h * 0.25);
+}
+
+/**
  * Border-to-border cleanup (Josh's rule): after a snap, a room's edge that
  * runs almost along a NEIGHBOUR's edge — a sliver gap or a slight overlap —
  * moves onto that neighbour's line exactly. No empty slivers, no overlaps,

@@ -23,7 +23,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom";
 import {
   buildGray, snapToWalls, alignEdgesToNeighbors, shoelacePx, centroid,
-  overlapRatio, unionPolygons, type Gray, type XY
+  overlapRatio, unionPolygons, rectify, snapCollapsed, type Gray, type XY
 } from "./planSnap";
 import { calibrateFromKnownRooms } from "./planCalibrate";
 import { buildPlanFromRooms, readPlanWithAI, AiPlanError } from "../bridge/aiPlanImport";
@@ -164,9 +164,16 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   }, [gray, graySc]);
 
   /** wall snap + Josh's border rule: seat against neighbouring rooms too —
-   *  no sliver gaps, no overlaps between room borders */
+   *  no sliver gaps, no overlaps between room borders. Each stage is guarded:
+   *  in a corridor the wall snap can land BOTH long edges on the same strong
+   *  line and collapse the trace to a sliver — when a stage destroys the
+   *  drawn shape instead of refining it, the drawn shape wins. */
   const cleanSnap = useCallback((pts: XY[], others: XY[][], tight: boolean): XY[] => {
-    return alignEdgesToNeighbors(snapPx(pts, tight), others, 12);
+    const drawn = rectify(pts);
+    const snapped = snapPx(pts, tight);
+    const walled = snapCollapsed(drawn, snapped) ? drawn : snapped;
+    const seated = alignEdgesToNeighbors(walled, others, 12);
+    return snapCollapsed(drawn, seated) ? walled : seated;
   }, [snapPx]);
 
   // ── calibration ────────────────────────────────────────────────────────────
