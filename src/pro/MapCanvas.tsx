@@ -5,6 +5,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { boundsOf, pointIn, type ClassicData, type ClassicPlan, type ClassicSpace } from "./classicStore";
 import { buildingArtUrl } from "./buildingArt";
+import { neonPlanUrl } from "./neonMap";
 
 const WALL_STROKE = 13;
 
@@ -106,6 +107,18 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
+  // the matrix image is BAKED (neonMap.ts) — live CSS filter+blend washed out
+  // on iOS Safari; until the bake lands we show the plain plan, not a broken one
+  const [neon, setNeon] = useState<string | null>(null);
+  // canvas width drives how small a room can be and still carry its label —
+  // a phone fitting the whole floor deserves labels too, just sooner-smaller
+  const [mapW, setMapW] = useState(1000);
+  useEffect(() => {
+    let live = true;
+    setNeon(null);
+    neonPlanUrl(plan.img).then((u) => { if (live) setNeon(u); }).catch(() => { /* plain plan stands */ });
+    return () => { live = false; };
+  }, [plan.img]);
   // once the user pans/zooms, resizes must never yank the view back —
   // iOS Safari fires a resize when its URL bar collapses mid-gesture
   const userDrove = useRef(false);
@@ -142,7 +155,11 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
     };
     userDrove.current = false; // a new plan starts fitted
     fit();
-    const ro = new ResizeObserver(() => { if (!userDrove.current) fit(); });
+    setMapW(svg.clientWidth || 1000);
+    const ro = new ResizeObserver(() => {
+      setMapW(svg.clientWidth || 1000);
+      if (!userDrove.current) fit();
+    });
     ro.observe(svg);
     return () => ro.disconnect();
   }, [plan]);
@@ -272,8 +289,8 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
           {/* the matrix, rendered as the mockups envision it: the stored
               drawing stays a light blueprint (prints clean on paper), and
               the MAP inverts + colorizes it into glowing neon linework */}
-          <image href={plan.img} width={plan.w} height={plan.h}
-            className="planimg" style={{ pointerEvents: "none" }} />
+          <image href={neon ?? plan.img} width={plan.w} height={plan.h}
+            className={neon ? "planneon" : "planimg"} style={{ pointerEvents: "none" }} />
           {marker && (
             <g className="mapmarker" transform={`translate(${marker.x} ${marker.y}) scale(${1 / Math.max(0.4, view.k)})`}>
               <circle r={13} />
@@ -285,7 +302,9 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
             const sh = shapes.get(sp.id);
             if (!sh) return null;
             const b = boundsOf(sh.pts);
-            if ((b.maxX - b.minX) * view.k < 44) return null;
+            // a phone fitting the whole floor renders every room small — on a
+            // narrow canvas, labels appear sooner so the map reads like desktop
+            if ((b.maxX - b.minX) * view.k < (mapW < 700 ? 24 : 44)) return null;
             const mins = Number(sp.estimatedCleaningMinutes) || 0;
             return (
               <g key={"l" + sp.id} className="prolabel" transform={`translate(${sh.c.x} ${sh.c.y}) scale(${1 / Math.max(0.34, view.k)})`}>
