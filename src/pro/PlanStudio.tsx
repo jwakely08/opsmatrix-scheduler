@@ -26,6 +26,7 @@ import {
   overlapRatio, unionPolygons, rectify, snapCollapsed, type Gray, type XY
 } from "./planSnap";
 import { calibrateFromKnownRooms } from "./planCalibrate";
+import { neonPlanUrl } from "./neonMap";
 import { buildPlanFromRooms, readPlanWithAI, AiPlanError } from "../bridge/aiPlanImport";
 import {
   saveStudioSet, loadStudioSets, deleteStudioSet, applyStudioShip, applyStudioUpdate,
@@ -101,6 +102,16 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   const [notice, setNotice] = useState(initialNotice ?? "");
   const [err, setErr] = useState("");
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
+  // the locked matrix wears BAKED neon (neonMap.ts) — the live CSS filter
+  // route silently fails on iOS Safari and washed the phone view white
+  const [neonMatrix, setNeonMatrix] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    setNeonMatrix(null);
+    const src = matrix?.img;
+    if (src) neonPlanUrl(src).then((u) => { if (live) setNeonMatrix(u); }).catch(() => { /* plain matrix stands */ });
+    return () => { live = false; };
+  }, [matrix?.img]);
   const userDrove = useRef(false); // resizes never yank a driven view (iOS URL bar)
   const undoStack = useRef<Shape[][]>([]);
   const redoStack = useRef<Shape[][]>([]);
@@ -586,7 +597,8 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                 // the locked matrix wears the neon rendering; the UPLOADED
                 // plan (edit/calibrate phases) stays exactly as the manager
                 // knows it — you can't correct a drawing you can't recognise
-                ? <image href={matrix.img} width={matrix.w} height={matrix.h} className="planimg" />
+                ? <image href={neonMatrix ?? matrix.img} width={matrix.w} height={matrix.h}
+                    className={neonMatrix ? "planneon" : "planimg"} />
                 : <image href={picture.dataUrl} width={W} height={H} />}
               {shapes.map((s) => {
                 const col = s.source === "ai" ? AI : TRACED;
@@ -598,7 +610,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                   <g key={s.id}>
                     <polygon points={pts.map((p) => `${p.x},${p.y}`).join(" ")}
                       fill={col} fillOpacity={phase === "details" ? (on ? 0.32 : 0.10) : on ? 0.4 : 0.24}
-                      stroke={on ? "#ffffff" : col} strokeWidth={(on ? 3 : 2) / view.k}
+                      stroke={on ? "#ffffff" : col} strokeWidth={(on ? 4.5 : 3) / view.k}
                       strokeDasharray={on ? `${6 / view.k} ${4 / view.k}` : undefined} />
                     <g className="studio-label" transform={`translate(${c.x} ${c.y}) scale(${1 / Math.max(0.5, view.k)})`}>
                       <text y={-3}>{s.roomNumber || s.roomName || "?"}</text>
@@ -656,9 +668,9 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
               {tracePts.length > 0 && phase === "edit" && (
                 <g>
                   <polyline points={tracePts.map((p) => `${p.x},${p.y}`).join(" ")}
-                    fill="none" stroke="#2dd4bf" strokeWidth={2.5 / view.k} strokeDasharray={`${7 / view.k} ${5 / view.k}`} />
+                    fill="none" stroke="#2dd4bf" strokeWidth={3.2 / view.k} strokeDasharray={`${7 / view.k} ${5 / view.k}`} />
                   {tracePts.map((p, i) => (
-                    <circle key={i} cx={p.x} cy={p.y} r={4.5 / view.k} fill="#2dd4bf" stroke="#0f1a2e" strokeWidth={1.5 / view.k} />
+                    <circle key={i} cx={p.x} cy={p.y} r={6 / view.k} fill="#2dd4bf" stroke="#0f1a2e" strokeWidth={2 / view.k} />
                   ))}
                 </g>
               )}

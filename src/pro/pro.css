@@ -1296,6 +1296,14 @@ body {
     drop-shadow(0 0 1.5px rgba(103, 232, 249, 0.9));
 }
 
+/* the BAKED matrix (neonMap.ts): transparent-ground cyan linework composited
+   like any ordinary image — no filter, no blend mode, so iOS Safari cannot
+   silently drop the look the way it does with the live-filter route above
+   (which stays only as the moment-of-load fallback). */
+.pro-map .planneon, .studio-canvas .planneon {
+  opacity: 0.96;
+}
+
 /* overlays always win: portaled to <body> and above every stacking context */
 .pro-modalback { z-index: 1000; }
 
