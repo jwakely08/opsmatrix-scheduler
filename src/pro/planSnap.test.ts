@@ -4,7 +4,8 @@
 import { describe, it, expect } from "vitest";
 import {
   grayFromPixels, stretchGray, snapToWalls, rectify, rdp, autoDetectRooms,
-  shoelacePx, overlapRatio, unionPolygons, alignEdgesToNeighbors, type Gray
+  shoelacePx, overlapRatio, unionPolygons, alignEdgesToNeighbors, snapCollapsed,
+  type Gray
 } from "./planSnap";
 
 const sq = (x: number, y: number, w: number, h: number) => [
@@ -167,6 +168,61 @@ describe("re-snap is a refinement, not a re-detection", () => {
     const minXTight = Math.min(...tight.map((p) => p.x));
     expect(Math.abs(minXTight - 141.5)).toBeLessThan(5); // seats on the NEW wall
     expect(minXTight).toBeGreaterThan(120);              // never reverts to x=100
+  });
+});
+
+describe("corridor traces must not collapse (Josh's sliver bug, 2026-09-02)", () => {
+  /** a corridor: STRONG left wall (black), FAINT right wall (light gray).
+   *  Each snapped edge picks the strongest line in reach, so both vertical
+   *  edges of a traced box pile onto the same dark wall — the box collapses
+   *  to a sliver. snapCollapsed() is the guard that catches it. */
+  function corridorPlan(): Gray {
+    const w = 600, h = 400;
+    const px = new Uint8ClampedArray(w * h * 4).fill(255);
+    const paint = (x0: number, x1: number, v: number) => {
+      for (let y = 60; y <= 340; y++) for (let x = x0; x <= x1; x++) {
+        const i = (y * w + x) * 4;
+        px[i] = px[i + 1] = px[i + 2] = v;
+      }
+    };
+    paint(200, 202, 0);    // strong wall — solid black
+    paint(214, 216, 190);  // faint wall — light gray, below the snap threshold
+    return grayFromPixels(px, w, h);
+  }
+
+  const trace = [
+    { x: 197, y: 100 }, { x: 217, y: 100 },
+    { x: 217, y: 300 }, { x: 197, y: 300 }
+  ];
+
+  it("documents the mechanism: both edges snap onto the one strong wall", () => {
+    const snapped = snapToWalls(corridorPlan(), trace);
+    const xs = snapped.map((p) => p.x);
+    const width = Math.max(...xs) - Math.min(...xs);
+    expect(width).toBeLessThan(6); // the 20px-wide trace became a sliver
+  });
+
+  it("snapCollapsed flags the sliver", () => {
+    const snapped = snapToWalls(corridorPlan(), trace);
+    expect(snapCollapsed(trace, snapped)).toBe(true);
+  });
+
+  it("snapCollapsed passes an honest refinement", () => {
+    const g = oneRoomPlan();
+    const rough = [
+      { x: 112, y: 90 }, { x: 388, y: 112 }, { x: 410, y: 288 }, { x: 92, y: 310 }
+    ];
+    expect(snapCollapsed(rough, snapToWalls(g, rough))).toBe(false);
+  });
+
+  it("snapCollapsed passes the neighbour-seating nudges too", () => {
+    const b = sq(205, 100, 100, 100);
+    const seated = alignEdgesToNeighbors(b, [sq(100, 100, 100, 100)], 12);
+    expect(snapCollapsed(b, seated)).toBe(false);
+  });
+
+  it("degenerate output always reads as collapsed", () => {
+    expect(snapCollapsed(sq(0, 0, 100, 100), [{ x: 0, y: 0 }, { x: 1, y: 0 }])).toBe(true);
   });
 });
 
