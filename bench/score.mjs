@@ -72,8 +72,11 @@ const result = await page.evaluate(async ({ locate, readings }) => {
     } else {
       const b64 = body.messages[0].content[0].source.data;
       const idx = tileByB64.get(b64);
-      if (idx === undefined) throw new Error("stub: unknown tile image");
-      payload = readings[idx];
+      // an unregistered image = the whole-sheet corridor pass; no canned
+      // corridor reading in this run → empty (the room score is unaffected)
+      payload = idx === undefined
+        ? { buildingName: "", floorName: "", rooms: [] }
+        : readings[idx];
     }
     return new Response(JSON.stringify({
       stop_reason: "end_turn",

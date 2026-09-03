@@ -565,6 +565,18 @@ named in place (follow-up below).
   (PDF, answer key, readings all gitignored — public repo, real hospital); scripts
   regenerate everything from a dropped-in PDF.
 
+**Staging feedback round (same day, Josh's first real run — on Fable 5)**: wall-TRACE
+shapes (the model outlining wall lines instead of floor, chapel/lobby area) are now
+rejected by an average-width test; doorway needle SPIKES from the snap's corner rebuild
+are filtered (`dropSpikes`); a dedicated whole-sheet CORRIDOR PASS reads the circulation
+space in one look and merges as a pseudo-tile (corridors fragment badly tile-by-tile);
+prompts now spell out that corridors are wall-to-wall floor with their printed tags and
+that doorway gaps never merge rooms; and the no-overlap rules got a hard principle — a
+NUMBERED reading only ever loses to its own number, so sloppy corridor polygons can't
+eat rooms. Bench after: 100% clean, 98.4% at ±1.5% jitter, corridors 5/8. The AI model
+moved to claude-fable-5-1 everywhere (reader, suggestions, proxy default — the proxy
+FUNCTION must be redeployed to pick that up; done on staging 2026-09-03).
+
 **Follow-ups / open**: corridor naming across tiles (fragments union under one name; EW2C/
 F/G/H names get lost to per-tile leaks — corridors are not in the ≥90% room metric);
 rooms opening into wide lobbies can't be separated by the LOCAL reader (the vision model

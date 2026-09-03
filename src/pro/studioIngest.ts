@@ -9,7 +9,7 @@
 // teleports correctly-placed boxes onto the neighbour's walls.
 import {
   snapToWalls, alignEdgesToNeighbors, rectify, snapCollapsed, snapReachFor,
-  shoelacePx, overlapRatio, type Gray, type XY
+  dropSpikes, shoelacePx, overlapRatio, type Gray, type XY
 } from "./planSnap";
 import { typeIdFromLabelStrict, type Rules } from "./rules";
 
@@ -57,7 +57,10 @@ export function cleanSnapPts(
   const snapped = snapPx(pts);
   const walled = snapCollapsed(drawn, snapped) ? drawn : snapped;
   const seated = alignEdgesToNeighbors(walled, others, 12);
-  return snapCollapsed(drawn, seated) ? walled : seated;
+  const clean = snapCollapsed(drawn, seated) ? walled : seated;
+  // the snap's corner rebuild can fire a needle triangle out of a door gap
+  const spiked = dropSpikes(clean);
+  return snapCollapsed(drawn, spiked) ? clean : spiked;
 }
 
 /** what Max read ("Exam Room", "OR") → the account's own Scope label, or "" */
@@ -89,13 +92,15 @@ export function ingestAiSeeds(
     // reach in PICTURE px — cleanSnapPts converts to grid px itself
     const reach = snapReachFor(c.pts, picW);
     const pts = cleanSnapPts(gray, picW, c.pts, blockers.map((b) => b.pts), { reach });
-    // the hard rule guards against DUPLICATE readings — two shapes carrying
-    // different printed numbers are different rooms however much their
-    // outlines overlap, so only same/no-number overlaps drop
+    // the hard rule guards against DUPLICATE readings. A printed number is
+    // evidence read off the plan: a numbered seed only ever loses to the
+    // SAME number — never to a different number, and never to an unnumbered
+    // shape (a sloppy corridor polygon must not eat the rooms it brushes).
+    // Unnumbered seeds drop on any big overlap.
     const num = (c.seed.roomNumber || "").trim();
     if (blockers.some((b) => {
       const bn = (b.roomNumber || "").trim();
-      if (num && bn && num !== bn) return false;
+      if (num && bn !== num) return false; // numbered dies only to its own number
       return overlapRatio(b.pts, pts) > OVERLAP_LIMIT;
     })) continue; // dupe — dropped
     shapes.push({

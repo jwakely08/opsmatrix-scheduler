@@ -152,3 +152,47 @@ describe("mergeTileRooms", () => {
     expect(merged[0].squareFeet).toBe(240);
   });
 });
+
+describe("wall-trace ribbons and unnumbered shapes (Josh's staging findings)", () => {
+  const W = 2000, H = 1000;
+
+  it("a wall-hugging ribbon is rejected outright", () => {
+    // a "corridor" traced along a wall line: 0.5 long, ~8px wide at 2000px
+    const ribbon = rect(0.2, 0.5, 0.7, 0.504);
+    const merged = mergeTileRooms(
+      [{ box: { x0: 0, y0: 0, x1: 1, y1: 1 }, rooms: [room("CW2A", ribbon)] }], W, H);
+    expect(merged.length).toBe(0);
+  });
+
+  it("a real corridor (wall-to-wall floor) survives", () => {
+    // 0.5 long, 40px wide — a genuine corridor
+    const corridor = rect(0.2, 0.5, 0.7, 0.54);
+    const merged = mergeTileRooms(
+      [{ box: { x0: 0, y0: 0, x1: 1, y1: 1 }, rooms: [room("CW2A", corridor)] }], W, H);
+    expect(merged.length).toBe(1);
+  });
+
+  it("an UNNUMBERED corridor never displaces numbered rooms it covers", () => {
+    const corridor = { ...room("", rect(0.1, 0.4, 0.9, 0.6)), name: "Corridor", roomType: "Corridor" };
+    const r1 = room("2205", rect(0.2, 0.42, 0.3, 0.58));
+    const r2 = room("2207", rect(0.35, 0.42, 0.45, 0.58));
+    const merged = mergeTileRooms([
+      { box: { x0: 0, y0: 0, x1: 1, y1: 1 }, rooms: [corridor] },
+      { box: { x0: 0, y0: 0, x1: 0.6, y1: 1 }, rooms: [room("2205", rect(0.2 / 0.6, 0.42, 0.3 / 0.6, 0.58)), room("2207", rect(0.35 / 0.6, 0.42, 0.45 / 0.6, 0.58))] }
+    ], W, H);
+    const nums = merged.map((r) => r.roomNumber).sort();
+    expect(nums).toContain("2205");
+    expect(nums).toContain("2207");
+  });
+
+  it("the corridor pass unions with same-tag tile fragments", () => {
+    const a = { x0: 0, y0: 0, x1: 0.6, y1: 1 };
+    const frag = rect(0.2 / 0.6, 0.45, 0.55 / 0.6, 0.55);       // global 0.2..0.55
+    const whole = rect(0.2, 0.45, 0.9, 0.55);                    // the full corridor
+    const merged = mergeTileRooms([
+      { box: a, rooms: [room("EW2C", frag, { roomType: "Corridor" })] },
+      { box: { x0: 0, y0: 0, x1: 1, y1: 1 }, rooms: [room("EW2C", whole, { roomType: "Corridor" })] }
+    ], W, H);
+    expect(merged.filter((r) => r.roomNumber === "EW2C").length).toBe(1);
+  });
+});

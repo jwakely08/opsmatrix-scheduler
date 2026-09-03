@@ -14,7 +14,7 @@
 // touches the DOM.
 import {
   buildGray, labelBubbles, medianBubbleShort, overlapRatio, unionPolygons,
-  shoelacePx, type Gray, type XY
+  shoelacePx, avgWidth, dropSpikes, type Gray, type XY
 } from "./planSnap";
 import type { AiRoom } from "../bridge/aiPlanImport";
 
@@ -75,7 +75,7 @@ export function tileInkFraction(G: Gray, t: TileBox): number {
 }
 
 /** blank margin tiles are not worth a network round trip */
-export function dropEmptyTiles(G: Gray, tiles: TileBox[], minInk = 0.004): TileBox[] {
+export function dropEmptyTiles(G: Gray, tiles: TileBox[], minInk = 0.002): TileBox[] {
   if (tiles.length <= 1) return tiles;
   const kept = tiles.filter((t) => tileInkFraction(G, t) >= minInk);
   return kept.length ? kept : tiles.slice(0, 1);
@@ -118,7 +118,14 @@ export function mergeTileRooms(perTile: TileReading[], w: number, h: number): Ai
       });
       const areaPx = shoelacePx(pts);
       if (!(areaPx > 0)) continue;
-      cands.push({ room: r, pts, areaPx, clipped });
+      // WALL TRACES are not rooms: a reading that follows the wall lines
+      // instead of the floor between them comes out as a ribbon about a
+      // wall-thickness wide. A real room — even a slim closet — is wider.
+      // De-spike first: a noisy perimeter understates the width of small
+      // honest rooms.
+      const clean = dropSpikes(pts);
+      if (avgWidth(clean) < Math.max(6, Math.min(w, h) * 0.005)) continue;
+      cands.push({ room: r, pts: clean, areaPx: shoelacePx(clean), clipped });
     }
   }
 
@@ -168,8 +175,8 @@ export function mergeTileRooms(perTile: TileReading[], w: number, h: number): Ai
         if (overlapRatio(k.pts, c.pts) > 0.25 || touches(k.pts, c.pts)) {
           const u = unionPolygons(k.pts, c.pts);
           if (u) {
-            k.pts = u;
-            k.areaPx = shoelacePx(u);
+            k.pts = dropSpikes(u);
+            k.areaPx = shoelacePx(k.pts);
             k.clipped = k.clipped && c.clipped;
             // the union carries the best of both readings' data
             if (!k.room.squareFeet && c.room.squareFeet) k.room = { ...k.room, squareFeet: c.room.squareFeet };
@@ -183,16 +190,18 @@ export function mergeTileRooms(perTile: TileReading[], w: number, h: number): Ai
     merged.push(...kept);
   }
 
-  // overlap dedupe: whole beats clipped, then bigger beats smaller. Two
-  // readings with DIFFERENT printed numbers are different rooms whatever
-  // their outlines say — a number is read off the plan, so both stay.
+  // overlap dedupe: whole beats clipped, then bigger beats smaller. A
+  // PRINTED NUMBER is evidence read off the plan: a numbered reading only
+  // ever loses to the SAME number (a duplicate); it is never displaced by a
+  // different number or by an unnumbered shape (a sloppy corridor polygon
+  // must not eat the rooms it brushes). Unnumbered readings dedupe freely.
   merged.sort((a, b) => Number(a.clipped) - Number(b.clipped) || b.areaPx - a.areaPx);
   const final: Cand[] = [];
   for (const c of merged) {
     const cn = (c.room.roomNumber || "").trim();
     if (final.some((k) => {
       const kn = (k.room.roomNumber || "").trim();
-      if (cn && kn && cn !== kn) return false;
+      if (cn && kn !== cn) return false; // numbered dies only to its own number
       return overlapRatio(k.pts, c.pts) > DUP_OVERLAP;
     })) continue;
     final.push(c);

@@ -853,6 +853,49 @@ export function snapCollapsed(before: XY[], after: XY[]): boolean {
 }
 
 /**
+ * Remove needle SPIKES from a polygon: a vertex whose two edges nearly
+ * double back on themselves (the classic doorway artifact — the snap's
+ * corner rebuild fires a long thin triangle out of a door gap). A vertex is
+ * a spike when the direct hop between its neighbours is much shorter than
+ * the detour through it. Real corners (90°, 45°, alcoves) are untouched.
+ */
+export function dropSpikes(ptsIn: XY[], opts?: { minDetour?: number }): XY[] {
+  let pts = ptsIn;
+  const minDetour = opts?.minDetour ?? 10; // px of excursion before we care
+  for (let pass = 0; pass < 4; pass++) {
+    if (pts.length < 4) return pts;
+    const n = pts.length;
+    const keep: XY[] = [];
+    let removed = false;
+    for (let j = 0; j < n; j++) {
+      const a = pts[(j - 1 + n) % n], b = pts[j], c = pts[(j + 1) % n];
+      const detour = Math.hypot(b.x - a.x, b.y - a.y) + Math.hypot(c.x - b.x, c.y - b.y);
+      const direct = Math.hypot(c.x - a.x, c.y - a.y);
+      if (detour > minDetour * 2 && direct < detour * 0.3) { removed = true; continue; }
+      keep.push(b);
+    }
+    if (!removed) return pts;
+    pts = keep;
+  }
+  return pts;
+}
+
+/**
+ * The polygon's average width: 2·area / perimeter. A room reads several
+ * feet; a shape TRACED ALONG A WALL LINE (the wall-hugging ribbon failure)
+ * reads about a wall thickness. Used to reject wall traces.
+ */
+export function avgWidth(pts: XY[]): number {
+  if (pts.length < 3) return 0;
+  let per = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    per += Math.hypot(pts[j].x - pts[i].x, pts[j].y - pts[i].y);
+  }
+  return per > 0 ? (2 * shoelacePx(pts)) / per : 0;
+}
+
+/**
  * Border-to-border cleanup (Josh's rule): after a snap, a room's edge that
  * runs almost along a NEIGHBOUR's edge — a sliver gap or a slight overlap —
  * moves onto that neighbour's line exactly. No empty slivers, no overlaps,
