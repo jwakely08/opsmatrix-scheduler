@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import {
   grayFromPixels, stretchGray, snapToWalls, rectify, rdp, autoDetectRooms,
   shoelacePx, overlapRatio, unionPolygons, alignEdgesToNeighbors, snapCollapsed,
+  dropSpikes, avgWidth,
   type Gray
 } from "./planSnap";
 
@@ -248,5 +249,31 @@ describe("alignEdgesToNeighbors — border to border, no gaps, no overlaps", () 
     const b = sq(400, 100, 100, 100);        // nowhere near
     const aligned = alignEdgesToNeighbors(b, [a], 12);
     expect(aligned.map((p) => Math.round(p.x))).toEqual(b.map((p) => Math.round(p.x)));
+  });
+});
+
+describe("dropSpikes / avgWidth (staging artifacts)", () => {
+  it("removes the doorway needle, keeps real corners", () => {
+    // a rectangle with a needle fired out of the top edge
+    const spiky = [
+      { x: 0, y: 0 }, { x: 50, y: 0 }, { x: 52, y: -80 }, { x: 54, y: 0 },
+      { x: 100, y: 0 }, { x: 100, y: 60 }, { x: 0, y: 60 }
+    ];
+    const clean = dropSpikes(spiky);
+    expect(clean.length).toBeLessThan(spiky.length);
+    expect(Math.min(...clean.map((p) => p.y))).toBeGreaterThanOrEqual(0); // needle gone
+    // an honest L-shape is untouched
+    const L = [
+      { x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 50 },
+      { x: 50, y: 50 }, { x: 50, y: 100 }, { x: 0, y: 100 }
+    ];
+    expect(dropSpikes(L)).toEqual(L);
+  });
+
+  it("avgWidth separates rooms from wall traces", () => {
+    const roomish = sq(0, 0, 200, 150);
+    const ribbon = sq(0, 0, 400, 7);
+    expect(avgWidth(roomish)).toBeGreaterThan(60);
+    expect(avgWidth(ribbon)).toBeLessThan(8);
   });
 });

@@ -113,11 +113,51 @@ export const PLAN_PROMPT = [
   "  the printed figure. If no area is printed, return 0 — do not estimate.",
   "• roomType — the closest match from the allowed list.",
   "",
-  "Include corridors and hallways: they are cleaned too. Exclude anything",
-  "outside the building envelope, and exclude shafts, chases and stairwells",
-  "that are not cleaned floor area.",
+  "Include corridors, hallways, lobbies and waiting areas: they are cleaned",
+  "too. A corridor's polygon is its FLOOR AREA — it spans wall-to-wall",
+  "across the corridor's width and runs the corridor's length. NEVER trace",
+  "along a wall line itself: a shape that follows a wall and is only a",
+  "wall-thickness wide is wrong, always. Corridors usually carry their own",
+  "printed tag in a rounded bubble (like EW2C or CW2A) — use it as the",
+  "roomNumber. Exclude anything outside the building envelope, and exclude",
+  "shafts, chases and stairwells that are not cleaned floor area.",
+  "",
+  "A GAP in a wall is a doorway. The wall between two rooms still separates",
+  "them — never merge neighbouring rooms into one polygon because a doorway",
+  "connects them, and never let a polygon poke through a doorway into the",
+  "corridor.",
   "",
   "Return every room you can see. Do not stop early."
+].join("\n");
+
+/**
+ * The corridor pass: corridors span the whole sheet, so tile-by-tile
+ * reading fragments them badly — but they are also the LARGEST features on
+ * the plan, readable from one whole-sheet look. This dedicated pass asks
+ * only for the circulation space and is merged in as one more "tile".
+ */
+export const CORRIDOR_PROMPT = [
+  "You are reading an architectural floor plan for a hospital cleaning",
+  "system. This pass is ONLY about the CIRCULATION SPACE: corridors,",
+  "hallways, lobbies, waiting areas and open atria — the walkable floor",
+  "between the rooms. Do NOT return the rooms themselves.",
+  "",
+  "For each corridor / lobby return:",
+  "• polygon — the corridor's FLOOR AREA as a closed outline in normalised",
+  "  image coordinates (0..1, [0,0] top-left). The polygon spans wall-to-wall",
+  "  across the corridor's width and follows its full length — an L- or",
+  "  U-shaped corridor is one polygon with corners. NEVER trace along a wall",
+  "  line: a ribbon one wall-thickness wide is wrong, always.",
+  "• roomNumber — the corridor's printed tag if one is shown in a rounded",
+  "  bubble (like EW2C, CW2A, NW2B). Empty string if none is printed.",
+  "• name — the printed tag, or a plain name like \"Corridor\" or \"Lobby\".",
+  "• squareFeet — 0 unless an area is printed.",
+  "• roomType — \"Corridor\" (or \"Lobby\" / \"Waiting Room\" where that is",
+  "  clearly what the space is).",
+  "",
+  "Cover ALL of the circulation space — a wing's corridor that runs the full",
+  "length of the wing gets a polygon running that full length. Exclude the",
+  "rooms, shafts and stairwells."
 ].join("\n");
 
 /** appended when the picture is one tile of a larger sheet */
@@ -293,6 +333,8 @@ export interface ReadPlanOptions {
   emptyOk?: boolean;
   /** this picture is one SECTION of a larger sheet — read edge rooms too */
   tileNote?: boolean;
+  /** replace the room-reading prompt (the corridor pass uses this) */
+  promptOverride?: string;
 }
 
 /** thrown with a plain-English message the UI can show as-is */
@@ -335,7 +377,11 @@ export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReadi
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: mediaType, data } },
-            { type: "text", text: opts.tileNote ? PLAN_PROMPT + TILE_PROMPT_NOTE : PLAN_PROMPT }
+            {
+              type: "text",
+              text: opts.promptOverride ??
+                (opts.tileNote ? PLAN_PROMPT + TILE_PROMPT_NOTE : PLAN_PROMPT)
+            }
           ]
         }]
       })
@@ -772,6 +818,26 @@ export async function readPlanTiled(
       await job();
     }
   }));
+
+  // corridors span the whole sheet and fragment badly tile-by-tile, but
+  // they're big enough to read from one whole-sheet look — a dedicated pass,
+  // merged like one more tile (the merge unions it with the tile fragments)
+  try {
+    opts.onProgress?.("Max is tracing the corridors…");
+    const corridors = await readPlanWithAI({
+      ...opts,
+      emptyOk: true,
+      tileNote: false,
+      promptOverride: CORRIDOR_PROMPT,
+      onProgress: undefined
+    });
+    if (corridors.rooms.length) {
+      results.push({
+        box: { x0: 0, y0: 0, x1: 1, y1: 1 },
+        rooms: corridors.rooms, building: "", floor: ""
+      });
+    }
+  } catch { /* the corridor pass is an upgrade — room reading stands alone */ }
 
   const rooms = opts.merge(
     results.map((r) => ({ box: r.box, rooms: r.rooms })),
