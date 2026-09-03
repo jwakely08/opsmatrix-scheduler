@@ -111,12 +111,13 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
       let seeds: AiRoomSeed[] = [];
       let noticeMsg = "";
       let read = false;
-      // read mode (Josh, 2026-09-01): the sheet often carries legends, title
-      // blocks and notes — Max first LOCATES the floor plan itself and the
-      // rest of the page is cropped away, so only the interior rooms are
-      // read and only the drawing shows in the editor
+      // BOTH modes (Josh, 2026-09-01 / benchmark 2026-09-03): the sheet often
+      // carries legends, title blocks and notes — Max first LOCATES the floor
+      // plan itself and the rest of the page is cropped away, so only the
+      // interior rooms are read, the tiles subdivide the DRAWING rather than
+      // the page, and only the drawing shows in the editor
       let pic = picture;
-      if (mode === "read" && (key || proxy)) {
+      if (key || proxy) {
         try {
           setStatus("Max is finding the floor plan on the page…");
           const box = await locateDrawing({ apiKey: key, proxy, imageDataUrl: picture.dataUrl });

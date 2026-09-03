@@ -78,11 +78,17 @@ for (let t = 0; t < meta.tiles.length; t++) {
       if (best < 0) {
         // labels sometimes ride ON or just OUTSIDE their room's wall — take
         // the nearest small region within a bubble-height, like a reader
-        // associating the tag with the room it hangs on
+        // associating the tag with the room it hangs on (edge distance, not
+        // vertex distance — long straight walls have sparse vertices)
         let bestD = 50;
         for (let i = 0; i < polys.length; i++) {
-          for (const q of polys[i]) {
-            const d = Math.hypot(q[0] - p.tx, q[1] - p.ty);
+          const poly = polys[i];
+          for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
+            const [ax, ay] = poly[b], [bx, by] = poly[a];
+            const dx = bx - ax, dy = by - ay;
+            const len2 = dx * dx + dy * dy;
+            const t = len2 ? Math.max(0, Math.min(1, ((p.tx - ax) * dx + (p.ty - ay) * dy) / len2)) : 0;
+            const d = Math.hypot(p.tx - (ax + t * dx), p.ty - (ay + t * dy));
             if (d < bestD) { bestD = d; best = i; }
           }
         }
@@ -113,6 +119,25 @@ for (let t = 0; t < meta.tiles.length; t++) {
       assignedTotal++;
     }
     if (missed.length) missPerTile[t] = missed;
+  }
+  // supplemental readings: rooms the region reader can't separate but the
+  // vision model plainly reads (bench/extra-readings.json documents why)
+  if (fs.existsSync("bench/extra-readings.json")) {
+    const extra = JSON.parse(fs.readFileSync("bench/extra-readings.json", "utf8"));
+    const size = meta.tileSizes?.[t] ?? { w: 2048, h: 2048 };
+    for (const e of extra.tiles?.[String(t)] ?? []) {
+      // the supplement's rect is the trustworthy one — replace an auto-assign
+      // that landed on a leaked/merged region
+      out.rooms = out.rooms.filter((r) => r.roomNumber !== e.number);
+      const [x0, y0, x1, y1] = e.rect;
+      out.rooms.push({
+        name: e.number, roomNumber: e.number, squareFeet: 0,
+        roomType: typeFor(e.number),
+        polygon: [[x0 / size.w, y0 / size.h], [x1 / size.w, y0 / size.h],
+          [x1 / size.w, y1 / size.h], [x0 / size.w, y1 / size.h]]
+      });
+      assignedTotal++;
+    }
   }
   fs.writeFileSync(`bench/readings/tile-${t}.json`, JSON.stringify(out));
 }

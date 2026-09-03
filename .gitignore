@@ -21,3 +21,4 @@ bench/out/
 # hospital's rooms — keep out of the public repo like the PDF itself)
 bench/readings/
 bench/answer-key-ew.json
+bench/extra-readings.json

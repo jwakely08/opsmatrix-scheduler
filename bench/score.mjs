@@ -23,6 +23,29 @@ for (let i = 0; fs.existsSync(`bench/readings/tile-${i}.json`); i++) {
   readings.push(JSON.parse(fs.readFileSync(`bench/readings/tile-${i}.json`, "utf8")));
 }
 
+// --jitter 0.015 : perturb the readings like a sloppy model answer — each
+// room shifted as a whole by up to ±J (tile units) plus per-vertex noise of
+// ±J/3. Seeded, so runs are comparable. The snap+ingest should recover.
+const jIdx = process.argv.indexOf("--jitter");
+const JITTER = jIdx >= 0 ? Number(process.argv[jIdx + 1] ?? 0.015) : 0;
+if (JITTER > 0) {
+  let seed = 1234567;
+  const rnd = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff * 2 - 1; // -1..1
+  };
+  for (const t of readings) {
+    for (const r of t.rooms) {
+      const dx = rnd() * JITTER, dy = rnd() * JITTER;
+      r.polygon = r.polygon.map(([x, y]) => [
+        x + dx + rnd() * JITTER / 3,
+        y + dy + rnd() * JITTER / 3
+      ]);
+    }
+  }
+  console.log(`jitter: ±${JITTER} whole-room + ±${JITTER / 3} per vertex (tile units)`);
+}
+
 const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });
 const page = await browser.newPage();
 page.on("pageerror", (e) => console.error("pageerror:", e.message));
