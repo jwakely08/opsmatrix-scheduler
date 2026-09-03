@@ -120,6 +120,16 @@ export const PLAN_PROMPT = [
   "Return every room you can see. Do not stop early."
 ].join("\n");
 
+/** appended when the picture is one tile of a larger sheet */
+export const TILE_PROMPT_NOTE = [
+  "",
+  "NOTE: this image is one SECTION of a larger floor plan. Rooms cut off by",
+  "the image edge are normal — return the visible part of them anyway, and",
+  "read their number if it is visible. Sections overlap, so a room that is",
+  "only partly visible here will be read whole from a neighbouring section",
+  "and the readings merged."
+].join("\n");
+
 // ── pass 1: find the drawing on the sheet ───────────────────────────────────
 // Architect sheets bury the plan in a page of title blocks, legends, detail
 // views and margin. Read the whole sheet and the room tags are a few pixels
@@ -279,6 +289,10 @@ export interface ReadPlanOptions {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
+  /** an empty reading is a normal answer (a blank tile), not an error */
+  emptyOk?: boolean;
+  /** this picture is one SECTION of a larger sheet — read edge rooms too */
+  tileNote?: boolean;
 }
 
 /** thrown with a plain-English message the UI can show as-is */
@@ -321,7 +335,7 @@ export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReadi
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: mediaType, data } },
-            { type: "text", text: PLAN_PROMPT }
+            { type: "text", text: opts.tileNote ? PLAN_PROMPT + TILE_PROMPT_NOTE : PLAN_PROMPT }
           ]
         }]
       })
@@ -356,6 +370,13 @@ export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReadi
   const rooms = sanitizeRooms(normalizeCoordinateScale(parsed.rooms, {
     width: opts.imageWidth, height: opts.imageHeight
   }));
+  if (!rooms.length && opts.emptyOk) {
+    return {
+      buildingName: (parsed.buildingName || "").trim(),
+      floorName: (parsed.floorName || "").trim(),
+      rooms: []
+    };
+  }
   if (!rooms.length) {
     // two very different situations — say which one happened
     const reported = Array.isArray(parsed.rooms) ? parsed.rooms.length : 0;
@@ -691,6 +712,83 @@ export async function importPlanFromImage(
     floor: opts.floor || "",
     aspect: picture.aspect
   });
+}
+
+/**
+ * Read a large, dense sheet in TILES: each tile re-rendered at full
+ * resolution from the source (vector-sharp for PDFs), read on its own, and
+ * the readings merged back into whole-picture coordinates (planTiles.ts owns
+ * the layout + merge math). One tile ≡ the classic single-shot read.
+ *
+ * A tile that reads empty is fine; a tile that FAILS (network, key, rate
+ * limit) fails the whole read — half a floor plan silently missing is worse
+ * than an honest error.
+ */
+export async function readPlanTiled(
+  opts: ReadPlanOptions & {
+    tiles: { x0: number; y0: number; x1: number; y1: number }[];
+    renderRegion: (
+      box: DrawingBox, targetLongEdge: number
+    ) => Promise<PlanPicture>;
+    /** long edge each tile is rendered at (planTiles.TILE_RENDER_EDGE) */
+    tileEdge: number;
+    /** merge implementation (planTiles.mergeTileRooms) — injected so this
+     *  module stays free of a src/pro import cycle */
+    merge: (
+      perTile: { box: DrawingBox; rooms: AiRoom[] }[], w: number, h: number
+    ) => AiRoom[];
+    concurrency?: number;
+  }
+): Promise<AiPlanReading> {
+  const { tiles } = opts;
+  if (tiles.length <= 1) return readPlanWithAI(opts);
+
+  const results: { box: DrawingBox; rooms: AiRoom[]; building: string; floor: string }[] = [];
+  let done = 0;
+  const say = () => opts.onProgress?.(
+    `Max is reading the plan up close — section ${Math.min(done + 1, tiles.length)} of ${tiles.length}…`);
+  say();
+
+  const jobs = tiles.map((box) => async () => {
+    const pic = await opts.renderRegion(box, opts.tileEdge);
+    const reading = await readPlanWithAI({
+      ...opts,
+      imageDataUrl: pic.dataUrl,
+      imageWidth: pic.width,
+      imageHeight: pic.height,
+      emptyOk: true,
+      tileNote: true,
+      onProgress: undefined
+    });
+    results.push({ box, rooms: reading.rooms, building: reading.buildingName, floor: reading.floorName });
+    done++;
+    say();
+  });
+  const lanes = Math.max(1, Math.min(opts.concurrency ?? 3, jobs.length));
+  let next = 0;
+  await Promise.all(Array.from({ length: lanes }, async () => {
+    while (next < jobs.length) {
+      const job = jobs[next++];
+      await job();
+    }
+  }));
+
+  const rooms = opts.merge(
+    results.map((r) => ({ box: r.box, rooms: r.rooms })),
+    opts.imageWidth || 1000,
+    opts.imageHeight || 1000
+  );
+  if (!rooms.length) {
+    throw new AiPlanError(
+      "No rooms could be found on that sheet. Make sure the floor plan itself is visible and the walls are legible."
+    );
+  }
+  opts.onProgress?.(`Found ${rooms.length} rooms — drawing the plan…`);
+  return {
+    buildingName: results.map((r) => r.building).find(Boolean) ?? "",
+    floorName: results.map((r) => r.floor).find(Boolean) ?? "",
+    rooms
+  };
 }
 
 function slug(s: string): string {

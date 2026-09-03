@@ -13,3 +13,11 @@ scripts/out/
 public/pdfjs/
 # vendored at build time by scripts/copy-xlsx.cjs
 public/vendor/
+
+# real hospital plans used as detection benchmarks — never commit (public repo)
+bench/fixtures/
+bench/out/
+# generated benchmark data derived from the real plan (coordinates of a real
+# hospital's rooms — keep out of the public repo like the PDF itself)
+bench/readings/
+bench/answer-key-ew.json

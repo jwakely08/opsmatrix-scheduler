@@ -22,21 +22,30 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  buildGray, snapToWalls, alignEdgesToNeighbors, shoelacePx, centroid,
-  overlapRatio, unionPolygons, rectify, snapCollapsed, type Gray, type XY
+  buildGray, eraseBubbles, shoelacePx, centroid, unionPolygons,
+  type Gray, type XY
 } from "./planSnap";
+import { cleanSnapPts, ingestAiSeeds } from "./studioIngest";
 import { calibrateFromKnownRooms } from "./planCalibrate";
 import { neonPlanUrl } from "./neonMap";
-import { buildPlanFromRooms, readPlanWithAI, AiPlanError } from "../bridge/aiPlanImport";
+import { buildPlanFromRooms, readPlanWithAI, readPlanTiled, AiPlanError } from "../bridge/aiPlanImport";
+import { tilesForPicture, mergeTileRooms, TILE_RENDER_EDGE } from "./planTiles";
 import {
   saveStudioSet, loadStudioSets, deleteStudioSet, applyStudioShip, applyStudioUpdate,
   type StudioSet, type StudioShapeData
 } from "./studioSets";
 import { loadApiKey, loadClassic, saveClassic, FLOOR_TYPES, type ClassicData } from "./classicStore";
 import { aiProxy } from "./aiTransport";
-import { typeIdFromLabelStrict, type Rules } from "./rules";
+import { type Rules } from "./rules";
 
-export interface StudioPicture { dataUrl: string; width: number; height: number; aspect: number }
+export interface StudioPicture {
+  dataUrl: string; width: number; height: number; aspect: number;
+  /** re-render a region of the SOURCE at full resolution (PDFs/images carry
+   *  this; it lets "Max draws the rooms" read dense sheets in tiles) */
+  renderRegion?: (
+    box: { x0: number; y0: number; x1: number; y1: number }, targetLongEdge: number
+  ) => Promise<{ dataUrl: string; width: number; height: number; aspect: number }>;
+}
 
 export interface AiRoomSeed {
   name: string;
@@ -55,8 +64,6 @@ const uid = () => "shape-" + Math.random().toString(36).slice(2, 9);
 const TRACED = "#14b8a6";
 const AI = "#f59e0b";
 const MAX_ANCHORS = 3;
-/** the hard rule: a new box covering this much of an existing one is a dupe */
-const OVERLAP_LIMIT = 0.35;
 
 function pointIn(pts: XY[], x: number, y: number): boolean {
   let inside = false;
@@ -133,7 +140,10 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     } catch { return []; }
   }, []);
 
-  // wall grid (contrast-stretched, so faint plans snap too)
+  // wall grid (contrast-stretched, so faint plans snap too). Printed label
+  // bubbles are ERASED from it: they are not walls, and a snap that seats a
+  // room edge on a number bubble instead of the wall behind it is how dense
+  // sheets went wrong (the Franciscan benchmark).
   useEffect(() => {
     const img = new Image();
     img.onload = () => {
@@ -142,7 +152,8 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
       const ctx = cv.getContext("2d");
       if (!ctx) return;
       ctx.drawImage(img, 0, 0);
-      setGray(buildGray(cv));
+      const g = buildGray(cv);
+      setGray(g ? eraseBubbles(g) : g);
     };
     img.src = picture.dataUrl;
   }, [picture.dataUrl]);
@@ -164,28 +175,11 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     return () => ro.disconnect();
   }, [surfW, surfH]);
 
-  const graySc = gray ? gray.w / W : 1;
-  const snapPx = useCallback((pts: XY[], tight = false): XY[] => {
-    if (!gray) return pts;
-    const scaled = pts.map((p) => ({ x: p.x * graySc, y: p.y * graySc }));
-    // tight = RE-snapping an established shape: refine to the nearest line
-    // only, never revert to a stronger wall the user deliberately left
-    const snapped = snapToWalls(gray, scaled, tight ? { maxOffset: Math.max(6, 14 * graySc) } : undefined);
-    return snapped.map((p) => ({ x: p.x / graySc, y: p.y / graySc }));
-  }, [gray, graySc]);
-
-  /** wall snap + Josh's border rule: seat against neighbouring rooms too —
-   *  no sliver gaps, no overlaps between room borders. Each stage is guarded:
-   *  in a corridor the wall snap can land BOTH long edges on the same strong
-   *  line and collapse the trace to a sliver — when a stage destroys the
-   *  drawn shape instead of refining it, the drawn shape wins. */
+  /** wall snap + Josh's border rule + collapse guards — the extracted
+   *  studioIngest.cleanSnapPts, so the harness and the editor share one truth */
   const cleanSnap = useCallback((pts: XY[], others: XY[][], tight: boolean): XY[] => {
-    const drawn = rectify(pts);
-    const snapped = snapPx(pts, tight);
-    const walled = snapCollapsed(drawn, snapped) ? drawn : snapped;
-    const seated = alignEdgesToNeighbors(walled, others, 12);
-    return snapCollapsed(drawn, seated) ? walled : seated;
-  }, [snapPx]);
+    return cleanSnapPts(gray, W, pts, others, { tight });
+  }, [gray, W]);
 
   // ── calibration ────────────────────────────────────────────────────────────
   const calRooms = useMemo(() => shapes.map((s) => ({ id: s.id, visualPts: s.pts })), [shapes]);
@@ -221,30 +215,14 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   const patchShape = (id: string, patch: Partial<Shape>) =>
     setShapes((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
 
-  // ── Max's boxes: snap + THE HARD NO-OVERLAP RULE ───────────────────────────
+  // ── Max's boxes: scale-aware snap + THE HARD NO-OVERLAP RULE ───────────────
+  // (studioIngest.ingestAiSeeds — extracted pure so the scoring harness runs
+  // exactly this code)
   const ingestSeeds = useCallback((seeds: AiRoomSeed[], existing: Shape[]): Shape[] => {
-    const candidates = seeds
-      .map((r) => ({ seed: r, pts: r.polygon.map((q) => ({ x: q[0] * W, y: q[1] * H })) }))
-      .sort((a, b) => shoelacePx(b.pts) - shoelacePx(a.pts));
-    const kept: Shape[] = [];
-    for (const c of candidates) {
-      const blockers = [...existing, ...kept];
-      const pts = cleanSnap(c.pts, blockers.map((s) => s.pts), false);
-      if (blockers.some((s) => overlapRatio(s.pts, pts) > OVERLAP_LIMIT)) continue; // dupe — dropped
-      kept.push({
-        id: uid(), pts,
-        roomNumber: c.seed.roomNumber, roomName: c.seed.name,
-        // a plan that STATES its data preloads everything Max read: the room
-        // type maps into Scope's vocabulary, and a stated square footage
-        // becomes that room's calibration measurement
-        roomType: scopeLabelFor(rules, c.seed.roomType),
-        floorType: "", fixtureCount: 0, department: "",
-        knownSqFt: Number(c.seed.squareFeet) > 0 ? Math.round(Number(c.seed.squareFeet)) : null,
-        source: "ai"
-      });
-    }
-    return kept;
-  }, [W, H, cleanSnap, rules]);
+    const { shapes: kept } = ingestAiSeeds(
+      seeds, existing.map((s) => ({ pts: s.pts, roomNumber: s.roomNumber })), gray, W, H, rules);
+    return kept.map((s) => ({ id: uid(), ...s }));
+  }, [W, H, gray, rules]);
 
   // the automatic first drawing, once the wall grid is ready to snap against
   useEffect(() => {
@@ -271,11 +249,23 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     setErr("");
     try {
       const proxy = await aiProxy();
-      const reading = await readPlanWithAI({
-        apiKey: loadApiKey(), proxy,
-        imageDataUrl: picture.dataUrl, imageWidth: W, imageHeight: H,
-        building, floor, onProgress: setNotice
-      });
+      // dense sheets read in tiles here too (same rule as the upload flow)
+      const { tiles } = picture.renderRegion
+        ? await tilesForPicture(picture.dataUrl, W, H)
+        : { tiles: [{ x0: 0, y0: 0, x1: 1, y1: 1 }] };
+      const reading = tiles.length > 1 && picture.renderRegion
+        ? await readPlanTiled({
+          apiKey: loadApiKey(), proxy,
+          imageDataUrl: picture.dataUrl, imageWidth: W, imageHeight: H,
+          building, floor, onProgress: setNotice,
+          tiles, renderRegion: picture.renderRegion,
+          tileEdge: TILE_RENDER_EDGE, merge: mergeTileRooms
+        })
+        : await readPlanWithAI({
+          apiKey: loadApiKey(), proxy,
+          imageDataUrl: picture.dataUrl, imageWidth: W, imageHeight: H,
+          building, floor, onProgress: setNotice
+        });
       const added = ingestSeeds(reading.rooms.map((r) => ({
         name: r.name, roomNumber: r.roomNumber, roomType: r.roomType, polygon: r.polygon,
         squareFeet: direct ? r.squareFeet : 0
@@ -945,12 +935,6 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
 
 function typeIdOf(rules: Rules, label: string): string {
   return rules.roomTypes.find((rt) => rt.label === label)?.id ?? "";
-}
-
-/** what Max read ("Exam Room", "OR") → the account's own Scope label, or "" */
-function scopeLabelFor(rules: Rules, read: string): string {
-  const id = typeIdFromLabelStrict(rules, read);
-  return id ? rules.roomTypes.find((rt) => rt.id === id)?.label ?? "" : "";
 }
 
 // ── the Calibration Editor HOME (reached from Max Space's navigation) ──────
