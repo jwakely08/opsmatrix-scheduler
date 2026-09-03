@@ -394,6 +394,13 @@ export function snapToWalls(G: Gray | null, ptsIn: XY[], opts?: { maxOffset?: nu
     ? Math.max(4, Math.round(opts.maxOffset))
     : defaultSnapReach(G.w);
   const n = pts.length;
+  const cen = centroid(pts);
+  // professional sheets draw walls with WIDTH — two parallel lines and a
+  // hollow cavity between. The strongest line can be the wall's FAR face,
+  // which drapes the room's fill over the wall and into the neighbour.
+  // After seating, slide each edge to the wall face NEAREST the room's
+  // interior within a wall-thickness window.
+  const wallMax = Math.max(16, Math.round(G.w * 0.012));
   const fitted: { a: XY; b: XY }[] = [];
   for (let e = 0; e < n; e++) {
     const a = pts[e], b = pts[(e + 1) % n];
@@ -403,6 +410,16 @@ export function snapToWalls(G: Gray | null, ptsIn: XY[], opts?: { maxOffset?: nu
     const ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
     const samples = Math.max(12, Math.min(60, Math.round(len / 3)));
     const inset = len * 0.14;
+    const inkAt = (off: number): number => {
+      let cov = 0;
+      for (let t = 0; t < samples; t++) {
+        const d = inset + (len - 2 * inset) * t / (samples - 1);
+        const sx = a.x + ux * d + nx * off, sy = a.y + uy * d + ny * off;
+        const r = Math.max(lineResp(G, sx, sy), lineResp(G, sx + nx, sy + ny), lineResp(G, sx - nx, sy - ny));
+        if (r > 0.4) cov++;
+      }
+      return cov / samples;
+    };
     let bestOff = 0, bestScore = -1;
     for (let off = -R; off <= R; off++) {
       let s = 0, cov = 0;
@@ -415,6 +432,32 @@ export function snapToWalls(G: Gray | null, ptsIn: XY[], opts?: { maxOffset?: nu
       }
       const score = (s / samples) * (0.35 + 0.65 * cov / samples) - 0.10 * Math.abs(off) / R;
       if (score > bestScore) { bestScore = score; bestOff = off; }
+    }
+    // inner-face slide: from the seated line, the furthest strong line
+    // within a wall-thickness TOWARD the interior is the face the room
+    // actually ends at
+    if (inkAt(bestOff) > 0.35) {
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      const inw = ((cen.x - mx) * nx + (cen.y - my) * ny) >= 0 ? 1 : -1;
+      // RAW coverage (no neighbour blur) — face edges must read crisp
+      const rawAt = (off: number): number => {
+        let cov = 0;
+        for (let t = 0; t < samples; t++) {
+          const d = inset + (len - 2 * inset) * t / (samples - 1);
+          if (lineResp(G, a.x + ux * d + nx * off, a.y + uy * d + ny * off) > 0.4) cov++;
+        }
+        return cov / samples;
+      };
+      // scan exterior → interior; a face qualifies when the white run behind
+      // it is too wide to be a wall cavity — that white is the room itself
+      const clearRun = Math.max(6, Math.round(wallMax * 0.7));
+      for (let k = -3; k <= wallMax; k++) {
+        const off = bestOff + inw * k;
+        if (rawAt(off) <= 0.45) continue;
+        let run = 0;
+        while (run < clearRun && rawAt(off + inw * (run + 1)) < 0.2) run++;
+        if (run >= clearRun) { bestOff = off; break; }
+      }
     }
     fitted.push({
       a: { x: a.x + nx * bestOff, y: a.y + ny * bestOff },
@@ -853,6 +896,36 @@ export function snapCollapsed(before: XY[], after: XY[]): boolean {
 }
 
 /**
+ * How much of a polygon's boundary runs along drawn ink (0..1). A room's
+ * outline follows walls; a shape hallucinated into blank floor — a corridor
+ * polygon floating in a courtyard — has nothing under its edges.
+ */
+export function boundarySupport(G: Gray, pts: XY[], reach = 5): number {
+  if (pts.length < 3) return 0;
+  let hit = 0, total = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < 3) continue;
+    const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len;
+    const nx = -uy, ny = ux;
+    const S = Math.max(4, Math.min(30, Math.round(len / 8)));
+    for (let t = 0; t < S; t++) {
+      const d = (len * (t + 0.5)) / S;
+      const sx = a.x + ux * d, sy = a.y + uy * d;
+      let best = 0;
+      for (let off = -reach; off <= reach; off++) {
+        best = Math.max(best, lineResp(G, sx + nx * off, sy + ny * off));
+        if (best > 0.4) break;
+      }
+      total++;
+      if (best > 0.4) hit++;
+    }
+  }
+  return total ? hit / total : 0;
+}
+
+/**
  * Remove needle SPIKES from a polygon: a vertex whose two edges nearly
  * double back on themselves (the classic doorway artifact — the snap's
  * corner rebuild fires a long thin triangle out of a door gap). A vertex is
@@ -902,7 +975,7 @@ export function avgWidth(pts: XY[]): number {
  * shared walls actually shared. Pure; corners are rebuilt the same way the
  * wall snap rebuilds them.
  */
-export function alignEdgesToNeighbors(ptsIn: XY[], neighbors: XY[][], tol = 12): XY[] {
+export function alignEdgesToNeighbors(ptsIn: XY[], neighbors: XY[][], tol = 12, G?: Gray | null): XY[] {
   if (ptsIn.length < 3 || !neighbors.length) return ptsIn;
   const pts = ptsIn.map((p) => ({ ...p }));
   const n = pts.length;
@@ -914,6 +987,24 @@ export function alignEdgesToNeighbors(ptsIn: XY[], neighbors: XY[][], tol = 12):
     if (len < 4) { fitted.push({ a, b }); continue; }
     const ux = dx / len, uy = dy / len;
     const nx = -uy, ny = ux;
+    // a WALL between the two edges means the rooms genuinely end at their
+    // own faces — closing that gap paints the rooms over the wall cavity
+    const wallBetween = (offMid: number, lo: number, hi: number): boolean => {
+      if (!G) return false;
+      const dir = Math.sign(offMid) || 1;
+      for (let off = 2 * dir; Math.abs(off) <= Math.abs(offMid) - 1; off += dir) {
+        let cov = 0;
+        const S = 7;
+        for (let t = 0; t < S; t++) {
+          const d = lo + ((hi - lo) * (t + 0.5)) / S;
+          const sx = a.x + ux * d + nx * off, sy = a.y + uy * d + ny * off;
+          const r = Math.max(lineResp(G, sx, sy), lineResp(G, sx + nx, sy + ny), lineResp(G, sx - nx, sy - ny));
+          if (r > 0.4) cov++;
+        }
+        if (cov / S > 0.45) return true;
+      }
+      return false;
+    };
     let bestOff = 0, bestSpan = 0;
     for (const poly of neighbors) {
       const m = poly.length;
@@ -936,7 +1027,7 @@ export function alignEdgesToNeighbors(ptsIn: XY[], neighbors: XY[][], tol = 12):
         const lo = Math.max(0, Math.min(t1, t2)), hi = Math.min(len, Math.max(t1, t2));
         const span = hi - lo;
         if (span < Math.min(len, elen) * 0.25) continue;
-        if (span > bestSpan) { bestSpan = span; bestOff = offMid; }
+        if (span > bestSpan && !wallBetween(offMid, lo, hi)) { bestSpan = span; bestOff = offMid; }
       }
     }
     fitted.push({

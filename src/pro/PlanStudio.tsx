@@ -218,10 +218,11 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   // ── Max's boxes: scale-aware snap + THE HARD NO-OVERLAP RULE ───────────────
   // (studioIngest.ingestAiSeeds — extracted pure so the scoring harness runs
   // exactly this code)
-  const ingestSeeds = useCallback((seeds: AiRoomSeed[], existing: Shape[]): Shape[] => {
-    const { shapes: kept } = ingestAiSeeds(
-      seeds, existing.map((s) => ({ pts: s.pts, roomNumber: s.roomNumber })), gray, W, H, rules);
-    return kept.map((s) => ({ id: uid(), ...s }));
+  const ingestSeeds = useCallback((seeds: AiRoomSeed[], existing: Shape[]): { added: Shape[]; gapFilled: number } => {
+    const { shapes: kept, gapFilled } = ingestAiSeeds(
+      seeds, existing.map((s) => ({ pts: s.pts, roomNumber: s.roomNumber })), gray, W, H, rules,
+      { fillGaps: true });
+    return { added: kept.map((s) => ({ id: uid(), ...s })), gapFilled };
   }, [W, H, gray, rules]);
 
   // the automatic first drawing, once the wall grid is ready to snap against
@@ -229,11 +230,12 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     if (!gray || !pendingSeeds.current) return;
     const seeds = pendingSeeds.current;
     pendingSeeds.current = null;
-    const added = ingestSeeds(seeds, shapes);
-    const dropped = seeds.length - added.length;
+    const { added, gapFilled } = ingestSeeds(seeds, shapes);
+    const dropped = seeds.length + gapFilled - added.length;
     if (added.length) {
       mutate((prev) => [...prev, ...added]);
       setNotice(`✓ Max ${direct ? "read" : "drew"} ${added.length} room${added.length === 1 ? "" : "s"}` +
+        (gapFilled > 0 ? ` (${gapFilled} drawn from the plan's own lines — they need names)` : "") +
         (dropped > 0 ? ` (${dropped} overlapping box${dropped === 1 ? "" : "es"} dropped)` : "") +
         (direct
           ? ". Numbers, names and square footage are filled in — check the drawing, then 🚀 Ship to Max Space."
@@ -266,7 +268,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
           imageDataUrl: picture.dataUrl, imageWidth: W, imageHeight: H,
           building, floor, onProgress: setNotice
         });
-      const added = ingestSeeds(reading.rooms.map((r) => ({
+      const { added } = ingestSeeds(reading.rooms.map((r) => ({
         name: r.name, roomNumber: r.roomNumber, roomType: r.roomType, polygon: r.polygon,
         squareFeet: direct ? r.squareFeet : 0
       })), shapes);

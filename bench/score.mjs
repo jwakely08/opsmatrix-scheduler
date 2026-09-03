@@ -116,7 +116,8 @@ const result = await page.evaluate(async ({ locate, readings }) => {
     name: r.name, roomNumber: r.roomNumber, roomType: r.roomType,
     polygon: r.polygon, squareFeet: 0
   }));
-  const { shapes, dropped } = ingestAiSeeds(seeds, [], gray, crop.width, crop.height, defaultRules());
+  const { shapes, dropped, gapFilled } = ingestAiSeeds(
+    seeds, [], gray, crop.width, crop.height, defaultRules(), { fillGaps: true });
 
   // ── overlay ───────────────────────────────────────────────────────────────
   const octx = cv.getContext("2d");
@@ -156,6 +157,7 @@ const result = await page.evaluate(async ({ locate, readings }) => {
     merged: reading.rooms.length,
     mergedNumbers: reading.rooms.map((r) => r.roomNumber).filter(Boolean),
     dropped,
+    gapFilled,
     ms: Math.round(performance.now() - t0),
     shapes: shapes.map((s) => ({
       number: s.roomNumber,
@@ -257,7 +259,7 @@ console.log(`lost in ingest: ${JSON.stringify(lostInIngest)}`);
 console.log(`ingest blame: ${JSON.stringify(result.blame)}`);
 
 const pct = (n, d) => `${n}/${d} (${Math.round((n / d) * 1000) / 10}%)`;
-console.log(`merged rooms from tiles: ${result.merged}  |  ingest dropped: ${result.dropped}  |  read+merge ${result.ms}ms`);
+console.log(`merged rooms from tiles: ${result.merged}  |  ingest dropped: ${result.dropped}  |  gap-filled: ${result.gapFilled}  |  read+merge ${result.ms}ms`);
 console.log(`ROOMS   found in place: ${pct(found.length, rooms.length)}`);
 console.log(`        misplaced:      ${misplaced.length} ${JSON.stringify(misplaced)}`);
 console.log(`        missing:        ${missing.length} ${JSON.stringify(missing)}`);
