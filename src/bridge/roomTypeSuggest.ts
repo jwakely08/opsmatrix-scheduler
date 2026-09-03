@@ -9,7 +9,7 @@
 // plan reader — no second AI provider, no second key.
 import { AiPlanError, anthropicRequest, type AiProxy } from "./aiPlanImport";
 
-const MODEL = "claude-fable-5";
+const MODEL = "claude-fable-5-1";
 
 export interface SuggestOptions {
   apiKey: string;

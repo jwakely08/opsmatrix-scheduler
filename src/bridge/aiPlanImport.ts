@@ -1,4 +1,4 @@
-// Read a floor plan PICTURE with Claude Fable 5 and rebuild it as an
+// Read a floor plan PICTURE with Claude Fable 5.1 and rebuild it as an
 // OpsMatrix plan.
 //
 // The uploaded file (PDF page, photo, screenshot, coloured architectural
@@ -18,7 +18,7 @@ import { guessType, estimateMinutes, type ImportResult } from "./fusionEntry";
 
 export type { ImportResult };
 
-export const AI_MODEL = "claude-fable-5";
+export const AI_MODEL = "claude-fable-5-1";
 const API_URL = "https://api.anthropic.com/v1/messages";
 
 /** Room types the model may choose from — the classic rate table's own keys. */
@@ -304,7 +304,7 @@ function splitDataUrl(dataUrl: string): { mediaType: string; data: string } {
   return { mediaType: m[1], data: m[2] };
 }
 
-/** Ask Fable 5 to read the plan. Network only — no drawing happens here. */
+/** Ask Fable 5.1 to read the plan. Network only — no drawing happens here. */
 export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReading> {
   const key = (opts.apiKey || "").trim();
   if (!key && !opts.proxy) {
@@ -325,7 +325,7 @@ export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReadi
       body: JSON.stringify({
         model: opts.model || AI_MODEL,
         max_tokens: 16000,
-        // Fable 5 thinks by default; effort is the depth control. No
+        // Fable 5.1 thinks by default; effort is the depth control. No
         // temperature/top_p — that model rejects sampling parameters.
         output_config: {
           effort: opts.effort || "high",
@@ -437,7 +437,7 @@ function pointInPolygon(poly: number[][], x: number, y: number): boolean {
 function explainHttpError(status: number, body: string): string {
   if (status === 401) return "That API key was rejected. Check it under Admin Settings → Max AI.";
   if (status === 400 && /retention/i.test(body)) {
-    return "Claude Fable 5 needs 30-day data retention enabled on the Anthropic account.";
+    return "Claude Fable 5.1 needs 30-day data retention enabled on the Anthropic account.";
   }
   if (status === 429) return "Claude is rate limited right now. Wait a moment and try again.";
   if (status >= 500) return "Claude is having trouble right now. Try again in a moment.";
