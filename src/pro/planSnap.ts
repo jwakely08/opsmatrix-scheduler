@@ -72,6 +72,266 @@ export function buildGray(image: HTMLImageElement | HTMLCanvasElement, maxSide =
   return stretchGray({ ...g, w, h });
 }
 
+// ── label bubbles ───────────────────────────────────────────────────────────
+// Professional sheets print every room number inside a rounded "stadium"
+// bubble. Those bubbles are poison for geometry: they are themselves small
+// enclosed regions (fake rooms), their outlines sever real rooms, and the
+// snap happily seats a room edge on a bubble instead of the wall behind it.
+// They are also the best density signal a sheet has: one bubble ≈ one room,
+// and the bubble's height says how big the printed text is.
+
+export interface BubbleBox {
+  minx: number; miny: number; maxx: number; maxy: number;
+  /** bubble interior area in px (glyph holes excluded) */
+  area: number;
+}
+
+/** ink pieces inside a bbox: count, largest piece's long side, total ink */
+function insideInk(
+  ink: Uint8Array, W: number, H: number,
+  minx: number, miny: number, maxx: number, maxy: number
+): { pieces: number; maxPiece: number; total: number } {
+  const bw = maxx - minx + 1, bh = maxy - miny + 1;
+  const seen = new Uint8Array(bw * bh);
+  const qx = new Int32Array(bw * bh), qy = new Int32Array(bw * bh);
+  let pieces = 0, maxPiece = 0, total = 0;
+  for (let sy = 1; sy < bh - 1; sy++) {
+    for (let sx = 1; sx < bw - 1; sx++) {
+      if (seen[sy * bw + sx] || !ink[(miny + sy) * W + (minx + sx)]) continue;
+      pieces++;
+      let head = 0, tail = 0;
+      qx[tail] = sx; qy[tail] = sy; tail++;
+      seen[sy * bw + sx] = 1;
+      let pminx = sx, pmaxx = sx, pminy = sy, pmaxy = sy;
+      while (head < tail) {
+        const cx = qx[head], cy = qy[head]; head++;
+        total++;
+        if (cx < pminx) pminx = cx; if (cx > pmaxx) pmaxx = cx;
+        if (cy < pminy) pminy = cy; if (cy > pmaxy) pmaxy = cy;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (!dx && !dy) continue;
+            const nx = cx + dx, ny = cy + dy;
+            if (nx < 1 || ny < 1 || nx >= bw - 1 || ny >= bh - 1) continue;
+            if (seen[ny * bw + nx] || !ink[(miny + ny) * W + (minx + nx)]) continue;
+            seen[ny * bw + nx] = 1; qx[tail] = nx; qy[tail] = ny; tail++;
+          }
+        }
+      }
+      maxPiece = Math.max(maxPiece, Math.max(pmaxx - pminx + 1, pmaxy - pminy + 1));
+    }
+  }
+  return { pieces, maxPiece, total };
+}
+
+/**
+ * Find the label bubbles: small fully-enclosed regions, wide/tall stadium
+ * proportions, that contain a plausible amount of TEXT ink. A closet-sized
+ * real room fails the enclosure test (its door is a gap in the wall) or the
+ * text test (nothing printed inside); a bubble passes both.
+ */
+export function labelBubbles(G: Gray): BubbleBox[] {
+  const W = G.w, H = G.h;
+  const S = Math.max(W, H);
+  const ink = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    const v = G.data[i];
+    ink[i] = (G.dark ? 1 - v : v) > 0.45 ? 1 : 0;
+  }
+  const label = new Int32Array(W * H);
+  for (let i = 0; i < W * H; i++) if (ink[i]) label[i] = -1;
+  const qx = new Int32Array(W * H), qy = new Int32Array(W * H);
+  let next = 1;
+  const out: BubbleBox[] = [];
+  // bubbles are sized by their TEXT, not the sheet — the caps carry absolute
+  // floors so small test images and low-res thumbnails behave the same
+  // (a vertical 4-digit bubble runs long: think 36x250 at a 2048 render)
+  const maxShort = Math.max(36, S * 0.028);
+  const maxLong = Math.max(110, S * 0.14);
+  for (let sy = 0; sy < H; sy++) {
+    for (let sx = 0; sx < W; sx++) {
+      const si = sy * W + sx;
+      if (label[si] !== 0) continue;
+      let head = 0, tail = 0;
+      qx[tail] = sx; qy[tail] = sy; tail++;
+      label[si] = next;
+      let area = 0, minx = sx, maxx = sx, miny = sy, maxy = sy, border = false;
+      while (head < tail) {
+        const cx = qx[head], cy = qy[head]; head++;
+        area++;
+        if (cx === 0 || cy === 0 || cx === W - 1 || cy === H - 1) border = true;
+        if (cx < minx) minx = cx; if (cx > maxx) maxx = cx;
+        if (cy < miny) miny = cy; if (cy > maxy) maxy = cy;
+        if (cx > 0 && label[cy * W + cx - 1] === 0) { label[cy * W + cx - 1] = next; qx[tail] = cx - 1; qy[tail] = cy; tail++; }
+        if (cx < W - 1 && label[cy * W + cx + 1] === 0) { label[cy * W + cx + 1] = next; qx[tail] = cx + 1; qy[tail] = cy; tail++; }
+        if (cy > 0 && label[(cy - 1) * W + cx] === 0) { label[(cy - 1) * W + cx] = next; qx[tail] = cx; qy[tail] = cy - 1; tail++; }
+        if (cy < H - 1 && label[(cy + 1) * W + cx] === 0) { label[(cy + 1) * W + cx] = next; qx[tail] = cx; qy[tail] = cy + 1; tail++; }
+      }
+      next++;
+      if (border) continue;
+      const bw = maxx - minx + 1, bh = maxy - miny + 1;
+      const short = Math.min(bw, bh), long = Math.max(bw, bh);
+      if (short < 7 || short > maxShort || long > maxLong || long > short * 8.5) continue;
+      if (long / short < 1.5) continue;
+      if (area / (bw * bh) < 0.7) continue; // stadium interiors fill their box
+      // text test: the ink INSIDE the region must be TEXT — several separate
+      // glyph-sized pieces, none big. A narrow ROOM that happens to hold its
+      // own label bubble fails here: the bubble's ring is one large piece.
+      const t = insideInk(ink, W, H, minx, miny, maxx, maxy);
+      const inner = (bw - 2) * (bh - 2);
+      if (inner <= 0 || t.pieces < 2) continue;
+      if (t.maxPiece > long * 0.6) continue;
+      const frac = t.total / inner;
+      if (frac < 0.012 || frac > 0.5) continue; // outline fonts print thin
+      out.push({ minx, miny, maxx, maxy, area });
+    }
+  }
+  return out;
+}
+
+/**
+ * The printed-label text as glyph CLUSTERS: small, genuinely 2-D ink
+ * components (digits/letters) grouped into label lines. This catches labels
+ * whose bubble outline crosses a wall — the interior-region test in
+ * labelBubbles fails there, but the glyphs are still their own components.
+ * Sized from the detected bubbles when there are any.
+ */
+export function textClusters(G: Gray, bubbles?: BubbleBox[]): BubbleBox[] {
+  const W = G.w, H = G.h;
+  const s = medianBubbleShort(bubbles ?? labelBubbles(G));
+  const glyphMax = s ? Math.max(12, Math.round(s * 1.25)) : Math.max(16, Math.round(Math.max(W, H) * 0.014));
+  const minDim = Math.max(4, Math.round(glyphMax * 0.15));
+  const ink = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    const v = G.data[i];
+    ink[i] = (G.dark ? 1 - v : v) > 0.45 ? 1 : 0;
+  }
+  // ink components, 8-connected (a glyph's diagonal strokes stay one piece)
+  const label = new Int32Array(W * H);
+  const qx = new Int32Array(W * H), qy = new Int32Array(W * H);
+  let next = 0;
+  const glyphs: BubbleBox[] = [];
+  for (let sy = 0; sy < H; sy++) {
+    for (let sx = 0; sx < W; sx++) {
+      const si = sy * W + sx;
+      if (!ink[si] || label[si]) continue;
+      next++;
+      let head = 0, tail = 0;
+      qx[tail] = sx; qy[tail] = sy; tail++;
+      label[si] = next;
+      let area = 0, minx = sx, maxx = sx, miny = sy, maxy = sy;
+      while (head < tail) {
+        const cx = qx[head], cy = qy[head]; head++;
+        area++;
+        if (cx < minx) minx = cx; if (cx > maxx) maxx = cx;
+        if (cy < miny) miny = cy; if (cy > maxy) maxy = cy;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (!dx && !dy) continue;
+            const nx = cx + dx, ny = cy + dy;
+            if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+            const ni = ny * W + nx;
+            if (ink[ni] && !label[ni]) { label[ni] = next; qx[tail] = nx; qy[tail] = ny; tail++; }
+          }
+        }
+      }
+      const bw = maxx - minx + 1, bh = maxy - miny + 1;
+      if (bw > glyphMax || bh > glyphMax) continue;      // too big for a glyph
+      if (Math.min(bw, bh) < minDim) continue;           // a wall stub, not a glyph
+      if (area < 12 || area / (bw * bh) < 0.12) continue; // stray speck / hairline
+      glyphs.push({ minx, miny, maxx, maxy, area });
+    }
+  }
+  // cluster glyphs into label lines (near-neighbour bbox merge)
+  const reach = Math.round(glyphMax * 0.7);
+  const clusters: (BubbleBox & { n: number })[] = [];
+  for (const g of glyphs) {
+    let home: (BubbleBox & { n: number }) | null = null;
+    for (const c of clusters) {
+      if (g.minx <= c.maxx + reach && c.minx <= g.maxx + reach &&
+        g.miny <= c.maxy + reach && c.miny <= g.maxy + reach) { home = c; break; }
+    }
+    if (home) {
+      home.minx = Math.min(home.minx, g.minx); home.maxx = Math.max(home.maxx, g.maxx);
+      home.miny = Math.min(home.miny, g.miny); home.maxy = Math.max(home.maxy, g.maxy);
+      home.area += g.area; home.n++;
+    } else {
+      clusters.push({ ...g, n: 1 });
+    }
+  }
+  // one glyph alone is as likely a symbol as a label — labels have several
+  return clusters.filter((c) => c.n >= 2);
+}
+
+/**
+ * Erase the printed labels from the ink: detected bubbles AND glyph
+ * clusters, each box slightly grown so the bubble outline around a text
+ * line goes too. The wall snap stops seating edges on label bubbles,
+ * flood-fill detection stops finding them as fake rooms, and rooms a
+ * bubble severed become whole again (door-gap sealing closes the hole the
+ * erasure leaves in any wall the bubble crossed).
+ */
+export function eraseBubbles(G: Gray, bubbles?: BubbleBox[]): Gray {
+  const bubs = bubbles ?? labelBubbles(G);
+  // the pad must reach past the stadium outline AROUND the text, or a
+  // wall-crossing bubble (undetectable by the interior test) leaves its
+  // outline standing — which then severs the room it sits in
+  const s = medianBubbleShort(bubs);
+  const textPad = s ? Math.max(6, Math.round(s * 0.5)) : 8;
+  const boxes: { box: BubbleBox; pad: number }[] = [
+    ...bubs.map((b) => ({ box: b, pad: 3 })),
+    ...textClusters(G, bubs).map((b) => ({ box: b, pad: textPad }))
+  ];
+  if (!boxes.length) return G;
+  const data = new Float32Array(G.data);
+  const paper = G.dark ? 1 : 0;
+  for (const { box: b, pad } of boxes) {
+    const x0 = Math.max(0, b.minx - pad), x1 = Math.min(G.w - 1, b.maxx + pad);
+    const y0 = Math.max(0, b.miny - pad), y1 = Math.min(G.h - 1, b.maxy + pad);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) data[y * G.w + x] = paper;
+    }
+  }
+  return { ...G, data };
+}
+
+/**
+ * Typical bubble SHORT side in px — the sheet's printed-text size signal.
+ * Taken at the 70th percentile, not the median: stray small detections
+ * (slivers that scrape past the filters) skew low, and an undersized
+ * estimate cascades — glyphs stop classifying and tiles oversubdivide.
+ */
+export function medianBubbleShort(bubbles: BubbleBox[]): number | null {
+  if (!bubbles.length) return null;
+  const shorts = bubbles
+    .map((b) => Math.min(b.maxx - b.minx + 1, b.maxy - b.miny + 1))
+    .sort((a, b) => a - b);
+  return shorts[Math.min(shorts.length - 1, Math.floor(shorts.length * 0.7))];
+}
+
+/** the default snap search reach for a grid this wide */
+export function defaultSnapReach(w: number): number {
+  return Math.max(15, Math.min(55, Math.round(w * 0.035)));
+}
+
+/**
+ * Scale-aware snap reach for an ALREADY-PLACED shape (an AI seed, typically).
+ * The default reach is sized to the sheet — on a dense hospital floor it can
+ * equal a whole room pitch, so a correctly placed seed teleports onto the
+ * neighbour's wall. A seed's own short side is the honest yardstick: the
+ * walls it should seat on are at most a fraction of itself away.
+ */
+export function snapReachFor(pts: XY[], gridW: number): number {
+  if (pts.length < 3) return defaultSnapReach(gridW);
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  const short = Math.min(maxX - minX, maxY - minY);
+  return Math.max(5, Math.min(defaultSnapReach(gridW), Math.round(short * 0.25)));
+}
+
 /** how strongly the pixel reads as wall ink */
 export function lineResp(G: Gray, x: number, y: number): number {
   const xi = Math.round(x), yi = Math.round(y);
@@ -132,7 +392,7 @@ export function snapToWalls(G: Gray | null, ptsIn: XY[], opts?: { maxOffset?: nu
   // wall the user just moved off of) wins and the shape "reverts".
   const R = opts?.maxOffset
     ? Math.max(4, Math.round(opts.maxOffset))
-    : Math.max(15, Math.min(55, Math.round(G.w * 0.035)));
+    : defaultSnapReach(G.w);
   const n = pts.length;
   const fitted: { a: XY; b: XY }[] = [];
   for (let e = 0; e < n; e++) {
@@ -263,21 +523,115 @@ function expandPoly(pts: XY[], k: number): XY[] {
   return out;
 }
 
+/**
+ * Seal door openings in a wall mask: a DOOR on a professional sheet is a
+ * plain gap in a wall line (no leaf, no swing arc), so flood-fill leaks
+ * every room into the corridor and finds nothing. A door gap is a SHORT run
+ * of empty pixels with wall ink at both ends of the run — fill those, along
+ * both axes. Dilation alone can't do this: it fattens everything
+ * proportionally and never closes a gap wider than its iteration count.
+ */
+export function sealDoorGaps(
+  mask: Uint8Array, w: number, h: number, maxRun: number
+): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(mask);
+  if (maxRun < 1) return out;
+  // How far the flanking ink extends PERPENDICULAR to the run decides what
+  // the gap is. A door gap sits in the line of a wall: its flanks are that
+  // wall's thin cross-section. A narrow ROOM between two parallel walls
+  // also reads as a short empty run — but its flanks are walls running
+  // perpendicular, thick in that direction. Only the first is sealed.
+  const span = Math.max(6, Math.round(maxRun * 0.6));
+  const colInk = (x: number, y: number) => {
+    let n = 0;
+    for (let dy = 2; dy <= span; dy++) {
+      if (y + dy < h && mask[(y + dy) * w + x]) n++;
+      if (y - dy >= 0 && mask[(y - dy) * w + x]) n++;
+    }
+    return n;
+  };
+  const rowInk = (x: number, y: number) => {
+    let n = 0;
+    for (let dx = 2; dx <= span; dx++) {
+      if (x + dx < w && mask[y * w + x + dx]) n++;
+      if (x - dx >= 0 && mask[y * w + x - dx]) n++;
+    }
+    return n;
+  };
+  const thin = Math.max(2, Math.round(span * 0.34));
+  // A door often hangs at a wall corner: one flank is the thin wall
+  // cross-section, the other the perpendicular wall. One thin flank is
+  // enough — a narrow ROOM has walls (thick flanks) on BOTH sides.
+  // horizontal runs (door gaps in horizontal walls)
+  for (let y = 0; y < h; y++) {
+    let x = 0;
+    while (x < w) {
+      if (mask[y * w + x]) { x++; continue; }
+      const start = x;
+      while (x < w && !mask[y * w + x]) x++;
+      if (x - start <= maxRun && start > 0 && x < w &&
+        Math.min(colInk(start - 1, y), colInk(x, y)) <= thin) {
+        for (let k = start; k < x; k++) out[y * w + k] = 1;
+      }
+    }
+  }
+  // vertical runs (door gaps in vertical walls)
+  for (let x = 0; x < w; x++) {
+    let y = 0;
+    while (y < h) {
+      if (mask[y * w + x]) { y++; continue; }
+      const start = y;
+      while (y < h && !mask[y * w + x]) y++;
+      if (y - start <= maxRun && start > 0 && y < h &&
+        Math.min(rowInk(x, start - 1), rowInk(x, y)) <= thin) {
+        for (let k = start; k < y; k++) out[k * w + x] = 1;
+      }
+    }
+  }
+  return out;
+}
+
 /** every enclosed region of the plan's own lines, as clean polygons */
-export function autoDetectRooms(G: Gray): XY[][] {
-  const maxW = 800;
+export function autoDetectRooms(G0: Gray, opts?: {
+  /** working width cap — dense sheets need more than the 800 default */
+  maxSide?: number;
+  /** skip the label-bubble erasure (bubbles read as fake rooms otherwise) */
+  keepBubbles?: boolean;
+  /** keep regions touching the image border (a TILE clips rooms mid-wall;
+   *  the open outside is still dropped by the area cap) */
+  keepBorder?: boolean;
+  /** dilation rounds — with door-gap sealing doing the real work, a dense
+   *  sheet wants LESS fattening or its closet-sized rooms get eaten */
+  dilate?: number;
+  /** smallest region kept, as a fraction of the image (default 0.0015) */
+  minAreaFrac?: number;
+}): XY[][] {
+  // label marks are BOTH erased from the ink and remembered: a bubble whose
+  // outline partly survives erasure (it crossed a wall, or its glyphs alone
+  // were caught) can come back as an enclosed bubble-sized region — a fake
+  // room exactly where a label sits. Those are filtered out at the end.
+  const bubs = opts?.keepBubbles ? [] : labelBubbles(G0);
+  const marks: BubbleBox[] = opts?.keepBubbles ? [] : [...bubs, ...textClusters(G0, bubs)];
+  const G = opts?.keepBubbles ? G0 : eraseBubbles(G0, bubs);
+  const maxW = opts?.maxSide ?? 800;
   const sc = G.w > maxW ? maxW / G.w : 1;
   const w = Math.round(G.w * sc), hh = Math.round(G.h * sc);
   let wall = new Uint8Array(w * hh);
-  for (let y = 0; y < hh; y++) {
-    for (let x = 0; x < w; x++) {
-      const gx = Math.min(G.w - 1, Math.round(x / sc)), gy = Math.min(G.h - 1, Math.round(y / sc));
+  // MAX-pool the ink into the working grid: a vector-sharp render draws
+  // walls 1-2px thin, and nearest-neighbour sampling turns them into dashed
+  // fragments that leak everywhere — any ink in the source cell marks wall
+  for (let gy = 0; gy < G.h; gy++) {
+    const y = Math.min(hh - 1, Math.floor(gy * sc));
+    for (let gx = 0; gx < G.w; gx++) {
       const v = G.data[gy * G.w + gx];
-      wall[y * w + x] = (G.dark ? 1 - v : v) > 0.45 ? 1 : 0;
+      if ((G.dark ? 1 - v : v) > 0.45) wall[y * w + Math.min(w - 1, Math.floor(gx * sc))] = 1;
     }
   }
-  // dilate walls to seal door gaps so rooms don't leak into corridors
-  const iter = Math.max(3, Math.round(w / 110));
+  // seal door AND window openings (short empty runs inside wall lines) —
+  // exterior walls are full of window gaps that leak rooms to the outside …
+  wall = sealDoorGaps(wall, w, hh, Math.round(w * 0.045));
+  // …then dilate to close what's left (diagonal gaps, sloppy scans)
+  const iter = opts?.dilate ?? Math.max(3, Math.round(w / 110));
   for (let it = 0; it < iter; it++) {
     const nw = new Uint8Array(wall);
     for (let y2 = 1; y2 < hh - 1; y2++) {
@@ -319,9 +673,16 @@ export function autoDetectRooms(G: Gray): XY[][] {
   }
   const total = w * hh;
   const out: XY[][] = [];
+  // a region that fits inside a label mark is the label itself, not a room
+  const ghostTol = 12; // G-scale px of slack around the mark
+  const isLabelGhost = (rg: { minx: number; maxx: number; miny: number; maxy: number }) =>
+    marks.some((m) =>
+      rg.minx / sc >= m.minx - ghostTol && rg.maxx / sc <= m.maxx + ghostTol &&
+      rg.miny / sc >= m.miny - ghostTol && rg.maxy / sc <= m.maxy + ghostTol);
   for (const rg of regions) {
-    if (rg.touchesBorder) continue;
-    if (rg.area < total * 0.0015 || rg.area > total * 0.35) continue;
+    if (rg.touchesBorder && !opts?.keepBorder) continue;
+    if (rg.area < total * (opts?.minAreaFrac ?? 0.0015) || rg.area > total * 0.35) continue;
+    if (isLabelGhost(rg)) continue;
     let poly = traceRegion(label, rg, w, hh);
     if (!poly || poly.length < 4) continue;
     poly = rdp(poly, Math.max(2, w * 0.006));

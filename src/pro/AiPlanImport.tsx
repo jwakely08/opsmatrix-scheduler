@@ -10,7 +10,8 @@
 //   3. Either way the plan is rebuilt matrix-style; the upload is never
 //      shown back.
 import React, { useEffect, useRef, useState } from "react";
-import { readPlanWithAI, locateDrawing, padBox, AiPlanError } from "../bridge/aiPlanImport";
+import { readPlanWithAI, readPlanTiled, locateDrawing, padBox, AiPlanError } from "../bridge/aiPlanImport";
+import { tilesForPicture, mergeTileRooms, TILE_RENDER_EDGE } from "./planTiles";
 import { createPortal } from "react-dom";
 import { planFileToImage, isPdf } from "./planFile";
 import { dxfToPicture, isDxf, isDwg } from "./dxfRaster";
@@ -110,12 +111,13 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
       let seeds: AiRoomSeed[] = [];
       let noticeMsg = "";
       let read = false;
-      // read mode (Josh, 2026-09-01): the sheet often carries legends, title
-      // blocks and notes — Max first LOCATES the floor plan itself and the
-      // rest of the page is cropped away, so only the interior rooms are
-      // read and only the drawing shows in the editor
+      // BOTH modes (Josh, 2026-09-01 / benchmark 2026-09-03): the sheet often
+      // carries legends, title blocks and notes — Max first LOCATES the floor
+      // plan itself and the rest of the page is cropped away, so only the
+      // interior rooms are read, the tiles subdivide the DRAWING rather than
+      // the page, and only the drawing shows in the editor
       let pic = picture;
-      if (mode === "read" && (key || proxy)) {
+      if (key || proxy) {
         try {
           setStatus("Max is finding the floor plan on the page…");
           const box = await locateDrawing({ apiKey: key, proxy, imageDataUrl: picture.dataUrl });
@@ -126,12 +128,27 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
       if (key || proxy) {
         try {
           setStatus(mode === "read" ? "Max is reading the floor plan…" : "Max is drawing the floor plan…");
-          const reading = await readPlanWithAI({
-            apiKey: key, proxy,
-            imageDataUrl: pic.dataUrl,
-            imageWidth: pic.width, imageHeight: pic.height,
-            building, floor, onProgress: setStatus
-          });
+          // dense sheets (hundreds of rooms on one page) are read in TILES —
+          // each re-rendered at full resolution and merged back together. The
+          // sheet's own printed-label size decides; a normal plan stays one shot.
+          const rr2 = (pic as { renderRegion?: (b: ReturnType<typeof padBox>, t: number) => Promise<typeof pic> }).renderRegion;
+          const { tiles } = rr2
+            ? await tilesForPicture(pic.dataUrl, pic.width, pic.height)
+            : { tiles: [{ x0: 0, y0: 0, x1: 1, y1: 1 }] };
+          const reading = tiles.length > 1 && rr2
+            ? await readPlanTiled({
+              apiKey: key, proxy,
+              imageDataUrl: pic.dataUrl,
+              imageWidth: pic.width, imageHeight: pic.height,
+              building, floor, onProgress: setStatus,
+              tiles, renderRegion: rr2, tileEdge: TILE_RENDER_EDGE, merge: mergeTileRooms
+            })
+            : await readPlanWithAI({
+              apiKey: key, proxy,
+              imageDataUrl: pic.dataUrl,
+              imageWidth: pic.width, imageHeight: pic.height,
+              building, floor, onProgress: setStatus
+            });
           seeds = reading.rooms.map((r) => ({
             name: r.name, roomNumber: r.roomNumber, roomType: r.roomType, polygon: r.polygon,
             // read mode keeps the sizes stated on the plan; calibrate mode
@@ -157,7 +174,10 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
       setStudioSized(read);
       setStudioPic({
         dataUrl: pic.dataUrl, width: pic.width,
-        height: pic.height, aspect: pic.aspect
+        height: pic.height, aspect: pic.aspect,
+        // keep the source re-render hook so "✨ Max draws the rooms" inside
+        // the editor can read dense sheets in tiles too
+        renderRegion: (pic as StudioPicture).renderRegion
       });
     } catch (e) {
       setError(e instanceof AiPlanError ? e.message : String((e as Error)?.message || e));

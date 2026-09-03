@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-09-03 latest (§12r: PRODUCTION LIVE at opsmatrix.pages.dev; corridor-sliver snap guard; baked neon maps for iOS parity; CLIENT SCHEDULE EXPORT — the client's xlsx template value-patched byte-faithfully, Scope break schedules + per-schedule day pills/hours/break picker). Earlier 2026-09-01 (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-09-03 latest (§12s: DENSE-SHEET ROOM DETECTION — label-bubble suppression, door/window gap sealing, tiled high-res AI reading with cross-tile merge, scale-aware snap; ≥92% measured on the Franciscan Lafayette benchmark via the new bench/ harness). Same-day earlier (§12r: PRODUCTION LIVE at opsmatrix.pages.dev; corridor-sliver snap guard; baked neon maps for iOS parity; CLIENT SCHEDULE EXPORT — the client's xlsx template value-patched byte-faithfully, Scope break schedules + per-schedule day pills/hours/break picker). Earlier 2026-09-01 (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -508,6 +508,70 @@ Lives ONLY in Max Space → Map View (🚙 Rover Mode button, shown when a plan 
   workbooks, `xlsxZip.readZip` (stored + DecompressionStream inflate). With no
   templates saved, the bundled Akron button stands in. 340 tests; Playwright drove
   upload → named button → download (AI stubbed), openpyxl-validated.
+
+## 12s. DENSE-SHEET ROOM DETECTION + THE BENCHMARK (2026-09-03)
+
+Mission: make room detection RELIABLE on large, complex hospital sheets. The benchmark is
+Josh's real Franciscan Lafayette Central 2nd-floor 11x17 PDF (~200 numbered rooms, five
+wings) — cleaner and higher-resolution than most plans we'll ingest, so if detection fails
+here the business doesn't work. **Measured result (EW wing, rooms 2101–2156, hand-labelled
+answer key): 92.2% of rooms drawn in place with their printed numbers using a fully
+automatic conservative reader, 100% with full-coverage readings, 98.4% with ±1.5% polygon
+noise — zero misplaced, zero false or duplicate numbers in every run.** Corridors: 4/8
+named in place (follow-up below).
+
+**Why dense sheets failed before** (all four fixed):
+1. One 2000px image of the whole sheet leaves a room 40–60px — the reader sees smudges.
+2. The printed room-number stadium "bubbles" are enclosed regions themselves: fake rooms,
+   room-severing walls, and snap magnets.
+3. `snapToWalls`' default reach (`min(55, 0.035·width)`) EQUALS a room pitch on a dense
+   sheet — correctly placed AI boxes teleported onto the neighbours' walls at ingest and
+   the no-overlap rule then killed them.
+4. Doors/windows on professional sheets are plain GAPS in wall lines (no swing arcs), so
+   flood-fill detection leaked every room into the corridors/outside.
+
+**The architecture now** (all pure pieces unit-tested; 365 tests green):
+- **planSnap.ts** — `labelBubbles` (enclosure + stadium proportions + glyph-sized interior
+  ink; a slim room holding its own bubble no longer matches), `textClusters` (glyph
+  clusters catch wall-crossing bubbles), `eraseBubbles` (bubbles + text wiped from the
+  ink), `sealDoorGaps` (short empty runs flanked by a thin wall cross-section are filled;
+  one thin flank suffices — corner-hung doors; narrow rooms have thick flanks both sides
+  and are never filled), `autoDetectRooms` upgrades (MAX-pooled ink downsample so 1–2px
+  vector walls survive; seal-then-dilate; label-ghost filter; `maxSide`/`keepBorder`/
+  `dilate`/`minAreaFrac` options), `snapReachFor` (reach for a placed seed = 25% of the
+  seed's own short side, capped by the old default), `medianBubbleShort` (p70 — robust to
+  junk detections; this is the sheet's printed-text size signal).
+- **planTiles.ts** (NEW) — `tileGrid` sizes an overlapping tile grid from the bubble size
+  (no bubbles → single shot, so magicplan scans and photos are untouched);
+  `dropEmptyTiles`; `mergeTileRooms` merges per-tile readings into whole-sheet
+  coordinates: same-number fragments union across seams, clipped readings lose to whole
+  ones, cross-tile zone wrappers drop, and **readings with different printed numbers
+  always coexist** — a printed number is evidence of a distinct room, so only same/no-
+  number overlaps dedupe. `tilesForPicture` is the browser-side analysis.
+- **aiPlanImport.ts** — `readPlanTiled` reads tiles concurrently (3 lanes, per-tile
+  `emptyOk`, a failed tile fails the read honestly), merges, keeps progress messages
+  plain ("reading section 3 of 15…"). `TILE_PROMPT_NOTE` tells the model edge-cut rooms
+  are fine. Wired into BOTH `AiPlanImport.handleFile` (upload) and PlanStudio's
+  "✨ Max draws the rooms" retry (`StudioPicture.renderRegion` carries the source
+  re-render hook). The locate+crop now runs in BOTH answer modes (it was read-mode only —
+  the no-sizes flow tiled the title block).
+- **studioIngest.ts** (NEW) — the Calibration Editor's `cleanSnap` + AI-seed ingest
+  extracted pure (PlanStudio delegates), so the harness drives EXACTLY the production
+  path. Ingest uses the scale-aware reach and the number-aware no-overlap rule; the
+  editor's snap gray is bubble-erased (`eraseBubbles(buildGray(...))`).
+- **bench/** (NEW) — the scoring harness; see `bench/README.md` for the full workflow and
+  scores. Playwright drives the real modules through the vite dev server with
+  api.anthropic.com stubbed per tile. **Nothing derived from the real plan is committed**
+  (PDF, answer key, readings all gitignored — public repo, real hospital); scripts
+  regenerate everything from a dropped-in PDF.
+
+**Follow-ups / open**: corridor naming across tiles (fragments union under one name; EW2C/
+F/G/H names get lost to per-tile leaks — corridors are not in the ≥90% room metric);
+rooms opening into wide lobbies can't be separated by the LOCAL reader (the vision model
+reads them fine — the harness documents them in extra-readings.json); staging validation
+against the real model is the next step (the harness's reader is a conservative stand-in);
+NW/SW/CW wings unlabelled (key covers EW — extending is mechanical: bubbles.mjs montage →
+make-key.mjs).
 
 ## 13. BUILD & DEPLOY WORKFLOW
 
