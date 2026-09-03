@@ -573,7 +573,19 @@ space in one look and merges as a pseudo-tile (corridors fragment badly tile-by-
 prompts now spell out that corridors are wall-to-wall floor with their printed tags and
 that doorway gaps never merge rooms; and the no-overlap rules got a hard principle — a
 NUMBERED reading only ever loses to its own number, so sloppy corridor polygons can't
-eat rooms. Bench after: 100% clean, 98.4% at ±1.5% jitter, corridors 5/8. The AI model
+eat rooms. Round 2 (same day, hollow walls + missing rooms): walls on professional sheets have
+WIDTH (two lines + cavity) — snapToWalls now seats every edge on the wall face NEAREST
+the room's interior (raw face scan; a narrow white run behind a line is the cavity, a
+wide one is the room), and the border-to-border rule checks for wall ink between two
+edges before closing a gap, so neighbouring fills stop draping over walls and
+overlapping. Shapes floating in blank space (a corridor polygon hallucinated into the
+courtyard) are dropped by a boundary-support test — unless they carry a printed number.
+And THE GAP FILL: after Max's rooms land, autoDetectRooms runs on the studio's own
+bubble-erased gray and every enclosed room nothing covers is added as an unnamed shape
+("N drawn from the plan's own lines — they need names"); oversized enclosures are
+skipped (a courtyard is enclosed too — no real room is >5% of the sheet). Bench after
+round 2: 100% clean, 98.4% at ±1.5% jitter, +31 gap-filled rooms on the benchmark
+sheet, corridors 5/8. The AI model
 moved to claude-fable-5-1 everywhere (reader, suggestions, proxy default — the proxy
 FUNCTION must be redeployed to pick that up; done on staging 2026-09-03).
 

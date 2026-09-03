@@ -3,7 +3,7 @@
 // on a dense sheet the sheet-sized default snap reach EQUALS a room pitch,
 // so a correctly placed AI box teleported onto the strong wall next door.
 import { describe, it, expect } from "vitest";
-import { grayFromPixels, snapReachFor, defaultSnapReach, labelBubbles, eraseBubbles, lineResp, autoDetectRooms, type Gray } from "./planSnap";
+import { grayFromPixels, snapReachFor, defaultSnapReach, labelBubbles, eraseBubbles, lineResp, autoDetectRooms, snapToWalls, alignEdgesToNeighbors, boundarySupport, type Gray } from "./planSnap";
 import { ingestAiSeeds, cleanSnapPts } from "./studioIngest";
 import { defaultRules } from "./rules";
 
@@ -133,5 +133,81 @@ describe("labelBubbles / eraseBubbles", () => {
   it("autoDetectRooms finds exactly the real room once bubbles are erased", () => {
     const clean = autoDetectRooms(bubbleScene());
     expect(clean.length).toBe(1); // the real room — no bubble fake, no severing
+  });
+});
+
+describe("hollow walls, floating shapes, gap fill (Josh's round-2 findings)", () => {
+  /** a hollow wall: two parallel lines with a cavity between (the scene is
+   *  sheet-sized so room areas stay realistic fractions of the image) */
+  function hollowScene(): Gray {
+    return makeGray(1600, 1200, (set) => {
+      // room A: x 100..300 — its right wall is HOLLOW: lines at 300 and 312
+      // room B: x 312..500
+      vwall(set, 100, 102, 100, 500, 0);
+      vwall(set, 300, 302, 100, 500, 0);
+      vwall(set, 310, 312, 100, 500, 0);
+      vwall(set, 500, 502, 100, 500, 0);
+      for (let x = 100; x <= 502; x++) {
+        for (const y of [100, 101, 102, 498, 499, 500]) set(x, y, 0);
+      }
+    });
+  }
+
+  it("snap seats the room edge on the INNER face of a hollow wall", () => {
+    const g = hollowScene();
+    // room A traced sloppily: its right edge lands past the FAR face (x=316)
+    const trace = [{ x: 110, y: 120 }, { x: 316, y: 120 }, { x: 316, y: 480 }, { x: 110, y: 480 }];
+    const snapped = snapToWalls(g, trace);
+    const maxX = Math.max(...snapped.map((p) => p.x));
+    // seats on room A's own face (~301), NOT the far face (~311+)
+    expect(maxX).toBeLessThan(307);
+    expect(maxX).toBeGreaterThan(295);
+  });
+
+  it("the border rule never closes a gap with a WALL inside it", () => {
+    const g = hollowScene();
+    // room A ends at 301, room B starts at 311 — a 10px hollow wall between
+    const roomB = [{ x: 311, y: 120 }, { x: 490, y: 120 }, { x: 490, y: 480 }, { x: 311, y: 480 }];
+    const roomA = [{ x: 105, y: 120 }, { x: 301, y: 120 }, { x: 301, y: 480 }, { x: 105, y: 480 }];
+    const aligned = alignEdgesToNeighbors(roomB, [roomA], 12, g);
+    const minX = Math.min(...aligned.map((p) => p.x));
+    expect(minX).toBeGreaterThan(308); // stayed on its own side of the wall
+  });
+
+  it("boundarySupport separates real rooms from floating shapes", () => {
+    const g = hollowScene();
+    const onWalls = [{ x: 102, y: 102 }, { x: 300, y: 102 }, { x: 300, y: 498 }, { x: 102, y: 498 }];
+    const floating = [{ x: 600, y: 150 }, { x: 750, y: 150 }, { x: 750, y: 400 }, { x: 600, y: 400 }];
+    expect(boundarySupport(g, onWalls)).toBeGreaterThan(0.6);
+    expect(boundarySupport(g, floating)).toBeLessThan(0.15);
+  });
+
+  it("an UNNUMBERED floating shape is dropped at ingest; a numbered one is kept", () => {
+    const g = hollowScene();
+    const floatPoly = [[600 / 1600, 150 / 1200], [750 / 1600, 150 / 1200], [750 / 1600, 400 / 1200], [600 / 1600, 400 / 1200]];
+    const unnamed = { name: "Corridor", roomNumber: "", roomType: "Corridor", polygon: floatPoly };
+    const named = { name: "2401", roomNumber: "2401", roomType: "Office", polygon: floatPoly };
+    const a = ingestAiSeeds([unnamed], [], g, 1600, 1200, defaultRules());
+    expect(a.shapes.length).toBe(0);
+    const b = ingestAiSeeds([named], [], g, 1600, 1200, defaultRules());
+    expect(b.shapes.length).toBe(1);
+  });
+
+  it("the gap fill draws the room the reader missed", () => {
+    const g = hollowScene();
+    // the reader only returned room A — room B exists on the plan
+    const seedA = {
+      name: "2401", roomNumber: "2401", roomType: "Office",
+      polygon: [[105 / 1600, 120 / 1200], [300 / 1600, 120 / 1200], [300 / 1600, 480 / 1200], [105 / 1600, 480 / 1200]]
+    };
+    const { shapes, gapFilled } = ingestAiSeeds([seedA], [], g, 1600, 1200, defaultRules(), { fillGaps: true });
+    expect(gapFilled).toBeGreaterThanOrEqual(1);
+    // one of the gap rooms sits where room B is (centre ~x 405)
+    const centres = shapes.filter((s) => !s.roomNumber).map((s) => {
+      let x = 0;
+      for (const p of s.pts) x += p.x;
+      return x / s.pts.length;
+    });
+    expect(centres.some((cx) => cx > 330 && cx < 490)).toBe(true);
   });
 });

@@ -9,7 +9,8 @@
 // teleports correctly-placed boxes onto the neighbour's walls.
 import {
   snapToWalls, alignEdgesToNeighbors, rectify, snapCollapsed, snapReachFor,
-  dropSpikes, shoelacePx, overlapRatio, type Gray, type XY
+  dropSpikes, shoelacePx, overlapRatio, boundarySupport, avgWidth,
+  autoDetectRooms, type Gray, type XY
 } from "./planSnap";
 import { typeIdFromLabelStrict, type Rules } from "./rules";
 
@@ -56,7 +57,15 @@ export function cleanSnapPts(
   const drawn = rectify(pts);
   const snapped = snapPx(pts);
   const walled = snapCollapsed(drawn, snapped) ? drawn : snapped;
-  const seated = alignEdgesToNeighbors(walled, others, 12);
+  // the border rule runs in GRAY space so it can see the walls: a gap with
+  // wall ink inside it is a real wall with WIDTH, never closed
+  const seated = gray
+    ? alignEdgesToNeighbors(
+      walled.map((q) => ({ x: q.x * graySc, y: q.y * graySc })),
+      others.map((poly) => poly.map((q) => ({ x: q.x * graySc, y: q.y * graySc }))),
+      12, gray
+    ).map((q) => ({ x: q.x / graySc, y: q.y / graySc }))
+    : alignEdgesToNeighbors(walled, others, 12);
   const clean = snapCollapsed(drawn, seated) ? walled : seated;
   // the snap's corner rebuild can fire a needle triangle out of a door gap
   const spiked = dropSpikes(clean);
@@ -80,8 +89,13 @@ export function ingestAiSeeds(
   gray: Gray | null,
   picW: number,
   picH: number,
-  rules: Rules
-): { shapes: IngestedShape[]; dropped: number } {
+  rules: Rules,
+  opts?: {
+    /** after the AI seeds land, find enclosed rooms nothing covers from the
+     *  plan's own lines and add them unnamed (the local detector) */
+    fillGaps?: boolean;
+  }
+): { shapes: IngestedShape[]; dropped: number; gapFilled: number } {
   const candidates = seeds
     .map((r) => ({ seed: r, pts: r.polygon.map((q) => ({ x: q[0] * picW, y: q[1] * picH })) }))
     .sort((a, b) => shoelacePx(b.pts) - shoelacePx(a.pts));
@@ -103,6 +117,13 @@ export function ingestAiSeeds(
       if (num && bn !== num) return false; // numbered dies only to its own number
       return overlapRatio(b.pts, pts) > OVERLAP_LIMIT;
     })) continue; // dupe — dropped
+    // a shape floating in blank space (no drawn walls under its boundary)
+    // is a hallucination — a printed number is evidence enough to keep, an
+    // unnumbered shape is not
+    if (!num && gray) {
+      const gPts = pts.map((q) => ({ x: q.x * (gray.w / picW), y: q.y * (gray.w / picW) }));
+      if (boundarySupport(gray, gPts) < 0.3) continue;
+    }
     shapes.push({
       pts,
       roomNumber: c.seed.roomNumber, roomName: c.seed.name,
@@ -115,5 +136,48 @@ export function ingestAiSeeds(
       source: "ai"
     });
   }
-  return { shapes, dropped: seeds.length - shapes.length };
+  const dropped = seeds.length - shapes.length;
+
+  // ── the gap fill: rooms the reader missed, from the plan's own lines ──────
+  let gapFilled = 0;
+  if (opts?.fillGaps && gray) {
+    const toPic = picW / gray.w;
+    for (const poly of detectGapRooms(gray)) {
+      const pts = poly.map((q) => ({ x: q.x * toPic, y: q.y * toPic }));
+      const blockers = [...existing.map((b) => b.pts), ...shapes.map((s) => s.pts)];
+      if (blockers.some((b) => overlapRatio(b, pts) > 0.3)) continue; // already drawn
+      shapes.push({
+        pts: dropSpikes(pts),
+        roomNumber: "", roomName: "", roomType: "",
+        floorType: "", fixtureCount: 0, department: "",
+        knownSqFt: null, source: "ai"
+      });
+      gapFilled++;
+    }
+  }
+  return { shapes, dropped, gapFilled };
+}
+
+/**
+ * Enclosed rooms straight from the plan's own lines (bubble-erased,
+ * door/window gaps sealed), as candidates for the gap fill. Pure over the
+ * gray; polygons come back in GRAY pixels.
+ */
+export function detectGapRooms(gray: Gray): XY[][] {
+  const minDim = Math.min(gray.w, gray.h);
+  const sheet = gray.w * gray.h;
+  return autoDetectRooms(gray, {
+    keepBubbles: true, // the studio's gray is already label-erased
+    maxSide: 1400,
+    dilate: 3,
+    minAreaFrac: 0.0004
+  }).filter((poly) => {
+    const area = shoelacePx(poly);
+    // a COURTYARD is enclosed too — by the building's outer walls. No real
+    // room approaches that size (the biggest auditorium is ~2-3% of the
+    // sheet), so oversized enclosures are open air, not floor.
+    return avgWidth(poly) >= Math.max(6, minDim * 0.005) &&
+      area >= minDim * minDim * 0.0004 &&
+      area <= sheet * 0.05;
+  });
 }
