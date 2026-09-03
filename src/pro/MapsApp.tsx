@@ -1138,9 +1138,13 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
       hoursStart: s.hoursStart,
       hoursEnd: s.hoursEnd,
       windows: bs?.windows ?? [],
-      assignments: members.map((sp) =>
-        [String(sp.roomNumber ?? ""), String(sp.roomName ?? "").trim() || String(sp.roomType ?? "")]
-          .filter(Boolean).join(" — "))
+      assignments: members.map((sp) => {
+        const num = String(sp.roomNumber ?? "").trim();
+        const name = String(sp.roomName ?? "").trim();
+        // a name that just repeats the number says nothing — show the type
+        const what = (name && name !== num) ? name : String(sp.roomType ?? "").trim();
+        return [num, what].filter(Boolean).join(" — ");
+      })
     };
   };
   const exportClient = (s: ClassicSchedule, members: ClassicSpace[]) => {
