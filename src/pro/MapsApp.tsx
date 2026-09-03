@@ -19,6 +19,7 @@ import {
 import { ExportApp } from "./ExportApp";
 import { CalibrationEditorHome } from "./PlanStudio";
 import { sectionDirty, saveSection, type ScopeSection } from "./scopeDraft";
+import { downloadClientSchedule } from "./clientSchedule";
 import { fetchAccountRole, canEditFormula, type AccountRole } from "./accountRole";
 import { cloudConfigured } from "./cloudConfig";
 import { PrintSchedule } from "./PrintSchedule";
@@ -1121,6 +1122,24 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
   const usedColors = schedules.map((s) => String(s.color ?? ""));
   const nextColor = SCHED_COLORS.find((c) => !usedColors.includes(c)) ?? SCHED_COLORS[0];
 
+  // the Client Schedule Export: the client's own Excel template, filled from
+  // this schedule (clientSchedule.ts owns the "no deviation" mechanics)
+  const exportClient = (s: ClassicSchedule, members: ClassicSpace[]) => {
+    const bs = (rules.breakSchedules ?? []).find((b) => b.id === s.breakScheduleId);
+    const orgName = String(((data.v7.settings ?? {}) as Record<string, unknown>).orgName ?? "").trim();
+    downloadClientSchedule({
+      scheduleName: [s.num, s.name].filter(Boolean).join(" · "),
+      orgName: orgName || "OpsMatrix",
+      days: s.days,
+      hoursStart: s.hoursStart,
+      hoursEnd: s.hoursEnd,
+      windows: bs?.windows ?? [],
+      assignments: members.map((sp) =>
+        [String(sp.roomNumber ?? ""), String(sp.roomName ?? "").trim() || String(sp.roomType ?? "")]
+          .filter(Boolean).join(" — "))
+    }).catch((e) => alert("The client schedule export hit a snag: " + (e as Error).message));
+  };
+
   return (
     <div className="pro-list">
       <div className="prule add big">
@@ -1164,6 +1183,8 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
               <HoursBar minutes={mins} />
               <span className="schedacts">
                 <button className="pbtn small primary" onClick={() => onPrint(s.id)}>🖨 Print schedule</button>
+                <button className="pbtn small" title="Fill the client's Excel template with this schedule"
+                  onClick={() => exportClient(s, members)}>⬇ Client schedule export</button>
                 {s.floorCareId ? (
                   <a className="pbtn small" href={"./maps.html#floorcare?fc=" + s.floorCareId}>Edit in Floor Care</a>
                 ) : s.sanitationId ? (
@@ -1181,6 +1202,7 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
               </span>
             </div>
             <BreakRow sched={s} rules={rules} commit={commit} />
+            <ClientRow sched={s} rules={rules} commit={commit} />
             <div className="schedrooms">
               {members.length > 1 && (
                 <p className="pnote" style={{ margin: "0 0 4px" }}>
@@ -1498,6 +1520,57 @@ function BreakRow({ sched, rules, commit }: {
           </small>
         </div>
       )}
+    </div>
+  );
+}
+
+const DAYS_UI = [
+  ["S", "Sunday"], ["M", "Monday"], ["T", "Tuesday"], ["W", "Wednesday"],
+  ["T", "Thursday"], ["F", "Friday"], ["S", "Saturday"]
+] as const;
+
+/**
+ * Day bubbles + shift hours + the Scope break schedule this crew follows —
+ * the three things the Client Schedule Export prints in the template's
+ * header (Days: / Hours: / Break: / Lunch:). Josh, 2026-09-03.
+ */
+function ClientRow({ sched, rules, commit }: {
+  sched: ClassicSchedule;
+  rules: Rules;
+  commit: (mut: (d: ClassicData) => void) => void;
+}) {
+  const patch = (mut: (t: ClassicSchedule) => void) => commit((d) => {
+    const t = (d.v7.schedules ?? []).find((x) => x.id === sched.id);
+    if (t) mut(t);
+  });
+  const days = sched.days ?? [];
+  return (
+    <div className="clientrow">
+      <span className="daypills">
+        {DAYS_UI.map(([letter, full], i) => (
+          <button key={full} className={"daypill" + (days.includes(i) ? " on" : "")}
+            aria-label={full} title={full}
+            onClick={() => patch((t) => {
+              const cur = new Set(t.days ?? []);
+              if (cur.has(i)) cur.delete(i); else cur.add(i);
+              t.days = [...cur].sort((a, b) => a - b);
+            })}>{letter}</button>
+        ))}
+      </span>
+      <label className="clienthours">hours
+        <input type="time" value={String(sched.hoursStart ?? "")}
+          onChange={(e) => patch((t) => { t.hoursStart = e.target.value || undefined; })} />
+        –
+        <input type="time" value={String(sched.hoursEnd ?? "")}
+          onChange={(e) => patch((t) => { t.hoursEnd = e.target.value || undefined; })} />
+      </label>
+      <label className="clientbreaks">break schedule
+        <select value={String(sched.breakScheduleId ?? "")}
+          onChange={(e) => patch((t) => { t.breakScheduleId = e.target.value || undefined; })}>
+          <option value="">— pick one (set up in Scope) —</option>
+          {(rules.breakSchedules ?? []).map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+        </select>
+      </label>
     </div>
   );
 }
@@ -1838,6 +1911,51 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
           }));
           setNewBreak({ label: "", start: "", minutes: "15" });
         }}>Add break</button>
+      </div>
+
+      <h3>Break schedules</h3>
+      {(draft.breakSchedules ?? []).map((bs) => (
+        <div key={bs.id} className="prule bsched">
+          <input className="bsname" value={bs.label}
+            onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.label = e.target.value; })} />
+          {bs.windows.map((w, wi) => (
+            <span key={wi} className="bswin">
+              <select value={w.kind}
+                onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.windows[wi].kind = e.target.value as "break" | "lunch"; })}>
+                <option value="break">Break</option><option value="lunch">Lunch</option>
+              </select>
+              <input type="time" value={w.start}
+                onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.windows[wi].start = e.target.value; })} />
+              <input type="number" min={5} value={w.minutes} style={{ width: 60 }}
+                onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.windows[wi].minutes = Number(e.target.value) || 0; })} /> min
+              <button className="plink" onClick={() => set((r) => {
+                const t = r.breakSchedules.find((x) => x.id === bs.id)!;
+                t.windows = t.windows.filter((_, j) => j !== wi);
+              })}>✕</button>
+            </span>
+          ))}
+          <button className="pbtn small" onClick={() => set((r) => {
+            r.breakSchedules.find((x) => x.id === bs.id)!.windows.push({ kind: "break", start: "14:00", minutes: 15 });
+          })}>+ Break</button>
+          <button className="pbtn small" onClick={() => set((r) => {
+            r.breakSchedules.find((x) => x.id === bs.id)!.windows.push({ kind: "lunch", start: "12:00", minutes: 30 });
+          })}>+ Lunch</button>
+          <button className="pbtn small danger" onClick={() => set((r) => {
+            r.breakSchedules = r.breakSchedules.filter((x) => x.id !== bs.id);
+          })}>✕</button>
+        </div>
+      ))}
+      <div className="prule add">
+        <button className="pbtn small primary" onClick={() => set((r) => {
+          const letter = String.fromCharCode(65 + ((r.breakSchedules ?? []).length % 26));
+          r.breakSchedules = [...(r.breakSchedules ?? []), {
+            id: uid("bs"), label: `Break Schedule ${letter}`,
+            windows: [
+              { kind: "break", start: "09:00", minutes: 15 },
+              { kind: "lunch", start: "11:15", minutes: 45 }
+            ]
+          }];
+        })}>Add break schedule</button>
       </div>
       <SectionSave sec="breaks" />
 

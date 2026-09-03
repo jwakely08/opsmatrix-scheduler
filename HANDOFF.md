@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-09-01 latest (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-09-03 latest (§12r: PRODUCTION LIVE at opsmatrix.pages.dev; corridor-sliver snap guard; baked neon maps for iOS parity; CLIENT SCHEDULE EXPORT — the client's xlsx template value-patched byte-faithfully, Scope break schedules + per-schedule day pills/hours/break picker). Earlier 2026-09-01 (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -455,6 +455,40 @@ Lives ONLY in Max Space → Map View (🚙 Rover Mode button, shown when a plan 
   right before it, or a short tag (number/letter) right after it, stays in the name;
   spoken twice, first = type, second = name (unchanged); bare mention = type only.
   21 parser tests.
+
+## 12r. POST-LAUNCH FIXES + CLIENT SCHEDULE EXPORT (2026-09-02/03)
+
+- **Production is LIVE**: PR #32 merged staging→main 2026-09-01, gated deploy approved,
+  https://opsmatrix.pages.dev. (Demo mishap logged: proxy 403 = origin not in
+  ALLOWED_ORIGINS — the per-deploy `<hash>.opsmatrix.pages.dev` links are deliberately
+  rejected; demo only from the canonical URL.)
+- **Corridor sliver fix** (`planSnap.snapCollapsed`, PR #33): in a corridor both traced
+  edges could snap onto the same strong wall and collapse the box. Rule: a snap may
+  refine a trace, never destroy it — a stage that shrinks the drawn shape below 30%
+  area (or crushes a bbox dimension below 25%) is rejected; `PlanStudio.cleanSnap`
+  guards wall-snap and neighbour-seating independently.
+- **Baked neon maps** (`neonMap.ts`, PR #34): iOS Safari silently drops the CSS
+  filter+blend on SVG `<image>`, washing phone maps white. The matrix is now baked
+  once per plan into cyan-on-transparent pixels (`neonizePixels` + 4-way halo), used
+  by MapCanvas + Plan Studio (`.planneon`); live-filter `.planimg` remains only as the
+  moment-of-load fallback. Label cutoff adapts (24px on <700px canvases); editor
+  strokes/pins thickened. Stored plans stay light blueprints; printing untouched.
+- **CLIENT SCHEDULE EXPORT** (Josh's client template, "exactly replicated, no
+  deviation"): the client's own xlsx ships pre-extracted under
+  `public/templates/client-schedule/`; `clientSchedule.ts` patches ONLY cell values
+  (styles/borders/logo/7-Step panel/reminders pass through byte-identical) and
+  `xlsxZip.ts` re-packs a stored zip. Header from the schedule: B2 name, B3 day
+  bubbles, B4 hours, B5/B6 + timeline rows from the picked BREAK SCHEDULE; E2 org
+  name; ritual rows re-time (start/start+10, end−10/−5/end); times print on anchor
+  rows only (client's style); 20 assignment slots, overflow → identical page 2.
+  New Scope → "Break schedules" (rules.breakSchedules: named A/B/C plans of
+  break/lunch windows, per-section save with the flat breaks). Schedule cards gained
+  ClientRow (Mon–Sun day pills, hours, break-schedule picker → ClassicSchedule.days/
+  hoursStart/hoursEnd/breakScheduleId) + "⬇ Client schedule export" button.
+  Verified: 331 unit tests; node build from real parts validated via openpyxl
+  (values, styles, both pages) + Playwright click-the-button download re-validated.
+  Rule for future template uploads: the AI reads the template and decides which
+  OpsMatrix data fits which cells; client boilerplate stays untouched.
 
 ## 13. BUILD & DEPLOY WORKFLOW
 
