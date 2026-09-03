@@ -493,6 +493,57 @@ export function deleteSpace(data: ClassicData, spaceId: string) {
 }
 
 /**
+ * What deleting a building would take with it — shown in the are-you-sure
+ * prompt BEFORE anything happens. A building owns its floor plans (matched
+ * by name) and every room filed under the name OR drawn on one of those
+ * plans.
+ */
+export function buildingFootprint(data: ClassicData, building: string): { plans: number; rooms: number } {
+  const match = (v: unknown) => String(v ?? "").trim() === building;
+  const planIds = new Set((data.plans ?? []).filter((p) => match(p.building)).map((p) => String(p.id)));
+  const rooms = (data.v7.spaces ?? [])
+    .filter((sp) => match(sp.building) || planIds.has(String(sp.visualPlanId ?? ""))).length;
+  return { plans: planIds.size, rooms };
+}
+
+/**
+ * Delete a WHOLE building (Josh, 2026-09-03: the ✕ on Explorer's building
+ * tiles): its floor plans, every room on them or filed under the name, and
+ * every reference — schedules must never point at ghost rooms, so
+ * spaceOrder, roomTasks, route stop minutes and non-space room links are
+ * all scrubbed. The building's saved picture goes too.
+ */
+export function deleteBuilding(data: ClassicData, building: string) {
+  const match = (v: unknown) => String(v ?? "").trim() === building;
+  const planIds = new Set((data.plans ?? []).filter((p) => match(p.building)).map((p) => String(p.id)));
+  const gone = new Set((data.v7.spaces ?? [])
+    .filter((sp) => match(sp.building) || planIds.has(String(sp.visualPlanId ?? "")))
+    .map((sp) => sp.id));
+  data.v7.spaces = (data.v7.spaces ?? []).filter((sp) => !gone.has(sp.id));
+  data.plans = (data.plans ?? []).filter((p) => !planIds.has(String(p.id)));
+  for (const sched of data.v7.schedules ?? []) {
+    if (sched.spaceOrder) sched.spaceOrder = sched.spaceOrder.filter((id) => !gone.has(id));
+    if (sched.roomTasks) {
+      for (const id of Object.keys(sched.roomTasks)) if (gone.has(id)) delete sched.roomTasks[id];
+    }
+    const stops = sched.routeStopMinutes as Record<string, number> | undefined;
+    if (stops && typeof stops === "object") {
+      for (const id of Object.keys(stops)) if (gone.has(id)) delete stops[id];
+    }
+  }
+  for (const t of data.nonSpace) {
+    t.roomIds = (t.roomIds ?? []).filter((id) => !gone.has(id));
+  }
+  const settings = (data.v7.settings ?? {}) as { buildingArt?: Record<string, string> };
+  if (settings.buildingArt && building in settings.buildingArt) {
+    const map = { ...settings.buildingArt };
+    delete map[building];
+    settings.buildingArt = map;
+    data.v7.settings = settings;
+  }
+}
+
+/**
  * Copy a room's DATA — number gets a "-copy" suffix so it is findable and
  * obviously needs renaming. The copy never inherits geometry (two rooms on
  * the same outline would be un-clickable) or any schedule assignment.

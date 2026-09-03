@@ -8,9 +8,11 @@
 import React, { useMemo, useRef, useState } from "react";
 import {
   syncSpaceMinutes, spaceIncomplete, spacePriority, deleteSpace, duplicateSpace,
+  deleteBuilding, buildingFootprint,
   FLOOR_TYPES, PRIORITIES, PRIORITY_NUM, PRIORITY_WORD,
   type ClassicData, type ClassicSpace, type Priority
 } from "./classicStore";
+import { loadRoutes, saveRoutes } from "./routes";
 import {
   BUILDING_PRESETS, buildingArtMap, buildingArtUrl, setBuildingArt, fileToBuildingArt
 } from "./buildingArt";
@@ -466,6 +468,30 @@ export function SpaceExplorerView({ data, rules, commit, onEdit }: {
     setQ("");
   };
 
+  // the ✕ on a building tile (Josh, 2026-09-03): the whole building goes —
+  // plans, rooms, schedule references, routes — behind a two-step are-you-sure
+  const askDeleteBuilding = (name: string, label: string) => {
+    const fp = buildingFootprint(data, name);
+    const what = `${fp.plans} floor plan${fp.plans === 1 ? "" : "s"} and ${fp.rooms} room${fp.rooms === 1 ? "" : "s"}`;
+    if (!confirm(`Are you sure you want to delete ${label}?\n\nThat removes ${what}, and takes every one of those rooms off every schedule and route.`)) return;
+    if (!confirm(`Last check — really delete ${label}?\n\nThis cannot be undone.`)) return;
+    commit((d) => {
+      deleteBuilding(d, name);
+      // saveClassic never writes plans (they're heavyweight) — the flows
+      // that change them persist the key themselves, same as Plan Studio
+      try { localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans)); } catch { /* quota */ }
+    });
+    // sanitation/policing rounds built for this building point at its plans —
+    // they go with it (their shipped schedules were already scrubbed above)
+    const store = loadRoutes();
+    saveRoutes({
+      ...store,
+      sanitation: store.sanitation.filter((r) => r.building !== name),
+      policing: store.policing.filter((r) => r.building !== name)
+    });
+    setPath({ building: null, floor: null, dept: null });
+  };
+
   const crumb = [
     { label: "All buildings", at: { building: null, floor: null, dept: null } },
     ...(path.building !== null ? [{ label: path.building || "(no building)", at: { building: path.building, floor: null, dept: null } }] : []),
@@ -516,6 +542,9 @@ export function SpaceExplorerView({ data, rules, commit, onEdit }: {
                   <div className="bldgimg" style={{ backgroundImage: `url(${buildingArtUrl(t.name, art)})` }}>
                     <button className="bldgart" aria-label="Change this building's picture"
                       onClick={(e) => { e.stopPropagation(); setArtFor(t.name); }}>🖼 Picture</button>
+                    <button className="bldgdel" aria-label={`Delete ${t.label}`}
+                      title={`Delete ${t.label} — asks first`}
+                      onClick={(e) => { e.stopPropagation(); askDeleteBuilding(t.name, t.label); }}>✕</button>
                   </div>
                   <div className="bldgbody">
                     <b>{t.label}</b>
