@@ -20,7 +20,7 @@ function slice(r: Rules, section: ScopeSection): unknown {
     };
     case "tasks": return r.tasks.map(({ autoFor: _a, ...rest }) => rest);
     case "nonSpace": return { defs: r.nonSpaceDefs, quals: r.nonSpaceQualifiers ?? [] };
-    case "breaks": return r.breaks ?? [];
+    case "breaks": return { breaks: r.breaks ?? [], schedules: r.breakSchedules ?? [] };
   }
 }
 
@@ -60,6 +60,7 @@ export function saveSection(saved: Rules, draft: Rules, section: ScopeSection): 
       break;
     case "breaks":
       next.breaks = clone(draft.breaks ?? []);
+      next.breakSchedules = clone(draft.breakSchedules ?? []);
       break;
   }
   return next;

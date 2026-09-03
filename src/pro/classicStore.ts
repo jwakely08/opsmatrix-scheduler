@@ -67,6 +67,14 @@ export interface ClassicSchedule {
   spaceOrder?: string[];
   roomTasks?: Record<string, string[]>;
   projectNoteId?: string;
+  // the Client Schedule Export's header lines (Josh, 2026-09-03)
+  /** day-of-week bubbles, 0=Sunday … 6=Saturday */
+  days?: number[];
+  /** shift hours, 24h "HH:MM" */
+  hoursStart?: string;
+  hoursEnd?: string;
+  /** which Scope break schedule (rules.breakSchedules) this schedule follows */
+  breakScheduleId?: string;
   [k: string]: unknown;
 }
 

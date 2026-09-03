@@ -82,6 +82,25 @@ export interface BreakRule {
   builtIn?: boolean;
 }
 
+/**
+ * Named break plans for the Client Schedule Export (Josh, 2026-09-03):
+ * "Break Schedule A, B, C…", each carrying its own 15-minute break(s) and
+ * lunch. Managed in Scope's Breaks section; a schedule in Max Schedules
+ * PICKS one by id, and the export writes its times into the client's
+ * template. Times are 24h "HH:MM".
+ */
+export interface BreakWindow {
+  kind: "break" | "lunch";
+  start: string;
+  minutes: number;
+}
+
+export interface BreakSchedule {
+  id: string;
+  label: string;
+  windows: BreakWindow[];
+}
+
 export interface Rules {
   version: number;
   general: {
@@ -113,6 +132,7 @@ export interface Rules {
   nonSpaceDefs: NonSpaceDef[];
   nonSpaceQualifiers: NonSpaceQualifier[];
   breaks: BreakRule[];
+  breakSchedules: BreakSchedule[];
 }
 
 export const FREQUENCIES = [
@@ -185,6 +205,16 @@ export function defaultRules(): Rules {
       { id: "break-am", label: "Morning Break", minutes: 15, start: "9:30 AM", builtIn: true },
       { id: "lunch", label: "Lunch", minutes: 30, start: "12:30 PM", builtIn: true },
       { id: "break-pm", label: "Afternoon Break", minutes: 15, start: "2:00 PM", builtIn: true }
+    ],
+    // one starter so the picker never opens empty; delete it and it stays gone
+    breakSchedules: [
+      {
+        id: "bs-a", label: "Break Schedule A",
+        windows: [
+          { kind: "break", start: "09:00", minutes: 15 },
+          { kind: "lunch", start: "11:15", minutes: 45 }
+        ]
+      }
     ]
   };
 }
@@ -213,7 +243,10 @@ export function loadRules(): Rules {
       nonSpaceDefs: def.nonSpaceDefs,
       nonSpaceQualifiers: Array.isArray(parsed.nonSpaceQualifiers) ? parsed.nonSpaceQualifiers : def.nonSpaceQualifiers,
       // an account that predates break setup keeps the standard ones
-      breaks: Array.isArray(parsed.breaks) ? parsed.breaks : def.breaks
+      breaks: Array.isArray(parsed.breaks) ? parsed.breaks : def.breaks,
+      // a saved EMPTY list means the account deleted them all — only a
+      // missing field (pre-feature account) gets the starter
+      breakSchedules: Array.isArray(parsed.breakSchedules) ? parsed.breakSchedules : def.breakSchedules
     };
     rules.nonSpaceDefs = Array.isArray(parsed.nonSpaceDefs) ? parsed.nonSpaceDefs : def.nonSpaceDefs;
     // Sanitation Route retired 2026-08-31: the Max Sanitation engine builds
