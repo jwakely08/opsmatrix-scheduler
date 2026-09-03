@@ -87,25 +87,67 @@ const esc = (s: string) => s
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;");
 
+const refParts = (ref: string): { row: number; colIdx: number } => {
+  const m = /^([A-Z]+)(\d+)$/.exec(ref);
+  if (!m) throw new Error(`bad cell reference ${ref}`);
+  let idx = 0;
+  for (const ch of m[1]) idx = idx * 26 + (ch.charCodeAt(0) - 64);
+  return { row: Number(m[2]), colIdx: idx };
+};
+
 /**
  * Replace a cell's VALUE, keeping its style index — the whole "no deviation"
- * guarantee rests on never touching anything but the value. Throws when a
- * target cell isn't in the sheet: a silent miss would ship a page that still
- * shows the sample hospital's data.
+ * guarantee rests on never touching anything but the value. Sheets store
+ * blank cells sparsely (an empty unstyled cell has no XML at all), so a
+ * missing target cell — or its whole row — is INSERTED in column/row order;
+ * it inherits the column's default look, which for a blank cell IS the look.
  */
 export function patchSheetXml(xml: string, patches: CellPatch[]): string {
   let out = xml;
   for (const p of patches) {
     const re = new RegExp(`<c r="${p.ref}"([^>]*?)(?:/>|>[\\s\\S]*?</c>)`);
     const m = re.exec(out);
-    if (!m) throw new Error(`template cell ${p.ref} not found`);
-    const sM = /\ss="\d+"/.exec(m[1]);
+    const sM = m ? /\ss="\d+"/.exec(m[1]) : null;
     const sAttr = sM ? sM[0] : "";
     let cell: string;
     if (p.clear) cell = `<c r="${p.ref}"${sAttr}/>`;
     else if (p.serial !== undefined) cell = `<c r="${p.ref}"${sAttr}><v>${p.serial}</v></c>`;
     else cell = `<c r="${p.ref}"${sAttr} t="inlineStr"><is><t xml:space="preserve">${esc(p.text ?? "")}</t></is></c>`;
-    out = out.slice(0, m.index) + cell + out.slice(m.index + m[0].length);
+    if (m) {
+      out = out.slice(0, m.index) + cell + out.slice(m.index + m[0].length);
+      continue;
+    }
+    if (p.clear) continue; // clearing a cell that doesn't exist is already done
+    const { row, colIdx } = refParts(p.ref);
+    const rowRe = new RegExp(`<row r="${row}"([^>]*?)(/>|>)`);
+    const rm = rowRe.exec(out);
+    if (rm) {
+      if (rm[2] === "/>") {
+        // an empty self-closing row opens up to hold the cell
+        out = out.slice(0, rm.index) + `<row r="${row}"${rm[1]}>${cell}</row>` +
+          out.slice(rm.index + rm[0].length);
+      } else {
+        // insert before the first existing cell to the RIGHT of ours
+        const rowEnd = out.indexOf("</row>", rm.index);
+        const body = out.slice(rm.index + rm[0].length, rowEnd);
+        const cells = [...body.matchAll(/<c r="([A-Z]+\d+)"/g)];
+        const next = cells.find((c) => refParts(c[1]).colIdx > colIdx);
+        const at = rm.index + rm[0].length + (next ? next.index! : body.length);
+        out = out.slice(0, at) + cell + out.slice(at);
+      }
+    } else {
+      // whole row missing: create it before the first row below ours
+      const rows = [...out.matchAll(/<row r="(\d+)"/g)];
+      const next = rows.find((r) => Number(r[1]) > row);
+      const rowXml = `<row r="${row}">${cell}</row>`;
+      if (next) {
+        out = out.slice(0, next.index!) + rowXml + out.slice(next.index!);
+      } else {
+        const at = out.indexOf("</sheetData>");
+        if (at < 0) throw new Error("template sheet has no sheetData");
+        out = out.slice(0, at) + rowXml + out.slice(at);
+      }
+    }
   }
   return out;
 }

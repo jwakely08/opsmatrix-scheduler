@@ -19,7 +19,9 @@ import {
 import { ExportApp } from "./ExportApp";
 import { CalibrationEditorHome } from "./PlanStudio";
 import { sectionDirty, saveSection, type ScopeSection } from "./scopeDraft";
-import { downloadClientSchedule } from "./clientSchedule";
+import { downloadClientSchedule, type ClientExportInput } from "./clientSchedule";
+import { downloadTemplateExport } from "./templateExport";
+import { loadTemplates, b64ToBytes, type ClientTemplate } from "./templateStore";
 import { fetchAccountRole, canEditFormula, type AccountRole } from "./accountRole";
 import { cloudConfigured } from "./cloudConfig";
 import { PrintSchedule } from "./PrintSchedule";
@@ -528,7 +530,7 @@ export function MapsApp() {
         )}
 
         {tab === "exporting" && (
-          <ExportApp data={data} rules={rules} />
+          <ExportApp data={data} rules={rules} commit={commit} />
         )}
 
         {tab === "floorcare" && (
@@ -1122,12 +1124,14 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
   const usedColors = schedules.map((s) => String(s.color ?? ""));
   const nextColor = SCHED_COLORS.find((c) => !usedColors.includes(c)) ?? SCHED_COLORS[0];
 
-  // the Client Schedule Export: the client's own Excel template, filled from
-  // this schedule (clientSchedule.ts owns the "no deviation" mechanics)
-  const exportClient = (s: ClassicSchedule, members: ClassicSpace[]) => {
+  // Client template exports: every named template uploaded in Admin
+  // Settings → Exporting is a button here; with none saved, the bundled
+  // client template stands in (clientSchedule.ts owns the mechanics)
+  const templates = loadTemplates(data);
+  const exportInput = (s: ClassicSchedule, members: ClassicSpace[]): ClientExportInput => {
     const bs = (rules.breakSchedules ?? []).find((b) => b.id === s.breakScheduleId);
     const orgName = String(((data.v7.settings ?? {}) as Record<string, unknown>).orgName ?? "").trim();
-    downloadClientSchedule({
+    return {
       scheduleName: [s.num, s.name].filter(Boolean).join(" · "),
       orgName: orgName || "OpsMatrix",
       days: s.days,
@@ -1137,7 +1141,21 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
       assignments: members.map((sp) =>
         [String(sp.roomNumber ?? ""), String(sp.roomName ?? "").trim() || String(sp.roomType ?? "")]
           .filter(Boolean).join(" — "))
-    }).catch((e) => alert("The client schedule export hit a snag: " + (e as Error).message));
+    };
+  };
+  const exportClient = (s: ClassicSchedule, members: ClassicSpace[]) => {
+    downloadClientSchedule(exportInput(s, members))
+      .catch((e) => alert("The client schedule export hit a snag: " + (e as Error).message));
+  };
+  const exportViaTemplate = (t: ClientTemplate, s: ClassicSchedule, members: ClassicSpace[]) => {
+    downloadTemplateExport(b64ToBytes(t.dataB64), t.map, exportInput(s, members), t.label)
+      .then((leftOver) => {
+        if (leftOver.length) {
+          alert(`"${t.label}" holds ${t.map.assignmentCells.length} assignment rows — these didn't fit:\n` +
+            leftOver.join("\n"));
+        }
+      })
+      .catch((e) => alert(`The "${t.label}" export hit a snag: ` + (e as Error).message));
   };
 
   return (
@@ -1183,8 +1201,14 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
               <HoursBar minutes={mins} />
               <span className="schedacts">
                 <button className="pbtn small primary" onClick={() => onPrint(s.id)}>🖨 Print schedule</button>
-                <button className="pbtn small" title="Fill the client's Excel template with this schedule"
-                  onClick={() => exportClient(s, members)}>⬇ Client schedule export</button>
+                {templates.length ? templates.map((t) => (
+                  <button key={t.id} className="pbtn small"
+                    title={`Fill the "${t.label}" template with this schedule`}
+                    onClick={() => exportViaTemplate(t, s, members)}>⬇ {t.label}</button>
+                )) : (
+                  <button className="pbtn small" title="Fill the client's Excel template with this schedule"
+                    onClick={() => exportClient(s, members)}>⬇ Client schedule export</button>
+                )}
                 {s.floorCareId ? (
                   <a className="pbtn small" href={"./maps.html#floorcare?fc=" + s.floorCareId}>Edit in Floor Care</a>
                 ) : s.sanitationId ? (

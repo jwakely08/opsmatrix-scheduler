@@ -489,6 +489,18 @@ Lives ONLY in Max Space → Map View (🚙 Rover Mode button, shown when a plan 
   (values, styles, both pages) + Playwright click-the-button download re-validated.
   Rule for future template uploads: the AI reads the template and decides which
   OpsMatrix data fits which cells; client boilerplate stays untouched.
+- **TEMPLATE MANAGER** (same day): Admin Settings → Exporting → "Schedule
+  templates" — upload any client's sheet (.xlsx or .pdf), name it, and the name
+  becomes an export button on every schedule card. `.xlsx`: stored byte-untouched
+  (settings.clientTemplates, base64 ≤512KB); Max maps the cells IN-APP via the
+  claude-proxy (`templateRead.ts`: sheet inventory → structured-output TemplateMap).
+  `.pdf`: no workbook to preserve, so Max reads the page (pdf.js render) and
+  RECREATES it as Excel (`sheetBuild.ts` spec→styled xlsx) — UI says to eyeball it
+  once. Generic engine `templateExport.ts` patches any workbook by map (sparse
+  cells/rows now inserted by `patchSheetXml`), page-2 clone on single-sheet
+  workbooks, `xlsxZip.readZip` (stored + DecompressionStream inflate). With no
+  templates saved, the bundled Akron button stands in. 340 tests; Playwright drove
+  upload → named button → download (AI stubbed), openpyxl-validated.
 
 ## 13. BUILD & DEPLOY WORKFLOW
 

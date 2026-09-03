@@ -71,8 +71,24 @@ describe("patchSheetXml — values change, styles never do", () => {
     expect(out).toContain("T3 &amp; &lt;ground&gt;");
   });
 
-  it("refuses to miss silently", () => {
-    expect(() => patchSheetXml(XML, [{ ref: "Z99", text: "x" }])).toThrow(/Z99/);
+  it("a sparse cell is inserted into its row in column order", () => {
+    const sparse = `<sheetData><row r="5"><c r="A5" s="1"/><c r="D5" s="2"/></row></sheetData>`;
+    const out = patchSheetXml(sparse, [{ ref: "B5", text: "hi" }]);
+    expect(out.indexOf(`r="A5"`)).toBeLessThan(out.indexOf(`r="B5"`));
+    expect(out.indexOf(`r="B5"`)).toBeLessThan(out.indexOf(`r="D5"`));
+  });
+
+  it("a missing row is created in row order", () => {
+    const sparse = `<sheetData><row r="3"><c r="A3" s="1"/></row><row r="9"><c r="A9" s="1"/></row></sheetData>`;
+    const out = patchSheetXml(sparse, [{ ref: "B6", text: "between" }]);
+    expect(out.indexOf(`<row r="3"`)).toBeLessThan(out.indexOf(`<row r="6"`));
+    expect(out.indexOf(`<row r="6"`)).toBeLessThan(out.indexOf(`<row r="9"`));
+    expect(out).toContain(`<c r="B6" t="inlineStr">`);
+  });
+
+  it("clearing a cell that never existed is a no-op", () => {
+    const sparse = `<sheetData><row r="3"><c r="A3" s="1"/></row></sheetData>`;
+    expect(patchSheetXml(sparse, [{ ref: "B3", clear: true }])).toBe(sparse);
   });
 });
 
