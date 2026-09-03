@@ -487,6 +487,13 @@ Lives ONLY in Max Space → Map View (🚙 Rover Mode button, shown when a plan 
   hoursStart/hoursEnd/breakScheduleId) + "⬇ Client schedule export" button.
   Verified: 331 unit tests; node build from real parts validated via openpyxl
   (values, styles, both pages) + Playwright click-the-button download re-validated.
+- **Delete a whole building** (2026-09-03): the ✕ on Explorer's building tiles —
+  two confirms (footprint counts, then "cannot be undone"), then
+  `classicStore.deleteBuilding`: plans, rooms (by name OR plan linkage), schedule
+  spaceOrder/roomTasks/routeStopMinutes, non-space links, buildingArt entry, and the
+  building's sanitation/policing rounds in the routes store. NOTE the gotcha it
+  surfaced: saveClassic never writes `opsmatrix_v7_plans` — any flow that changes
+  d.plans must persist that key itself inside its commit (Plan Studio idiom).
   Rule for future template uploads: the AI reads the template and decides which
   OpsMatrix data fits which cells; client boilerplate stays untouched.
 - **TEMPLATE MANAGER** (same day): Admin Settings → Exporting → "Schedule

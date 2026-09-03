@@ -1395,3 +1395,14 @@ body {
 .bsched { flex-wrap: wrap; }
 .bsched .bsname { font-weight: 700; min-width: 170px; }
 .bswin { display: inline-flex; align-items: center; gap: 5px; }
+
+/* the delete-building ✕ on Explorer's building tiles (Josh, 2026-09-03) */
+.bldgdel {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  width: 28px; height: 28px; padding: 0; border-radius: 50%;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  background: rgba(15, 23, 42, 0.78);
+  color: #f87171; font-size: 14px; font-weight: 700; cursor: pointer;
+  line-height: 1;
+}
+.bldgdel:hover { background: rgba(127, 29, 29, 0.85); color: #ffffff; box-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }

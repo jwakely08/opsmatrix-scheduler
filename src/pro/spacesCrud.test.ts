@@ -1,7 +1,9 @@
 // Room List actions: delete removes the room EVERYWHERE it is referenced;
 // duplicate copies the data but never the geometry or the schedule.
 import { describe, it, expect } from "vitest";
-import { deleteSpace, duplicateSpace, type ClassicData } from "./classicStore";
+import {
+  deleteSpace, duplicateSpace, deleteBuilding, buildingFootprint, type ClassicData
+} from "./classicStore";
 
 function fixture(): ClassicData {
   return {
@@ -56,5 +58,75 @@ describe("duplicateSpace", () => {
     const d = fixture();
     expect(duplicateSpace(d, "ghost")).toBeNull();
     expect((d.v7.spaces ?? []).length).toBe(2);
+  });
+});
+
+// the ✕ on Explorer's building tiles: everything the building owns goes,
+// and nothing else even flinches
+function twoBuildingFixture(): ClassicData {
+  return {
+    v7: {
+      spaces: [
+        // filed under A by name
+        { id: "a1", roomNumber: "101", building: "A", squareFeet: 100 },
+        // NOT filed under A, but drawn on A's plan — still A's room
+        { id: "a2", roomNumber: "102", building: "", visualPlanId: "planA", squareFeet: 50 },
+        { id: "b1", roomNumber: "201", building: "B", visualPlanId: "planB", squareFeet: 80 }
+      ],
+      schedules: [
+        {
+          id: "s1", name: "Mixed", spaceOrder: ["a1", "a2", "b1"],
+          roomTasks: { a1: ["general-cleaning"], b1: [] },
+          routeStopMinutes: { a2: 3, b1: 4 }
+        }
+      ],
+      settings: { buildingArt: { A: "preset:1", B: "preset:2" } }
+    },
+    plans: [
+      { id: "planA", building: "A" },
+      { id: "planB", building: "B" }
+    ] as ClassicData["plans"],
+    nonSpace: [{ id: "n1", name: "Discharges", hours: 2, scheduleId: "s1", roomIds: ["a1", "b1"] }]
+  };
+}
+
+describe("buildingFootprint", () => {
+  it("counts the plans and rooms the delete prompt warns about", () => {
+    expect(buildingFootprint(twoBuildingFixture(), "A")).toEqual({ plans: 1, rooms: 2 });
+    expect(buildingFootprint(twoBuildingFixture(), "B")).toEqual({ plans: 1, rooms: 1 });
+  });
+});
+
+describe("deleteBuilding", () => {
+  it("removes the building's plans and rooms — by name AND by plan", () => {
+    const d = twoBuildingFixture();
+    deleteBuilding(d, "A");
+    expect((d.v7.spaces ?? []).map((s) => s.id)).toEqual(["b1"]);
+    expect(d.plans.map((p) => p.id)).toEqual(["planB"]);
+  });
+
+  it("scrubs every schedule and task reference", () => {
+    const d = twoBuildingFixture();
+    deleteBuilding(d, "A");
+    const s = d.v7.schedules![0];
+    expect(s.spaceOrder).toEqual(["b1"]);
+    expect(s.roomTasks).not.toHaveProperty("a1");
+    expect(s.roomTasks).toHaveProperty("b1");
+    expect(s.routeStopMinutes).toEqual({ b1: 4 });
+    expect(d.nonSpace[0].roomIds).toEqual(["b1"]);
+  });
+
+  it("drops the building's saved picture, keeps the neighbour's", () => {
+    const d = twoBuildingFixture();
+    deleteBuilding(d, "A");
+    const art = (d.v7.settings as { buildingArt?: Record<string, string> }).buildingArt!;
+    expect(art).not.toHaveProperty("A");
+    expect(art.B).toBe("preset:2");
+  });
+
+  it("the other building is untouched end to end", () => {
+    const d = twoBuildingFixture();
+    deleteBuilding(d, "A");
+    expect(buildingFootprint(d, "B")).toEqual({ plans: 1, rooms: 1 });
   });
 });
