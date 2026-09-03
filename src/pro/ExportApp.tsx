@@ -5,15 +5,128 @@
 //   🔁 a re-import file that ⬆ Import accepts back losslessly.
 // Rows are built by exportData.ts (pure, round-trip proven by test); this
 // component only drives the pickers and hands rows to the vendored SheetJS.
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   scopeSpaces, scopeLabel, exportFilename,
   reimportRows, dataExportRows,
   type ExportScope, type Cell
 } from "./exportData";
 import { loadSheetJs } from "./sheetFile";
-import type { ClassicData, ClassicSpace } from "./classicStore";
+import { loadApiKey, type ClassicData, type ClassicSpace } from "./classicStore";
 import type { Rules } from "./rules";
+import { aiProxy } from "./aiTransport";
+import { planFileToImage, isPdf } from "./planFile";
+import { mapXlsxTemplate, recreatePdfTemplate } from "./templateRead";
+import {
+  loadTemplates, writeTemplates, bytesToB64, TEMPLATE_MAX_BYTES,
+  type ClientTemplate, type TemplateMap
+} from "./templateStore";
+
+const uid = (p: string) => p + "-" + Math.random().toString(36).slice(2, 9);
+
+/** plain words for what Max found, so the manager can sanity-check the read */
+function mapSummary(map: TemplateMap): string {
+  const found = [
+    map.positionCell && "position", map.orgCell && "facility name", map.daysCell && "days",
+    map.hoursCell && "hours", map.breakCell && "break", map.lunchCell && "lunch"
+  ].filter(Boolean).join(", ");
+  return `${map.assignmentCells.length} assignment rows${found ? " · " + found : ""}`;
+}
+
+/**
+ * Schedule templates (Josh, 2026-09-03): upload a client's sheet (Excel or
+ * PDF), Max reads which cells take OpsMatrix data, name it — and the name
+ * becomes an export button on every schedule card in Max Schedules.
+ */
+function TemplatesSection({ data, commit }: {
+  data: ClassicData;
+  commit: (mut: (d: ClassicData) => void) => void;
+}) {
+  const templates = loadTemplates(data);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState("");
+
+  async function readUpload(file: File) {
+    setNote("");
+    const label = name.trim() || file.name.replace(/\.(xlsx|pdf)$/i, "");
+    try {
+      const key = loadApiKey();
+      const proxy = await aiProxy();
+      if (!key && !proxy) {
+        setNote("⚠ Max needs to read the template — sign in, or save an API key under Admin Settings → Max AI.");
+        return;
+      }
+      let bytes: Uint8Array;
+      let map: TemplateMap;
+      let source: ClientTemplate["source"];
+      if (isPdf(file)) {
+        source = "pdf";
+        setBusy("Max is reading the PDF and recreating it as an Excel sheet…");
+        const pic = await planFileToImage(file);
+        const out = await recreatePdfTemplate(pic.dataUrl, { apiKey: key, proxy });
+        bytes = out.bytes; map = out.map;
+      } else {
+        source = "xlsx";
+        if (file.size > TEMPLATE_MAX_BYTES) {
+          setNote("⚠ That file is over 500 KB — schedule templates are small; export a lighter copy and try again.");
+          return;
+        }
+        setBusy("Max is reading the template…");
+        bytes = new Uint8Array(await file.arrayBuffer());
+        map = await mapXlsxTemplate(bytes, { apiKey: key, proxy });
+      }
+      const tpl: ClientTemplate = {
+        id: uid("tpl"), label, source, dataB64: bytesToB64(bytes), map,
+        createdAt: new Date().toISOString()
+      };
+      commit((d) => writeTemplates(d, [...loadTemplates(d), tpl]));
+      setName("");
+      setNote(`✓ "${label}" saved — Max found ${mapSummary(map)}. It's now an export button on every schedule in Max Schedules.` +
+        (source === "pdf" ? " It was recreated from a PDF — export one schedule and open it to check the layout once." : ""));
+    } catch (e) {
+      setNote("⚠ " + String((e as Error)?.message ?? e));
+    } finally {
+      setBusy("");
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  return (
+    <>
+      <h3>Schedule templates</h3>
+      <p className="pnote">
+        Upload a client's schedule sheet — Excel or PDF. Max reads where the position, days,
+        hours, break, lunch and assignment rows live; everything else on the sheet stays
+        exactly as the client made it. Each template becomes its own export button on the
+        schedules in Max Schedules.
+      </p>
+      {templates.map((t) => (
+        <div key={t.id} className="prule">
+          <input value={t.label} style={{ minWidth: 200, fontWeight: 700 }}
+            onChange={(e) => commit((d) => writeTemplates(d,
+              loadTemplates(d).map((x) => x.id === t.id ? { ...x, label: e.target.value } : x)))} />
+          <span>{t.source === "pdf" ? "recreated from PDF" : "client's Excel file"} · {mapSummary(t.map)}</span>
+          <button className="pbtn small danger" onClick={() => {
+            if (!confirm(`Remove the "${t.label}" template? Schedules lose its export button.`)) return;
+            commit((d) => writeTemplates(d, loadTemplates(d).filter((x) => x.id !== t.id)));
+          }}>✕</button>
+        </div>
+      ))}
+      <div className="prule add">
+        <input placeholder="Template name (becomes the export button)" value={name}
+          onChange={(e) => setName(e.target.value)} />
+        <input ref={fileRef} type="file" accept=".xlsx,.pdf" style={{ display: "none" }}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) void readUpload(f); }} />
+        <button className="pbtn small primary" disabled={!!busy}
+          onClick={() => fileRef.current?.click()}>⬆ Upload template</button>
+        {busy && <em>{busy}</em>}
+      </div>
+      {note && <p className={note.startsWith("⚠") ? "warntext" : "pnote keysaved"}>{note}</p>}
+    </>
+  );
+}
 
 const txt = (v: unknown) => String(v ?? "").trim();
 
@@ -26,7 +139,11 @@ function fitColumns(rows: Cell[][]): { wch: number }[] {
   return w.map((wch) => ({ wch }));
 }
 
-export function ExportApp({ data, rules }: { data: ClassicData; rules: Rules }) {
+export function ExportApp({ data, rules, commit }: {
+  data: ClassicData;
+  rules: Rules;
+  commit: (mut: (d: ClassicData) => void) => void;
+}) {
   const spaces = data.v7.spaces ?? [];
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
@@ -134,6 +251,8 @@ export function ExportApp({ data, rules }: { data: ClassicData; rules: Rules }) 
         Scope wherever the file is imported. For a full same-device backup (plans, schedules,
         floor care and all), use Scope → Data backup.
       </p>
+
+      <TemplatesSection data={data} commit={commit} />
     </div>
   );
 }
