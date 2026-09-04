@@ -5,6 +5,7 @@ import { AuthProvider } from "./auth/AuthContext";
 import { LS_KEY } from "./storage/localAdapter";
 import { buildDemoState, demoStamp } from "./lib/demo";
 import "./styles.css";
+import "./motion.css"; // the motion system — must load after styles.css to win the cascade
 
 // Visiting ?demo=1 seeds the sample building (built from the bundled scan).
 // A STALE demo — data that was itself demo-seeded, by any earlier build —

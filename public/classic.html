@@ -43360,6 +43360,11 @@ ReactDOM.createRoot(document.getElementById('app-root')).render(/*#__PURE__*/Rea
 })();
 
 </script>
+
+<style>
+/* FUSION motion: presses have weight (injected at build) */
+button:not(:disabled):active, .cursor-pointer:active { scale: .96; }
+</style>
 </body>
 </html>
 

@@ -599,7 +599,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
                 const c = centroid(pts);
                 const sq = sqftOf(s);
                 return (
-                  <g key={s.id}>
+                  <g key={s.id} className={"studio-shape" + (on ? " on" : "")}>
                     <polygon points={pts.map((p) => `${p.x},${p.y}`).join(" ")}
                       fill={col} fillOpacity={phase === "details" ? (on ? 0.32 : 0.10) : on ? 0.4 : 0.24}
                       stroke={on ? "#ffffff" : col} strokeWidth={(on ? 4.5 : 3) / view.k}
