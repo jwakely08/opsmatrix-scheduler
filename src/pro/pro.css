@@ -529,6 +529,14 @@ body {
   background: rgba(15,23,42,.92); color: #e2e8f0; border: 1px solid rgba(148,163,184,.25);
 }
 .pro-zoomctl button:active { background: #0d9488; }
+/* the 3D showcase toggle rides with the zoom stack */
+.pro-zoomctl .map3dbtn { font-size: 13px; font-weight: 700; letter-spacing: .04em; }
+.pro-zoomctl .map3dbtn.on {
+  background: #0d9488; border-color: rgba(45,212,191,.6); color: #fff;
+  box-shadow: 0 0 16px rgba(45,212,191,.35);
+}
+.pro-map3d { cursor: grab; }
+.pro-map3d:active { cursor: grabbing; }
 
 /* ── iPhone / small phones ── */
 @media (max-width: 640px) {

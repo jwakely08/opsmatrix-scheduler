@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-09-04 latest (§12t: THE MOTION SYSTEM — app-wide tactile press/hover physics: spring-rebound presses via the independent `scale` property, delayed room hover bloom, settling panels; `src/motion.css` loaded after each app's stylesheet, press-depth-only injection for classic which keeps its own om-ease language). Earlier 2026-09-03 (§12s: DENSE-SHEET ROOM DETECTION — label-bubble suppression, door/window gap sealing, tiled high-res AI reading with cross-tile merge, scale-aware snap; ≥92% measured on the Franciscan Lafayette benchmark via the new bench/ harness). Same-day earlier (§12r: PRODUCTION LIVE at opsmatrix.pages.dev; corridor-sliver snap guard; baked neon maps for iOS parity; CLIENT SCHEDULE EXPORT — the client's xlsx template value-patched byte-faithfully, Scope break schedules + per-schedule day pills/hours/break picker). Earlier 2026-09-01 (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-09-04 latest (§12u: THE 3D SHOWCASE VIEW — orthographic extruded matrix on every map page with a spin-and-settle load animation; iso3d.ts pure projection + Map3D.tsx canvas renderer, 3D/2D toggle in the zoom stack, taps stay exact via affine unprojection. Same-day earlier §12t: THE MOTION SYSTEM — app-wide tactile press/hover physics: spring-rebound presses via the independent `scale` property, delayed room hover bloom, settling panels; `src/motion.css` loaded after each app's stylesheet, press-depth-only injection for classic which keeps its own om-ease language). Earlier 2026-09-03 (§12s: DENSE-SHEET ROOM DETECTION — label-bubble suppression, door/window gap sealing, tiled high-res AI reading with cross-tile merge, scale-aware snap; ≥92% measured on the Franciscan Lafayette benchmark via the new bench/ harness). Same-day earlier (§12r: PRODUCTION LIVE at opsmatrix.pages.dev; corridor-sliver snap guard; baked neon maps for iOS parity; CLIENT SCHEDULE EXPORT — the client's xlsx template value-patched byte-faithfully, Scope break schedules + per-schedule day pills/hours/break picker). Earlier 2026-09-01 (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -639,6 +639,56 @@ Verified live via Playwright computed styles: spring transition + pressed
 scale 0.96 on `.pbtn`/`.btn`, 50ms-in/0ms-out delay on `.proom`, classic
 press riding om-ease. 376 tests green, tsc clean, classic boots with no
 page errors.
+
+## 12u. THE 3D SHOWCASE VIEW + SPIN-AND-SETTLE (2026-09-04)
+
+Step 2 of the "$30M feel" initiative (step 1 = §12t motion system; step 3 =
+rolling every screen onto the design system). Josh's spec: the matrix should
+read like his futuristic mockups — tilted, extruded, "more of a cube look" —
+but it must stay TRUE to the detected rooms (his explicit worry: AI-video
+generation invents artifacts), plus a spin-around-and-settle animation every
+time a floor plan loads.
+
+**`src/pro/iso3d.ts`** — the projection, pure math (18 unit tests):
+- ORTHOGRAPHIC axonometric: spin around plan center, tilt back
+  (REST_TILT≈55°, REST_SPIN≈-10°), z straight up. Orthographic ⇒ the
+  ground-plane mapping is ONE affine matrix (`isoGroundMatrix` →
+  ctx.transform lays the baked neon plan down as the floor), parallel
+  lines stay parallel, and `isoUnproject` is exact — a tap on a roof
+  resolves to the same plan coords the 2D map uses. No perspective warp,
+  nothing invented.
+- `extrudeRoom`: every polygon edge → a wall quad, lit by edge direction
+  (fake key light from screen-left), walls sorted far-to-near; painter's
+  order across rooms by centroid depth (`drawOrder`). Works because rooms
+  are disjoint and share one height.
+- `introPose(t)`: the load animation path — comes in flat, pulled back and
+  ~110° over-rotated, sweeps around (easeOutCubic) and lands on the rest
+  pose with a breath of overshoot (easeOutBack). INTRO_MS=1700.
+
+**`src/pro/Map3D.tsx`** — the canvas renderer (canvas, not SVG: the intro
+animates every face every frame; 200 rooms × ~7 faces would choke React
+reconciliation). Self-contained gestures copied from MapCanvas (tap slop,
+pinch, drag pan, wheel zoom). Scene state in refs; repaints ON DEMAND —
+rAF runs only during the intro and the hover/press lerps. Hover blooms the
+block taller over ~180ms (the motion system, canvas edition), press sinks
+it, the selected room stands 1.45× tall with a white glowing outline.
+Labels billboard upright on the roofs, gated by projected roof width, and
+hidden until the intro is 75% settled. `prefers-reduced-motion` skips the
+intro. Dim rooms (the #33404d "not in this schedule" slate) render low
+(0.35× height) and faint. overlayFor renders as a translucent coat (NOT
+the 2D stripes — v1 simplification). 220-room stress bench: 1.8ms/frame.
+
+**`MapCanvas.tsx`**: `view3d` state persisted in sessionStorage
+(`om_map_3d`) so the choice sticks across every map page; the 3D/2D toggle
+rides the zoom stack (`.map3dbtn`); zoom/fit buttons route to the Map3D
+imperative api ref when 3D is on. All map surfaces get it: Max Schedules,
+Max Space Map View, Floor Care / Sanitation / Policing pickers — same
+fillFor/flagFor/marker/onCanvas contracts in both views (a Sanitation dock
+tap unprojects at z=0).
+
+Verified in the browser: intro sweeps and settles, hover cursor + bloom,
+click opens the room sidebar, 2D↔3D round-trip clean, no page errors.
+394 tests green. Follow-ups: two-tone stripes in 3D; maybe drag-to-rotate.
 
 ## 13. BUILD & DEPLOY WORKFLOW
 

@@ -6,8 +6,18 @@ import React, { useEffect, useRef, useState } from "react";
 import { boundsOf, pointIn, type ClassicData, type ClassicPlan, type ClassicSpace } from "./classicStore";
 import { buildingArtUrl } from "./buildingArt";
 import { neonPlanUrl } from "./neonMap";
+import { Map3D, type Map3DApi } from "./Map3D";
 
 const WALL_STROKE = 13;
+
+/** the 3D showcase toggle sticks for the session, across every map page */
+export const MAP_3D_KEY = "om_map_3d";
+function load3d(): boolean {
+  try { return sessionStorage.getItem(MAP_3D_KEY) === "1"; } catch { return false; }
+}
+function save3d(on: boolean) {
+  try { sessionStorage.setItem(MAP_3D_KEY, on ? "1" : "0"); } catch { /* storage off */ }
+}
 
 // ── building-first hierarchy (Josh, 2026-08-31): every map view selects the
 // BUILDING first, then that building's floor plans — and the chosen building
@@ -107,6 +117,10 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
+  // the 3D showcase view (Josh, 2026-09-04): same data, same colors, same
+  // taps — the rooms just stand up
+  const [view3d, setView3d] = useState(load3d);
+  const map3dApi = useRef<Map3DApi | null>(null);
   // the matrix image is BAKED (neonMap.ts) — live CSS filter+blend washed out
   // on iOS Safari; until the bake lands we show the plain plan, not a broken one
   const [neon, setNeon] = useState<string | null>(null);
@@ -206,6 +220,12 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
 
   return (
     <div className="pro-mapwrap">
+      {view3d ? (
+        <Map3D plan={plan} spaces={spaces} shapes={shapes} fillFor={fillFor}
+          overlayFor={overlayFor} flagFor={flagFor} selectedId={selectedId}
+          onRoom={onRoom} onCanvas={onCanvas} marker={marker}
+          groundSrc={neon ?? plan.img} api={map3dApi} />
+      ) : (
       <svg ref={svgRef} className="pro-map"
         onPointerDown={(e) => {
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -316,6 +336,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
           })}
         </g>
       </svg>
+      )}
       {plans.length > 1 && (
         <div className="floorstack">
           {[...plans].reverse().map((p) => (
@@ -330,9 +351,12 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
       {legend}
       {/* touch-friendly zoom controls — pinch works too, but thumbs deserve buttons */}
       <div className="pro-zoomctl">
-        <button aria-label="Zoom in" onClick={() => zoomCenter(1.35)}>＋</button>
-        <button aria-label="Zoom out" onClick={() => zoomCenter(1 / 1.35)}>－</button>
+        <button aria-label="Zoom in"
+          onClick={() => view3d ? map3dApi.current?.zoom(1.35) : zoomCenter(1.35)}>＋</button>
+        <button aria-label="Zoom out"
+          onClick={() => view3d ? map3dApi.current?.zoom(1 / 1.35) : zoomCenter(1 / 1.35)}>－</button>
         <button aria-label="Fit plan" onClick={() => {
+          if (view3d) { map3dApi.current?.fit(); return; }
           const svg = svgRef.current;
           if (!svg) return;
           userDrove.current = false;
@@ -340,6 +364,11 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
           const k = Math.min(w / plan.w, h / plan.h) * 0.94;
           setView({ k, tx: (w - plan.w * k) / 2, ty: (h - plan.h * k) / 2 });
         }}>⤢</button>
+        <button aria-label={view3d ? "Flat view" : "3D view"}
+          className={"map3dbtn" + (view3d ? " on" : "")}
+          onClick={() => setView3d((v) => { save3d(!v); return !v; })}>
+          {view3d ? "2D" : "3D"}
+        </button>
       </div>
     </div>
   );
