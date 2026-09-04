@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-09-03 latest (§12s: DENSE-SHEET ROOM DETECTION — label-bubble suppression, door/window gap sealing, tiled high-res AI reading with cross-tile merge, scale-aware snap; ≥92% measured on the Franciscan Lafayette benchmark via the new bench/ harness). Same-day earlier (§12r: PRODUCTION LIVE at opsmatrix.pages.dev; corridor-sliver snap guard; baked neon maps for iOS parity; CLIENT SCHEDULE EXPORT — the client's xlsx template value-patched byte-faithfully, Scope break schedules + per-schedule day pills/hours/break picker). Earlier 2026-09-01 (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-09-04 latest (§12t: THE MOTION SYSTEM — app-wide tactile press/hover physics: spring-rebound presses via the independent `scale` property, delayed room hover bloom, settling panels; `src/motion.css` loaded after each app's stylesheet, press-depth-only injection for classic which keeps its own om-ease language). Earlier 2026-09-03 (§12s: DENSE-SHEET ROOM DETECTION — label-bubble suppression, door/window gap sealing, tiled high-res AI reading with cross-tile merge, scale-aware snap; ≥92% measured on the Franciscan Lafayette benchmark via the new bench/ harness). Same-day earlier (§12r: PRODUCTION LIVE at opsmatrix.pages.dev; corridor-sliver snap guard; baked neon maps for iOS parity; CLIENT SCHEDULE EXPORT — the client's xlsx template value-patched byte-faithfully, Scope break schedules + per-schedule day pills/hours/break picker). Earlier 2026-09-01 (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -596,6 +596,49 @@ reads them fine — the harness documents them in extra-readings.json); staging 
 against the real model is the next step (the harness's reader is a conservative stand-in);
 NW/SW/CW wings unlabelled (key covers EW — extending is mechanical: bubbles.mjs montage →
 make-key.mjs).
+
+## 12t. THE MOTION SYSTEM — TACTILE PRESS/HOVER PHYSICS (2026-09-04)
+
+Josh's "$30M feel" initiative, step 1 of 3 (next: the 3D showcase view with a
+spin-and-settle load animation; then rolling every screen onto the system).
+The spec in his words: clicks should feel like pushing a real button with
+pushback; room hovers should bloom slightly and a beat late, never snap;
+treat it like a video game where feel matters.
+
+**`src/motion.css`** — one motion law for both React apps, imported AFTER
+`styles.css` / `pro.css` in each entry so it wins the cascade at equal
+specificity:
+- Tokens: `--m-press` 70ms (contact), `--m-glide` 200ms (color/glow),
+  `--m-bloom` 260ms + `--m-bloom-delay` 50ms (room hovers), `--m-settle`
+  320ms with `--m-spring: cubic-bezier(.34,1.56,.64,1)` (overshoot ~6% and
+  settle back = the rebound).
+- Press physics use the independent **`scale` property** (not `transform`)
+  so they COMPOSE with the theme layers' translateY hover lifts: base state
+  carries the slow spring transition (that animates the release), `:active`
+  swaps in the fast 70ms press to `scale .96` (tiles/cards `.985`).
+- Room bloom asymmetry: the `:hover` state carries `transition-delay`
+  (transition props come from the DESTINATION state), so hovering blooms
+  50ms late but un-hovering releases instantly — sweeping the cursor across
+  a dense map never strobes.
+- Calibration Editor shapes got a `.studio-shape` class on their `<g>`
+  (PlanStudio.tsx) — hover bloom/press are scoped to `.tool-select` only so
+  nothing wobbles under the reshape pins; the pins themselves swell 1.3x on
+  hover. Panels/modals/toasts settle on the spring instead of appearing.
+- `prefers-reduced-motion` kills all of it.
+
+**classic.html**: the archive has its OWN deliberate motion language
+(`--om-ease` with `!important`-forced .18s durations on button/a/select/
+input) — do NOT fight it. make-classic.cjs injects only press DEPTH
+(`button:active, .cursor-pointer:active { scale: .96 }`) at the END of body
+(the archive's styles out-cascade a head injection), and the archive's own
+curve animates it. Declaring transitions there would override the archive's
+per-element transition lists and kill its hover motion — learned the hard
+way, don't repeat it.
+
+Verified live via Playwright computed styles: spring transition + pressed
+scale 0.96 on `.pbtn`/`.btn`, 50ms-in/0ms-out delay on `.proom`, classic
+press riding om-ease. 376 tests green, tsc clean, classic boots with no
+page errors.
 
 ## 13. BUILD & DEPLOY WORKFLOW
 
