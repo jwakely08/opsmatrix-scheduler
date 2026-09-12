@@ -163,3 +163,39 @@ describe("one mention serves both fields (Josh, 2026-09-01)", () => {
     expect(draft.roomName).toBe("Dr Smith's Clinic");
   });
 });
+
+// ── department (Josh, 2026-09-13): spoken once, applied to the room; the
+// sticky carry-across-rooms behavior lives in RoverMode, the PARSE is here ──
+describe("department", () => {
+  it("labeled department fills the field, Title Cased", () => {
+    const { draft } = parse("department environmental services");
+    expect(draft.department).toBe("Environmental Services");
+    expect(draft.roomName).toBeUndefined();
+  });
+
+  it("a department with digits never donates them to the room number", () => {
+    const { draft } = parse("department 4 east room number 102");
+    expect(draft.department).toBe("4 East");
+    expect(draft.roomNumber).toBe("102");
+  });
+
+  it("rides along in a full utterance and survives a trailing confirm", () => {
+    const { draft, command } = parse("102 office carpet zero fixtures department imaging confirm");
+    expect(draft.roomNumber).toBe("102");
+    expect(draft.roomType).toBe("Office");
+    expect(draft.department).toBe("Imaging");
+    expect(command).toBe("confirm");
+  });
+
+  it("department before the other fields leaves them intact", () => {
+    const { draft } = parse("department med surg room type patient room room number 214");
+    expect(draft.department).toBe("Med Surg");
+    expect(draft.roomType).toBe("Patient Room");
+    expect(draft.roomNumber).toBe("214");
+  });
+
+  it("mergeDraft keeps the last spoken department", () => {
+    expect(mergeDraft({ department: "Imaging" }, { department: "Surgery" }).department).toBe("Surgery");
+    expect(mergeDraft({ department: "Imaging" }, {}).department).toBe("Imaging");
+  });
+});

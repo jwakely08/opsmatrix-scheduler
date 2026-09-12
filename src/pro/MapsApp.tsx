@@ -497,6 +497,7 @@ export function MapsApp() {
           <SpaceSidebar
             key={roomSelected.id}
             space={roomSelected} rules={rules}
+            deptOptions={[...new Set(spaces.map((s) => String(s.department ?? "").trim()).filter(Boolean))].sort()}
             onClose={() => setRoomSel(null)}
             onOpenEditor={() => openEditor(roomSelected)}
             onChange={(patch) => commit((d) => {
@@ -1004,9 +1005,11 @@ function AddToScheduleBlock({ space, rules, schedules, cov, req, commit, addOpen
 
 // ── Spaces tab sidebar: the room's OWN details + required tasks ─────────────
 
-function SpaceSidebar({ space, rules, onClose, onChange, onOpenEditor }: {
+function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEditor }: {
   space: ClassicSpace;
   rules: Rules;
+  /** every department the account already uses — typing a new one creates it */
+  deptOptions: string[];
   onClose: () => void;
   onChange: (patch: Partial<ClassicSpace>) => void;
   onOpenEditor: () => void;
@@ -1074,6 +1077,17 @@ function SpaceSidebar({ space, rules, onClose, onChange, onOpenEditor }: {
           onChange={(e) => onChange({ cleanability: e.target.checked ? "Cleanable" : "Non-cleanable" })} />
         <span>Cleanable — counts toward EVS workload</span>
       </label>
+
+      <div className="prow">
+        <label className="pfield">Department
+          <input list="side-depts" value={String(space.department ?? "")}
+            placeholder="pick one, or type a new one"
+            onChange={(e) => onChange({ department: e.target.value })} />
+          <datalist id="side-depts">
+            {deptOptions.map((d) => <option key={d} value={d} />)}
+          </datalist>
+        </label>
+      </div>
 
       <div className="prow">
         <label className="pfield">Fixtures
