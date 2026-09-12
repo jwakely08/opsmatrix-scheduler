@@ -701,8 +701,9 @@ function UploadHub({ commit, rules, autoPlan }: {
               <button className="pbtn ghost" onClick={() => setChooser(false)}>✕</button></div>
             <p className="pnote">Pick what you have — OpsMatrix knows what to do with each.</p>
             <button className="upltile" onClick={() => { setChooser(false); setPlanOpen(true); }}>
-              <b>🗺 Floor plan — picture or PDF</b>
-              <span>Max reads the rooms, numbers and sizes, then redraws the plan in OpsMatrix's own style.</span>
+              <b>🗺 Floor plan — picture, PDF or CAD (DXF)</b>
+              <span>Max reads the rooms, numbers and sizes, then redraws the plan in OpsMatrix's own style.
+                A CAD file with room data comes in exact — nothing guessed.</span>
             </button>
             <button className="upltile" onClick={() => { setChooser(false); rlRef.current?.click(); }}>
               <b>📊 Room list — Excel, CSV or raw data</b>

@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-09-05 latest (§12v: STEP 3 OF THE "$30M FEEL" — whole-hub consistency: dark-scheme native controls (selects/checkboxes/time inputs on the input glass everywhere) + the staggered `arrive` entrance on every card family, driven by a full screenshot survey of every hub screen). Earlier 2026-09-04 (§12u: THE 3D SHOWCASE VIEW — orthographic extruded matrix on every map page with a spin-and-settle load animation; iso3d.ts pure projection + Map3D.tsx canvas renderer, 3D/2D toggle in the zoom stack, taps stay exact via affine unprojection. Same-day earlier §12t: THE MOTION SYSTEM — app-wide tactile press/hover physics: spring-rebound presses via the independent `scale` property, delayed room hover bloom, settling panels; `src/motion.css` loaded after each app's stylesheet, press-depth-only injection for classic which keeps its own om-ease language). Earlier 2026-09-03 (§12s: DENSE-SHEET ROOM DETECTION — label-bubble suppression, door/window gap sealing, tiled high-res AI reading with cross-tile merge, scale-aware snap; ≥92% measured on the Franciscan Lafayette benchmark via the new bench/ harness). Same-day earlier (§12r: PRODUCTION LIVE at opsmatrix.pages.dev; corridor-sliver snap guard; baked neon maps for iOS parity; CLIENT SCHEDULE EXPORT — the client's xlsx template value-patched byte-faithfully, Scope break schedules + per-schedule day pills/hours/break picker). Earlier 2026-09-01 (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-09-12 latest (§12w: THE STRUCTURED CAD IMPORTER — a facilities-managed DXF is TRANSCRIBED, not detected: closed space polylines + block-attribute room tags become exact rooms with numbers, names, Scope types and true square footage; proven end-to-end on a real 859-room hospital DWG→DXF in 2.2s with zero AI calls). Earlier 2026-09-05 (§12v: STEP 3 OF THE "$30M FEEL" — whole-hub consistency: dark-scheme native controls (selects/checkboxes/time inputs on the input glass everywhere) + the staggered `arrive` entrance on every card family, driven by a full screenshot survey of every hub screen). Earlier 2026-09-04 (§12u: THE 3D SHOWCASE VIEW — orthographic extruded matrix on every map page with a spin-and-settle load animation; iso3d.ts pure projection + Map3D.tsx canvas renderer, 3D/2D toggle in the zoom stack, taps stay exact via affine unprojection. Same-day earlier §12t: THE MOTION SYSTEM — app-wide tactile press/hover physics: spring-rebound presses via the independent `scale` property, delayed room hover bloom, settling panels; `src/motion.css` loaded after each app's stylesheet, press-depth-only injection for classic which keeps its own om-ease language). Earlier 2026-09-03 (§12s: DENSE-SHEET ROOM DETECTION — label-bubble suppression, door/window gap sealing, tiled high-res AI reading with cross-tile merge, scale-aware snap; ≥92% measured on the Franciscan Lafayette benchmark via the new bench/ harness). Same-day earlier (§12r: PRODUCTION LIVE at opsmatrix.pages.dev; corridor-sliver snap guard; baked neon maps for iOS parity; CLIENT SCHEDULE EXPORT — the client's xlsx template value-patched byte-faithfully, Scope break schedules + per-schedule day pills/hours/break picker). Earlier 2026-09-01 (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -726,6 +726,50 @@ Dashboard/Floor Plans pages looked dim in mid-transition screenshots;
 that's the archive's own routeIn/fadeUp animation settling (verified
 bright after settle) — archive-owned, untouched. 394 tests green;
 build:classic not needed (pro.css only).
+
+## 12w. THE STRUCTURED CAD IMPORTER (2026-09-12)
+
+A client handed Josh a whole hospital first floor as DWG (FV-01, AC1032).
+Inventory (via the GPL libredwg WASM in the dev sandbox — a DEV TOOL only,
+never shipped): a facilities-managed file with 859 closed space polylines
+on SP-PLINE and 858 block-attribute tags (Room Number / Room Usage), every
+tag matching a boundary. Files like that don't need detection — they get
+TRANSCRIBED.
+
+**`src/pro/cadImport.ts`** (pure, 15 tests): a string-aware DXF entity
+reader (LWPOLYLINE/POLYLINE closed polys, TEXT/MTEXT with inline-format
+cleanup, INSERT+ATTRIB tag capture, $INSUNITS) + the room builder:
+- candidates = closed polylines with room-plausible areas; units from the
+  header, or guessed so the median room lands in a believable sq-ft band.
+- matching runs TWICE: pass 1 lets strong tags claim the smallest
+  containing candidate and VOTE for the space layer; pass 2 rematches
+  preferring that layer. Without pass 2 a tag over a desk claims the desk
+  outline — FV-01 lost 44 rooms to exactly that.
+- free TEXT is fallback-only (grid bubbles live there); untagged polys
+  survive only on the winning layer (real unlabeled spaces, not furniture).
+- `cadUsageToScopeLabel`: the CAD abbreviation dictionary (PAT. RM.→Patient
+  Room, TLT→Restroom, CORR→Corridor, EVS/SOILED→Utility Room…), deliberately
+  conservative — unknown words stay "" = Needs review, never a silent wrong
+  price. Soiled-utility KEEPS its words in roomName so Max Sanitation's
+  /soil/i room matcher still fires.
+- `cadLooksStructured`: ≥5 numbered rooms and ≥50% numbered → the upload
+  flow skips the AI read entirely.
+
+**Wiring**: AiPlanImport tries the structured path first for every .dxf;
+on success the Calibration Editor opens with EXACT shapes (new PlanStudio
+prop `initialExactShapes` — loaded as-is, never snapped/deduped/ingested),
+knownSqFt from the geometry, sizesFromFile=true. Polygons land on the
+raster through the shared `dxfTransform` (extracted from dxfToPicture — one
+mapping, never re-derived). CAD rasters draw at ~4px/ft (2000–4800px cap)
+so a 954-ft floor stays crisp under zoom. Unstructured DXF falls through
+to raster+AI as before. The DWG error message now teaches Save-As-DXF.
+
+**Validated on the real file**: converted FV-01 DWG→DXF in the sandbox
+(scratchpad script; the client file and its DXF stay OUT of the repo —
+public repo, real hospital), then E2E through the real UI: upload → 2.2s →
+859 shapes in the editor, 857 numbered, 0 orphan tags, 73% auto-typed to
+Scope, exact sq ft (median 148). Clicked FVE1-880: curved corridor, 2416
+ft², type Corridor. 409 tests green; build:classic untouched.
 
 ## 13. BUILD & DEPLOY WORKFLOW
 
