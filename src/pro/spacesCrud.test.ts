@@ -130,3 +130,47 @@ describe("deleteBuilding", () => {
     expect(buildingFootprint(d, "B")).toEqual({ plans: 1, rooms: 1 });
   });
 });
+
+// ── rectifyForDisplay: cosmetic straightening must never eat real geometry ──
+// (Josh's "crooked rooms", 2026-09-12: a hospital floor shipped at 1400px
+// stores rooms 3-26px wide; the old fixed 2.5px vertex merge welded a 2.3px
+// CAD wall jog into a diagonal. Tolerances are proportional now.)
+import { rectifyForDisplay } from "./classicStore";
+
+describe("rectifyForDisplay", () => {
+  it("still squares up a big, slightly sloppy hand-traced room", () => {
+    const sloppy = [
+      { x: 0, y: 1.5 }, { x: 100, y: 0 },      // 1.5px rise over 100 → flatten
+      { x: 101, y: 80 }, { x: 0.5, y: 81 }
+    ];
+    const out = rectifyForDisplay(sloppy);
+    expect(out[0].y).toBeCloseTo(out[1].y, 5);
+    expect(out[2].y).toBeCloseTo(out[3].y, 5);
+  });
+
+  it("a tiny CAD room keeps its 2px wall jog instead of going diagonal", () => {
+    // an L-jog like FV1-522's: 24px wide, jog of 2.3px — every vertex real
+    const cad = [
+      { x: 0, y: 0 }, { x: 24, y: 0 }, { x: 24, y: 12 },
+      { x: 10, y: 12 }, { x: 10, y: 14.3 }, { x: 0, y: 14.3 }
+    ];
+    const out = rectifyForDisplay(cad);
+    expect(out.length).toBe(6); // nothing merged away
+    // and every edge is still axis-aligned — no welded diagonals
+    for (let i = 0; i < out.length; i++) {
+      const a = out[i], b = out[(i + 1) % out.length];
+      expect(Math.min(Math.abs(a.x - b.x), Math.abs(a.y - b.y))).toBeLessThan(1e-6);
+    }
+  });
+
+  it("never flattens a jog a quarter of the room deep", () => {
+    // 100px room with a 24px-deep notch at slope < 0.22 would have been
+    // flattened by the old ratio-only rule if drawn long enough
+    const notch = [
+      { x: 0, y: 0 }, { x: 120, y: 26 },        // ratio 0.216 but 26px deep
+      { x: 120, y: 100 }, { x: 0, y: 100 }
+    ];
+    const out = rectifyForDisplay(notch);
+    expect(Math.abs(out[1].y - out[0].y)).toBeGreaterThan(20); // survived
+  });
+});

@@ -590,19 +590,29 @@ type XY = { x: number; y: number };
 /** snap near-axis edges straight (display only — data stays untouched) */
 export function rectifyForDisplay(pts: XY[]): XY[] {
   const out = pts.map((p) => ({ x: p.x, y: p.y }));
+  // tolerances are PROPORTIONAL to the polygon (capped at the old absolute
+  // values). Fixed pixel tolerances mangled small shapes: a whole hospital
+  // floor shipped at 1400px stores rooms 3–26px wide, and eating a 2.3px
+  // wall jog welded two straight walls into one diagonal — Josh's "crooked
+  // rooms" on the FV-01 CAD import (2026-09-12). A small shape's real
+  // geometry always outranks cosmetic straightening.
+  const b0 = boundsOf(out);
+  const short = Math.max(1, Math.min(b0.maxX - b0.minX, b0.maxY - b0.minY));
+  const mergeTol = Math.min(2.5, short * 0.08);
+  const riseCap = short * 0.25; // never flatten a jog a quarter of the room deep
   for (let pass = 0; pass < 3; pass++) {
     for (let a = 0; a < out.length; a++) {
       const b = (a + 1) % out.length;
       const adx = Math.abs(out[b].x - out[a].x);
       const ady = Math.abs(out[b].y - out[a].y);
-      if (ady <= adx * 0.22) { const my = (out[a].y + out[b].y) / 2; out[a].y = my; out[b].y = my; }
-      else if (adx <= ady * 0.22) { const mx = (out[a].x + out[b].x) / 2; out[a].x = mx; out[b].x = mx; }
+      if (ady <= adx * 0.22 && ady <= riseCap) { const my = (out[a].y + out[b].y) / 2; out[a].y = my; out[b].y = my; }
+      else if (adx <= ady * 0.22 && adx <= riseCap) { const mx = (out[a].x + out[b].x) / 2; out[a].x = mx; out[b].x = mx; }
     }
   }
   const simplified: XY[] = [];
   for (let i = 0; i < out.length; i++) {
     const prev = simplified[simplified.length - 1];
-    if (!prev || Math.hypot(out[i].x - prev.x, out[i].y - prev.y) > 2.5) simplified.push(out[i]);
+    if (!prev || Math.hypot(out[i].x - prev.x, out[i].y - prev.y) > mergeTol) simplified.push(out[i]);
   }
   return simplified.length >= 3 ? simplified : out;
 }

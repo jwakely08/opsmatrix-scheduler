@@ -771,6 +771,18 @@ public repo, real hospital), then E2E through the real UI: upload → 2.2s →
 Scope, exact sq ft (median 148). Clicked FVE1-880: curved corridor, 2416
 ft², type Corridor. 409 tests green; build:classic untouched.
 
+**Field fix, same day (Josh's staging screenshot — "crooked rooms")**: the
+CAD rooms shipped straight but DISPLAYED crooked. Root cause was ours, twice
+over: shipped plans stored geometry on a fixed 1400px canvas (1.5px/ft on a
+954-ft floor → rooms 3–26px wide), and `rectifyForDisplay`'s fixed 2.5px
+vertex merge ate real 2.3px wall jogs, welding two straight walls into one
+diagonal. Fixes: `rectifyForDisplay` tolerances are now PROPORTIONAL to the
+polygon (merge ≤ 8% of the short side capped at 2.5px; never flatten a jog
+deeper than 25% of the room — big sloppy AI/hand traces still square up),
+and PlanStudio ships at the PICTURE's own resolution (`shipSize`, capped
+4800). Verified E2E: upload → ship → stored visualPts for FV1-521/522/523
+measure 0.00° off-axis, FV1-028 keeps its genuine 26° notch. 412 tests.
+
 ## 13. BUILD & DEPLOY WORKFLOW
 
 ```
