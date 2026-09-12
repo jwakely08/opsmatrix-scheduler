@@ -515,9 +515,14 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     setPhase("calibrate");
   }
 
+  // shipped plans store geometry at the PICTURE's own resolution (capped) —
+  // the old fixed 1400 turned a whole hospital floor into 1.5px/ft, where a
+  // real 2ft wall jog is a 3px feature one display tolerance away from gone
+  const shipSize = () => Math.max(1400, Math.min(4800, Math.round(Math.max(W, H))));
+
   function measureAll() {
     if (!cal) { setErr("Select a room you KNOW and type its calibration measurement first."); return; }
-    const preview = buildPlanFromRooms(buildReading(), { building, floor, aspect: W / H });
+    const preview = buildPlanFromRooms(buildReading(), { building, floor, aspect: W / H, size: shipSize() });
     const plan = preview.plan as { img: string; w: number; h: number };
     setMatrix({ img: plan.img, w: plan.w, h: plan.h });
     setSel(new Set());
@@ -529,7 +534,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   function ship() {
     // blanks ship fine (Josh: validation happens in Max Space anyway) — the
     // only hard requirement was the calibration, and measure-all enforced it
-    const result = buildPlanFromRooms(buildReading(), { building, floor, aspect: W / H });
+    const result = buildPlanFromRooms(buildReading(), { building, floor, aspect: W / H, size: shipSize() });
     const shapesData: StudioShapeData[] = JSON.parse(JSON.stringify(shapes));
     const d: ClassicData = loadClassic();
     const map = existingSet
