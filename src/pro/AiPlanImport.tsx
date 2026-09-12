@@ -137,6 +137,20 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
             source: "ai"
           }));
           const named = exact.filter((s) => s.roomNumber).length;
+          // the usages Scope doesn't know yet — named so the manager can add
+          // them as room types (or pick per room); they ship as Needs review,
+          // never as a silently wrong price
+          const unknown: Record<string, number> = {};
+          for (const s of exact) {
+            if (s.roomName && !s.roomType) unknown[s.roomName] = (unknown[s.roomName] ?? 0) + 1;
+          }
+          const unkTop = Object.entries(unknown).sort((a, b) => b[1] - a[1]);
+          const unkNote = unkTop.length
+            ? ` ${unkTop.reduce((n, [, c]) => n + c, 0)} rooms use words Scope doesn't know yet (` +
+            unkTop.slice(0, 5).map(([u, c]) => (c > 1 ? `${u} ×${c}` : u)).join(", ") +
+            (unkTop.length > 5 ? ", …" : "") +
+            ") — they'll show as Needs review; add them as room types in Scope, or pick a type per room."
+            : "";
           setPhase("form");
           setStudioSeeds([]);
           setStudioExact(exact);
@@ -145,7 +159,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
             `✓ Read ${exact.length} rooms straight from the CAD data — ` +
             `${named} numbered, square footage exact from the drawing` +
             (built.unlabeled > 0 ? ` (${built.unlabeled} unlabeled space${built.unlabeled === 1 ? "" : "s"} need names)` : "") +
-            ". Nothing was guessed: check the drawing, then 🚀 Ship to Max Space.");
+            ". Nothing was guessed: check the drawing, then 🚀 Ship to Max Space." + unkNote);
           setStudioPic({ dataUrl: pic.dataUrl, width: pic.width, height: pic.height, aspect: pic.aspect });
           return;
         }

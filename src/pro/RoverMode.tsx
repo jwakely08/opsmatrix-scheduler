@@ -65,6 +65,12 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
   const [flash, setFlash] = useState("");
 
   const selected = spaces.find((s) => s.id === selId) ?? null;
+  // department is STICKY across the walk (Josh, 2026-09-13): a walker
+  // validates a wing at a time — say "department imaging" once and every
+  // room after carries it until a different department is spoken or typed
+  const lastDeptRef = useRef<string>("");
+  const deptOptions = [...new Set(spaces
+    .map((s) => String(s.department ?? "").trim()).filter(Boolean))].sort();
   const recRef = useRef<SpeechRecognitionLike | null>(null);
   const wantMic = useRef(false);
   // the confirm path reads these from voice callbacks — refs keep them live
@@ -91,6 +97,7 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
       if (d.roomName !== undefined) sp.roomName = d.roomName;
       if (d.floorType !== undefined) sp.floorType = d.floorType;
       if (d.fixtureCount !== undefined) sp.fixtureCount = d.fixtureCount;
+      if (d.department !== undefined) sp.department = d.department;
       if (d.roomType !== undefined) {
         const tid = typeIdFromLabelStrict(rules, d.roomType);
         if (tid) applyRoomType(sp, tid, rules); // label + auto tasks + minutes
@@ -98,6 +105,7 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
       }
       syncSpaceMinutes(sp, rules);
     });
+    if (d.department) lastDeptRef.current = d.department; // carries to the next rooms
     setConfirmedIds((prev) => new Set(prev).add(id));
     setFlash("✓ Saved " + (d.roomNumber || selected?.roomNumber || ""));
     setTimeout(() => setFlash(""), 1400);
@@ -172,7 +180,9 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
       roomName: String(sp.roomName ?? "") || undefined,
       roomType: String(sp.roomType ?? "") || undefined,
       floorType: String(sp.floorType ?? "") || undefined,
-      fixtureCount: Number(sp.fixtureCount) || undefined
+      fixtureCount: Number(sp.fixtureCount) || undefined,
+      // the room's own department wins; otherwise this walk's sticky one
+      department: String(sp.department ?? "") || lastDeptRef.current || undefined
     });
     setHeard("");
   };
@@ -263,11 +273,19 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
                 placeholder="0"
                 onChange={(e) => setDraft({ ...draft, fixtureCount: e.target.value === "" ? undefined : Number(e.target.value) })} />
             </label>
+            <label>Department
+              <input list="rover-depts" value={draft.department ?? ""}
+                placeholder='say "department imaging"'
+                onChange={(e) => setDraft({ ...draft, department: e.target.value || undefined })} />
+              <datalist id="rover-depts">
+                {deptOptions.map((d) => <option key={d} value={d} />)}
+              </datalist>
+            </label>
           </div>
           <button className="pbtn primary rover-confirm" onClick={confirmRoom}>
             ✓ Confirm — save this room
           </button>
-          <small className="rover-say">Say it plainly: “102, office, Dr Smith's office, carpet, zero fixtures” — then say “confirm”.</small>
+          <small className="rover-say">Say it plainly: “102, office, Dr Smith's office, carpet, zero fixtures, department imaging” — then say “confirm”. The department sticks for every room after, until you say a new one.</small>
         </div>
       )}
     </div>,
