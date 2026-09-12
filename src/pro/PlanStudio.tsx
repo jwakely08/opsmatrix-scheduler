@@ -74,7 +74,7 @@ function pointIn(pts: XY[], x: number, y: number): boolean {
   return inside;
 }
 
-export function PlanStudio({ picture, account, building, floor, rules, existingSet, initialAiRooms, initialNotice, sizesFromFile, onShipped, onCancel }: {
+export function PlanStudio({ picture, account, building, floor, rules, existingSet, initialAiRooms, initialExactShapes, initialNotice, sizesFromFile, onShipped, onCancel }: {
   picture: StudioPicture;
   account: string;
   building: string;
@@ -84,6 +84,9 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   existingSet?: StudioSet;
   /** Max's automatic first drawing (already read by the host) */
   initialAiRooms?: AiRoomSeed[];
+  /** structured CAD import: EXACT shapes in picture pixels — loaded as-is,
+   *  never snapped or deduped (the file's geometry outranks our guesses) */
+  initialExactShapes?: Omit<StudioShapeData, "id">[];
   initialNotice?: string;
   /** the file STATED its sizes — every room arrives already measured, so
    *  calibration is a spot-check, not a 3-room ceiling */
@@ -97,7 +100,8 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   // check the drawing, fix what needs fixing, send it to Max Space.
   const direct = Boolean(sizesFromFile) || Boolean(existingSet?.readMode);
   const [shapes, setShapes] = useState<Shape[]>(() =>
-    existingSet ? JSON.parse(JSON.stringify(existingSet.shapes)) : []);
+    existingSet ? JSON.parse(JSON.stringify(existingSet.shapes))
+      : (initialExactShapes ?? []).map((s) => ({ id: uid(), ...s })));
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [phase, setPhase] = useState<Phase>("edit");
   const [tool, setTool] = useState<Tool>("select");
