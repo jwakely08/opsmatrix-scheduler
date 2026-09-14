@@ -17,10 +17,14 @@ OpsMatrix is Josh Wakely's hospital EVS (Environmental Services) operations plat
 5. Every push to main auto-deploys to the live demo (~35s) — commit and push only when green.
 6. Never commit or bundle an API key; never load third-party scripts from a CDN into pages that hold the user's key (vendor them, like pdf.js).
 
+## OpsMatrix Hotels (separate product, same repo)
+
+`hotels.html` → `src/hotels/*` is a SEPARATE concept product with its own store and theme (HANDOFF §17, `docs/ENGINE_AUDIT.md` §8). It never touches the hospital app's data or screens; hotel changes go in `src/hotels/` only. Shared pure engine modules are imported, never edited for a hotel reason.
+
 ## Commands
 
 ```
-npm test               # vitest — 193 tests, must stay green
+npm test               # vitest — 366 tests, must stay green
 npm run build:classic  # REQUIRED after touching src/bridge/*, src/pro/rules.ts, or scripts/fusion-*.js — else classic.html ships stale (the #1 gotcha)
 npm run build          # MPA build: index.html + maps.html
 npm run dev            # vite dev server on 5173 (serves /classic.html and /test-fixtures/* too)
