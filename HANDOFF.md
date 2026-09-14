@@ -508,6 +508,7 @@ git add -A && git commit && git push          # Pages deploys automatically (~35
 
 ## 15. OPEN ITEMS / NEXT CANDIDATES
 
+- **OpsMatrix Hotels — the industry-skin build (2026-09-14, Step 0 done, awaiting Josh's review)**: `docs/ENGINE_AUDIT.md` classifies every module as engine vs hospital skin, lists every hard-coded hospital assumption by file and line, and proposes the minimum `industry: 'hospital' | 'hotel'` refactor (`src/skins/{hospital,hotel}` packs, `settings.industry` locally + `organizations.industry` migration 0005 in cloud). No code changed yet. Note for the next session: `npm test` is **302** tests now, not the 193 quoted in §13/CLAUDE.md.
 - **Max Policing needs its real spec** (2026-08-31): the shell ships (room eligibility, non-floor-care
   passes, timing, ship-to-schedules). Josh still owes the frequency model (passes per day), cart
   stocking and coverage windows.
