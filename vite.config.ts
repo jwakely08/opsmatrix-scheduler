@@ -18,7 +18,10 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: "index.html",
-        maps: "maps.html"
+        maps: "maps.html",
+        // OpsMatrix Hotels — a separate product page with its own code and
+        // storage (src/hotels/*); shares only pure engine modules by import
+        hotels: "hotels.html"
       }
     }
   },

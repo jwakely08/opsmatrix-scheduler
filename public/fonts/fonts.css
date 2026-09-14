@@ -1,0 +1,4 @@
+/* Vendored Google Fonts (variable, latin subset, OFL) — served from our
+   origin, never a CDN (hard rule 6: this page can hold the user's key). */
+@font-face { font-family: 'Cormorant Garamond'; font-style: normal; font-weight: 300 700; font-display: swap; src: url(./cormorant-garamond.woff2) format('woff2'); }
+@font-face { font-family: 'Manrope'; font-style: normal; font-weight: 200 800; font-display: swap; src: url(./manrope.woff2) format('woff2'); }
