@@ -1,4 +1,4 @@
-// The demo hotel — "The Meridian", a 40-room boutique property with two
+// The demo hotel — "The Meridian", a 38-room boutique property with two
 // suites, a lobby level and two guest floors. Seeds a lived-in afternoon:
 // arrivals promised tonight, rooms in every condition, one out of order, one
 // stale signal (so Unknown is on screen, never faked green), one failed
@@ -210,7 +210,7 @@ export function buildDemo(now = Date.now()): HotelState {
     L(8, "Josh", "407 out of order — shower valve leaking into 305 ceiling → work order → Marco. Pulled from tonight's arrivals.", "407", "create_work_order", "plumbing"),
     L(3, "Josh", "301 assigned to Ana for departure clean.", "301", "assign")
   ];
-  // 14-day forecast for a 40-room house
+  // 14-day forecast for a 38-room house
   const fc: ForecastDay[] = [];
   const d0 = new Date(now); d0.setHours(0, 0, 0, 0);
   const pattern = [14, 11, 9, 12, 18, 24, 22, 13, 10, 9, 14, 19, 26, 21];
