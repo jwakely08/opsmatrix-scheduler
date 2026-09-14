@@ -289,3 +289,20 @@ interface SkinPack {
 **F. The 420 / 5 defaults.** The brief keeps 420 productive minutes and 5 shifts per FTE for hotels. Confirm the hotel starting rates you want in `skins/hotel/pack.ts` (departure clean by type, stayover, turndown, public-area sq ft per minute, travel per floor change) or I seed industry-typical placeholders clearly labelled "starting point, editable" like the hospital ones.
 
 Reply on this document and I start phase 1.
+
+---
+
+## 8. Direction after Josh's review (2026-09-14) — SUPERSEDES §4, §5 and §7
+
+Josh's answer: **a totally new, local-only concept build. The existing OpsMatrix is left alone.** No industry switch inside the hospital app, no tenant flag, no cloud hookups, no PMS until he is ready. "Copy what we had and edit it."
+
+What that means for the build:
+
+- **Separate page, separate data.** `hotels.html` → `src/hotels/*`. Own localStorage keys (`opsmatrix_hotels_*`), own demo seed, own theme, own nav. Never reads or writes `opsmatrix_v7` or any `opsmatrix_fusion_*` store. The hospital app, `classic.html`, `maps.html`, their stores and their demo link are untouched.
+- **Borrow the pure engine by import, unchanged:** `src/lib/parsers.ts`, `src/lib/geometry.ts`, `src/pro/planSnap.ts`, `src/pro/planCalibrate.ts`, `src/pro/planFile.ts`, `src/pro/dxfRaster.ts`, `src/pro/MapCanvas.tsx`, the math functions in `src/pro/rules.ts` (`computeMinutes`, `estimatedFte`, …), `src/pro/scheduleDoc.ts` time walk, `src/pro/routes.ts` distance pricing. If any of these needs a hotel-shaped change, copy it into `src/hotels/` first; never edit the shared file for a hotel reason.
+- **Copy and edit inside `src/hotels/`:** rulebook defaults (guest-room types, departure/stayover/turndown minutes, public-area rates), the space store, the app shell, navigation, theme, demo seed.
+- **Local mode only**, exactly like the original OpsMatrix: browser storage, self-seeding demo, deployable as one more page on the existing GitHub Pages site (`hotels.html?demo=1`). No Supabase, no proxy, no login, no migrations. The AI features (plan reading, ambient capture) use the same saved-on-device API key pattern the hospital app uses in local mode.
+- **Only shared-file edits allowed:** adding the `hotels.html` entry to `vite.config.ts`, and (optionally) a link from nowhere — the hospital app does not link to Hotels.
+- §4 (industry on tenant), §5 (skins refactor) and §7 decisions A, B, D are void. §7 C (vendor fonts) and F (hotel starting rates) still apply. §6 (which engine pieces each hotel feature reuses) still applies.
+
+Build order, each phase a local page Josh can open on his phone: (1) hotels page + theme + `/design` gallery → (2) demo hotel plan, room types, suites, public areas on the map, CSV room list in → (3) status layers + Ready Confidence + front-desk view → (4) walk-and-talk capture → (5) generated handover / daily rooms / scar map → (6) space-based labor with contiguous boards. Integrations (Mews, write-back) deferred until Josh says so.
