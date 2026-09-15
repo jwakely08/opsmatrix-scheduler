@@ -294,6 +294,8 @@ Reply on this document and I start phase 1.
 
 ## 8. Direction after Josh's review (2026-09-14) — SUPERSEDES §4, §5 and §7
 
+> **Update 2026-09-15:** Josh went one step further — the hotel build now lives in its **own repository, `jwakely08/opsmatrix-hotels`**, with nothing shared with this one (not even a page on this site). The notes below describe the interim same-repo layout and remain accurate about what is borrowed conceptually; nothing hotel-related remains in this repo.
+
 Josh's answer: **a totally new, local-only concept build. The existing OpsMatrix is left alone.** No industry switch inside the hospital app, no tenant flag, no cloud hookups, no PMS until he is ready. "Copy what we had and edit it."
 
 What that means for the build:
