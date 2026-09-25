@@ -106,9 +106,10 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
   marker?: { x: number; y: number; label: string } | null;
   shapes: Map<string, { pts: { x: number; y: number }[]; path: string; c: { x: number; y: number } }>;
   fillFor: (sp: ClassicSpace) => string;
-  /** department borders: one drawn contour per contiguous cluster, in plan
-   *  pixels — rendered above the plan, under the labels */
-  outlines?: { pts: { x: number; y: number }[]; color: string }[];
+  /** department borders in plan pixels, rendered above the plan, under the
+   *  labels: solid runs on the rooms' own walls; a run carrying TWO colors
+   *  is a wall two departments share, drawn hatched between them */
+  outlines?: { pts: { x: number; y: number }[]; color: string; color2?: string; closed?: boolean }[];
   /** second schedule's color → the room renders two-tone striped */
   overlayFor?: (sp: ClassicSpace) => string | null;
   /** a small marker on the room (e.g. ⚠ when its tasks aren't all scheduled) */
@@ -319,13 +320,25 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
               the MAP inverts + colorizes it into glowing neon linework */}
           <image href={neon ?? plan.img} width={plan.w} height={plan.h}
             className={neon ? "planneon" : "planimg"} style={{ pointerEvents: "none" }} />
-          {/* department borders: one contour around each contiguous wing */}
-          {outlines?.map((o, i) => (
-            <path key={"dept-border-" + i} className="deptborder"
-              d={o.pts.map((p, k) => `${k === 0 ? "M" : "L"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ") + " Z"}
-              fill="none" stroke={o.color} strokeWidth={5}
-              strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-          ))}
+          {/* department borders: on the rooms' own walls; a wall two
+              departments share draws ONCE, hatched between their colors */}
+          {outlines?.map((o, i) => {
+            const d = o.pts.map((p, k) => `${k === 0 ? "M" : "L"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ") + (o.closed ? " Z" : "");
+            return o.color2 ? (
+              <g key={"dept-border-" + i} className="deptborder">
+                <path d={d} fill="none" stroke={o.color} strokeWidth={5}
+                  strokeLinejoin="round" strokeLinecap="butt" strokeDasharray="10 10"
+                  vectorEffect="non-scaling-stroke" />
+                <path d={d} fill="none" stroke={o.color2} strokeWidth={5}
+                  strokeLinejoin="round" strokeLinecap="butt" strokeDasharray="10 10"
+                  strokeDashoffset={10} vectorEffect="non-scaling-stroke" />
+              </g>
+            ) : (
+              <path key={"dept-border-" + i} className="deptborder" d={d}
+                fill="none" stroke={o.color} strokeWidth={5}
+                strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+            );
+          })}
           {marker && (
             <g className="mapmarker" transform={`translate(${marker.x} ${marker.y}) scale(${1 / Math.max(0.4, view.k)})`}>
               <circle r={13} />

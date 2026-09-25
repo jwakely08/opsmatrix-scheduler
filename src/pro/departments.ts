@@ -80,7 +80,7 @@ export function fillPoly(grid: Uint8Array, gw: number, gh: number, pts: XY[]) {
   }
 }
 
-/** Chebyshev (box) dilation by r cells — closes wall gaps up to 2r wide */
+/** diamond dilation by r cells — bridges wall gaps up to 2r wide */
 export function dilate(grid: Uint8Array, gw: number, gh: number, r: number): Uint8Array {
   let cur = grid;
   for (let pass = 0; pass < r; pass++) {
@@ -92,6 +92,24 @@ export function dilate(grid: Uint8Array, gw: number, gh: number, r: number): Uin
           (y > 0 && cur[(y - 1) * gw + x]) || (y < gh - 1 && cur[(y + 1) * gw + x])) {
           next[y * gw + x] = 1;
         }
+      }
+    }
+    cur = next;
+  }
+  return cur;
+}
+
+/** erosion — dilate's inverse pass; the grid boundary counts as empty */
+export function erode(grid: Uint8Array, gw: number, gh: number, r: number): Uint8Array {
+  let cur = grid;
+  for (let pass = 0; pass < r; pass++) {
+    const next = new Uint8Array(cur);
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        const i = y * gw + x;
+        if (!cur[i]) continue;
+        if (x === 0 || y === 0 || x === gw - 1 || y === gh - 1 ||
+          !cur[i - 1] || !cur[i + 1] || !cur[i - gw] || !cur[i + gw]) next[i] = 0;
       }
     }
     cur = next;
@@ -192,12 +210,20 @@ export function pointInPtsDept(pts: XY[], x: number, y: number): boolean {
 
 export interface DeptBorder { dept: string; color: string; pts: XY[] }
 
+/** the wall-thickness gap we bridge between neighbouring rooms, in plan px */
+export function defaultJoinPx(planW: number, planH: number): number {
+  return Math.max(8, Math.min(planW, planH) * 0.008);
+}
+
 /**
  * Borders for every department: rooms in PLAN pixels in, contour polylines
- * in PLAN pixels out — one per contiguous cluster.
- * joinPx closes the wall-thickness gap between neighbouring rooms (default
- * scales with the plan); anything wider — a corridor someone else owns —
- * keeps clusters apart, exactly Josh's administration-split-by-billing case.
+ * in PLAN pixels out — one per contiguous cluster, sitting ON the rooms'
+ * own walls (a morphological CLOSE: grow to bridge the wall-thickness gap
+ * between neighbours, shrink back the same amount — so the traced line
+ * lands on the real room edges, never a halo that cuts through the rooms
+ * next door). joinPx sets that bridge; anything wider — a corridor someone
+ * else owns — keeps clusters apart (Josh's administration-split-by-billing
+ * case).
  */
 export function departmentBorders(
   rooms: { dept: string; pts: XY[] }[],
@@ -207,11 +233,11 @@ export function departmentBorders(
   opts?: { gridW?: number; joinPx?: number }
 ): DeptBorder[] {
   if (!(planW > 0) || !(planH > 0)) return [];
-  const gridW = Math.min(opts?.gridW ?? 720, Math.max(64, Math.round(planW)));
+  const gridW = Math.min(opts?.gridW ?? 1440, Math.max(64, Math.round(planW)));
   const s = gridW / planW;
   const gw = gridW, gh = Math.max(8, Math.round(planH * s));
-  const joinPx = opts?.joinPx ?? Math.max(3, Math.min(planW, planH) * 0.004);
-  const r = Math.max(1, Math.round((joinPx * s) / 2 + 0.5));
+  const joinPx = opts?.joinPx ?? defaultJoinPx(planW, planH);
+  const r = Math.max(1, Math.ceil((joinPx * s) / 2));
 
   const byDept = new Map<string, { pts: XY[] }[]>();
   for (const room of rooms) {
@@ -226,8 +252,11 @@ export function departmentBorders(
     for (const { pts } of list) {
       fillPoly(grid, gw, gh, pts.map((p) => ({ x: p.x * s, y: p.y * s })));
     }
-    const grown = dilate(grid, gw, gh, r);
-    const { labels, count } = components(grown, gw, gh);
+    // close = dilate then erode; OR the original back in so no room —
+    // however thin — ever erodes away
+    const closed = erode(dilate(grid, gw, gh, r), gw, gh, r);
+    for (let i = 0; i < closed.length; i++) if (grid[i]) closed[i] = 1;
+    const { labels, count } = components(closed, gw, gh);
     for (let c = 1; c <= count; c++) {
       // topmost-leftmost cell of the component = a guaranteed outer edge
       let start = -1;
@@ -236,7 +265,7 @@ export function departmentBorders(
       const sxCell = start % gw, syCell = (start / gw) | 0;
       const contour = traceOutline((x, y) => labels[y * gw + x] === c, gw, gh, sxCell, syCell);
       if (contour.length < 4) continue;
-      const simplified = simplifyLine(contour, 1.6);
+      const simplified = simplifyLine(contour, 1.9);
       out.push({
         dept,
         color: colorForDept(dept, colors) ?? "#94a3b8",
@@ -245,6 +274,155 @@ export function departmentBorders(
     }
   }
   return out;
+}
+
+// ── shared walls (Josh, 2026-09-25): where TWO departments border each
+// other, the line between them is ONE line, hatched between the two
+// colors — not two parallel borders. We sample each border loop, mark the
+// stretches that run along another department's border, and replace those
+// stretches with the midline between the two, tagged with both colors. ──
+
+/** what MapCanvas draws: solid loop/segments, or a two-color hatched run */
+export interface OutlineRun { pts: XY[]; color: string; color2?: string; closed: boolean }
+
+const lerpXY = (a: XY, b: XY, t: number): XY => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+
+/** cumulative arclengths of a CLOSED loop; lens[n] = full perimeter */
+function loopLens(pts: XY[]): number[] {
+  const lens = [0];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    lens.push(lens[i] + Math.hypot(b.x - a.x, b.y - a.y));
+  }
+  return lens;
+}
+
+/** the point a given arclength along the loop (wraps) */
+function pointAt(pts: XY[], lens: number[], t: number): XY {
+  const total = lens[lens.length - 1];
+  let d = ((t % total) + total) % total;
+  for (let i = 0; i < pts.length; i++) {
+    const seg = lens[i + 1] - lens[i];
+    if (d <= seg) return seg <= 0 ? pts[i] : lerpXY(pts[i], pts[(i + 1) % pts.length], d / seg);
+    d -= seg;
+  }
+  return pts[0];
+}
+
+/** nearest point on a closed polyline */
+function nearestOnLoop(pts: XY[], p: XY): { d2: number; q: XY } {
+  let bd2 = Infinity, bq = pts[0];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    const vx = b.x - a.x, vy = b.y - a.y;
+    const L2 = vx * vx + vy * vy;
+    const t = L2 <= 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * vx + (p.y - a.y) * vy) / L2));
+    const qx = a.x + vx * t, qy = a.y + vy * t;
+    const d2 = (p.x - qx) * (p.x - qx) + (p.y - qy) * (p.y - qy);
+    if (d2 < bd2) { bd2 = d2; bq = { x: qx, y: qy }; }
+  }
+  return { d2: bd2, q: bq };
+}
+
+/**
+ * Split border loops into drawable runs: stretches that run along ANOTHER
+ * department's border (within sharedTol) become one midline run carrying
+ * BOTH colors (drawn hatched); everything else stays solid in its own
+ * color. Each shared wall is emitted once, by the lower-indexed border.
+ */
+export function outlineRuns(borders: DeptBorder[], sharedTol: number): OutlineRun[] {
+  const out: OutlineRun[] = [];
+  const tol2 = sharedTol * sharedTol;
+  for (let i = 0; i < borders.length; i++) {
+    const b = borders[i];
+    if (b.pts.length < 3) continue;
+    const lens = loopLens(b.pts);
+    const total = lens[lens.length - 1];
+    if (!(total > 0)) continue;
+    const step = Math.max(3, sharedTol / 2);
+    const n = Math.max(8, Math.ceil(total / step));
+    // classify every sample: which other department's border runs here?
+    const partner = new Int32Array(n).fill(-1);
+    const mids: XY[] = new Array(n);
+    for (let k = 0; k < n; k++) {
+      const p = pointAt(b.pts, lens, (k * total) / n);
+      mids[k] = p;
+      let bestJ = -1, bestD2 = tol2, bestQ = p;
+      for (let j = 0; j < borders.length; j++) {
+        if (j === i || borders[j].dept === b.dept || borders[j].pts.length < 3) continue;
+        const near = nearestOnLoop(borders[j].pts, p);
+        if (near.d2 < bestD2) { bestD2 = near.d2; bestJ = j; bestQ = near.q; }
+      }
+      if (bestJ >= 0) { partner[k] = bestJ; mids[k] = { x: (p.x + bestQ.x) / 2, y: (p.y + bestQ.y) / 2 }; }
+    }
+    // single-sample blips are sampling noise — absorb them
+    for (let k = 0; k < n; k++) {
+      const prev = partner[(k + n - 1) % n], next = partner[(k + 1) % n];
+      if (partner[k] !== prev && partner[k] !== next && prev === next) partner[k] = prev;
+    }
+    if (!partner.some((v) => v >= 0)) {
+      // nothing shared → the whole loop, crisp original geometry
+      out.push({ pts: b.pts, color: b.color, closed: true });
+      continue;
+    }
+    // split the loop into runs of equal classification, wrap-aware
+    let start = 0;
+    while (start < n && partner[start] === partner[(start + n - 1) % n]) start++;
+    if (start >= n) start = 0; // uniform: everything shared with one dept
+    const runs: { cls: number; a: number; len: number }[] = [];
+    let a = start, len = 1;
+    for (let c = 1; c < n; c++) {
+      const k = (start + c) % n;
+      if (partner[k] === partner[a]) { len++; continue; }
+      runs.push({ cls: partner[a], a, len });
+      a = k; len = 1;
+    }
+    runs.push({ cls: partner[a], a, len });
+    const stepT = total / n;
+    for (const run of runs) {
+      const tA = ((run.a - 0.5) * stepT + total) % total;
+      const tB = tA + run.len * stepT;
+      if (run.cls < 0) {
+        // solid stretch: run boundary points + the loop's own vertices in
+        // between (so corners stay crisp)
+        const pts: XY[] = [pointAt(b.pts, lens, tA)];
+        for (let m = 0; m < b.pts.length * 2; m++) {
+          const arc = lens[m % b.pts.length] + Math.floor(m / b.pts.length) * total;
+          if (arc > tA + 0.5 && arc < tB - 0.5) pts.push(b.pts[m % b.pts.length]);
+        }
+        pts.push(pointAt(b.pts, lens, tB));
+        out.push({ pts, color: b.color, closed: false });
+      } else if (run.cls > i) {
+        // shared wall: the midline, once (the lower index draws it)
+        const other = borders[run.cls];
+        const midOf = (p: XY) => {
+          const q = nearestOnLoop(other.pts, p).q;
+          return { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+        };
+        const pts: XY[] = [midOf(pointAt(b.pts, lens, tA))];
+        for (let c = 0; c < run.len; c++) pts.push(mids[(run.a + c) % n]);
+        pts.push(midOf(pointAt(b.pts, lens, tB)));
+        out.push({ pts, color: b.color, color2: other.color, closed: false });
+      }
+      // run.cls in [0, i): the partner border already drew this wall
+    }
+  }
+  return out;
+}
+
+/** the one-call version MapsApp uses: borders → drawable runs */
+export function departmentOutlineRuns(
+  rooms: { dept: string; pts: XY[] }[],
+  planW: number,
+  planH: number,
+  colors: DeptColorMap,
+  opts?: { gridW?: number; joinPx?: number }
+): OutlineRun[] {
+  const borders = departmentBorders(rooms, planW, planH, colors, opts);
+  const joinPx = opts?.joinPx ?? defaultJoinPx(planW, planH);
+  // two borders "share a wall" when they sit within a wall's thickness of
+  // each other — comfortably under any real corridor's width
+  return outlineRuns(borders, joinPx * 1.25 + 2);
 }
 
 /** assign every selected room to the department (and remember the color) */

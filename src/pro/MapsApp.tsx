@@ -8,7 +8,7 @@ import {
   type ClassicData, type ClassicSpace, type ClassicSchedule, type NonSpaceTask
 } from "./classicStore";
 import {
-  deptColorMap, colorForDept, assignDepartment, departmentsOf, departmentBorders, DEPT_PALETTE
+  deptColorMap, colorForDept, assignDepartment, departmentsOf, departmentOutlineRuns, DEPT_PALETTE
 } from "./departments";
 import { navVisit, navBack, hubHashFor } from "./nav";
 import {
@@ -252,7 +252,7 @@ export function MapsApp() {
   const deptBorders = useMemo(() => {
     const on = (tab === "map" && deptOutline) || (tab === "spaces" && deptMode);
     if (!on || !plan) return undefined;
-    return departmentBorders(
+    return departmentOutlineRuns(
       spaces.map((sp) => ({ dept: String(sp.department ?? ""), pts: shapes.get(sp.id)?.pts ?? [] })),
       plan.w, plan.h, deptColorMap(data));
     // eslint-disable-next-line react-hooks/exhaustive-deps
