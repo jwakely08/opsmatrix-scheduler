@@ -542,6 +542,8 @@ body {
 }
 .pro-map3d { cursor: grab; }
 .pro-map3d:active { cursor: grabbing; }
+/* department borders: one contour around each contiguous wing */
+.deptborder { pointer-events: none; opacity: 0.95; }
 
 /* ── iPhone / small phones ── */
 @media (max-width: 640px) {

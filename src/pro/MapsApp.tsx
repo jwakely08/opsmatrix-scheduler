@@ -8,7 +8,7 @@ import {
   type ClassicData, type ClassicSpace, type ClassicSchedule, type NonSpaceTask
 } from "./classicStore";
 import {
-  deptColorMap, colorForDept, assignDepartment, departmentsOf, DEPT_PALETTE
+  deptColorMap, colorForDept, assignDepartment, departmentsOf, departmentBorders, DEPT_PALETTE
 } from "./departments";
 import { navVisit, navBack, hubHashFor } from "./nav";
 import {
@@ -247,6 +247,17 @@ export function MapsApp() {
     return out;
   }, [spaces]);
 
+  // department borders: real geometry (grid union + contour trace), so it
+  // runs only when the data or the toggles change — never per render
+  const deptBorders = useMemo(() => {
+    const on = (tab === "map" && deptOutline) || (tab === "spaces" && deptMode);
+    if (!on || !plan) return undefined;
+    return departmentBorders(
+      spaces.map((sp) => ({ dept: String(sp.department ?? ""), pts: shapes.get(sp.id)?.pts ?? [] })),
+      plan.w, plan.h, deptColorMap(data));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, deptOutline, deptMode, plan, shapes, spaces, data]);
+
   const roomSelected = spaces.find((s) => s.id === roomSel) ?? null;
   const schedSelected = schedules.find((s) => s.id === schedSel) ?? null;
 
@@ -450,9 +461,7 @@ export function MapsApp() {
               const col = scheduleColor(schedules, secondary.scheduleId);
               return col === "#64748b" ? null : col;
             } : deptMode ? (sp) => (deptPick.has(sp.id) ? "#ffffff" : null) : undefined}
-            strokeFor={tab === "map" && deptOutline
-              ? (sp) => colorForDept(sp.department, deptColorMap(data))
-              : undefined}
+            outlines={deptBorders}
             flagFor={tab === "map" ? (sp) => {
               // ⚠ = this room isn't fully scheduled yet: its base clean or
               // one of its tasks (floor care counts — shipped Floor Care

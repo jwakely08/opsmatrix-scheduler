@@ -93,7 +93,7 @@ export function BuildingBadge({ building, onChange }: {
 
 // ── the map canvas (shared by Map + Spaces tabs, and Floor Care's builder) ──
 
-export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, strokeFor, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker }: {
+export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlines, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker }: {
   plan: NonNullable<ClassicData["plans"][0]>;
   plans: ClassicData["plans"];
   onPlan: (id: string) => void;
@@ -106,9 +106,9 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, stroke
   marker?: { x: number; y: number; label: string } | null;
   shapes: Map<string, { pts: { x: number; y: number }[]; path: string; c: { x: number; y: number } }>;
   fillFor: (sp: ClassicSpace) => string;
-  /** override the room's OUTLINE color (department outlines) — null keeps
-   *  the default (outline = fill) */
-  strokeFor?: (sp: ClassicSpace) => string | null;
+  /** department borders: one drawn contour per contiguous cluster, in plan
+   *  pixels — rendered above the plan, under the labels */
+  outlines?: { pts: { x: number; y: number }[]; color: string }[];
   /** second schedule's color → the room renders two-tone striped */
   overlayFor?: (sp: ClassicSpace) => string | null;
   /** a small marker on the room (e.g. ⚠ when its tasks aren't all scheduled) */
@@ -301,11 +301,10 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, stroke
             const sh = shapes.get(sp.id);
             if (!sh) return null;
             const color = fillFor(sp);
-            const stroke = strokeFor?.(sp) ?? null;
             const overlay = overlayFor?.(sp) ?? null;
             return (
-              <g key={sp.id} className={"proom" + (sp.id === selectedId ? " sel" : "") + (color === "#33404d" && !stroke ? " dim" : "")}>
-                <path d={sh.path} fill={color} stroke={stroke ?? color}
+              <g key={sp.id} className={"proom" + (sp.id === selectedId ? " sel" : "") + (color === "#33404d" ? " dim" : "")}>
+                <path d={sh.path} fill={color} stroke={color}
                   strokeWidth={WALL_STROKE} strokeLinejoin="round"
                   vectorEffect="non-scaling-stroke" />
                 {overlay && (
@@ -320,6 +319,13 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, stroke
               the MAP inverts + colorizes it into glowing neon linework */}
           <image href={neon ?? plan.img} width={plan.w} height={plan.h}
             className={neon ? "planneon" : "planimg"} style={{ pointerEvents: "none" }} />
+          {/* department borders: one contour around each contiguous wing */}
+          {outlines?.map((o, i) => (
+            <path key={"dept-border-" + i} className="deptborder"
+              d={o.pts.map((p, k) => `${k === 0 ? "M" : "L"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ") + " Z"}
+              fill="none" stroke={o.color} strokeWidth={5}
+              strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+          ))}
           {marker && (
             <g className="mapmarker" transform={`translate(${marker.x} ${marker.y}) scale(${1 / Math.max(0.4, view.k)})`}>
               <circle r={13} />
