@@ -93,7 +93,7 @@ export function BuildingBadge({ building, onChange }: {
 
 // ── the map canvas (shared by Map + Spaces tabs, and Floor Care's builder) ──
 
-export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker }: {
+export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, strokeFor, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker }: {
   plan: NonNullable<ClassicData["plans"][0]>;
   plans: ClassicData["plans"];
   onPlan: (id: string) => void;
@@ -106,6 +106,9 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
   marker?: { x: number; y: number; label: string } | null;
   shapes: Map<string, { pts: { x: number; y: number }[]; path: string; c: { x: number; y: number } }>;
   fillFor: (sp: ClassicSpace) => string;
+  /** override the room's OUTLINE color (department outlines) — null keeps
+   *  the default (outline = fill) */
+  strokeFor?: (sp: ClassicSpace) => string | null;
   /** second schedule's color → the room renders two-tone striped */
   overlayFor?: (sp: ClassicSpace) => string | null;
   /** a small marker on the room (e.g. ⚠ when its tasks aren't all scheduled) */
@@ -176,7 +179,12 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
     });
     ro.observe(svg);
     return () => ro.disconnect();
-  }, [plan]);
+    // identity, not object: `plan` is rebuilt on EVERY commit, and refitting
+    // then yanked the zoom out after each room tap while assigning a
+    // schedule (Josh, production, 2026-09-25). Refit only when the floor
+    // actually changes (or a remodel re-ships new dimensions on the same id).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan.id, plan.w, plan.h]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -293,10 +301,11 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
             const sh = shapes.get(sp.id);
             if (!sh) return null;
             const color = fillFor(sp);
+            const stroke = strokeFor?.(sp) ?? null;
             const overlay = overlayFor?.(sp) ?? null;
             return (
-              <g key={sp.id} className={"proom" + (sp.id === selectedId ? " sel" : "") + (color === "#33404d" ? " dim" : "")}>
-                <path d={sh.path} fill={color} stroke={color}
+              <g key={sp.id} className={"proom" + (sp.id === selectedId ? " sel" : "") + (color === "#33404d" && !stroke ? " dim" : "")}>
+                <path d={sh.path} fill={color} stroke={stroke ?? color}
                   strokeWidth={WALL_STROKE} strokeLinejoin="round"
                   vectorEffect="non-scaling-stroke" />
                 {overlay && (
