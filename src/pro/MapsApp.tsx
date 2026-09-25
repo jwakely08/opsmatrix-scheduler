@@ -7,6 +7,9 @@ import {
   moveInSchedule, spacePriority, PRIORITIES, PRIORITY_WORD, nonSpaceTaskMinutes,
   type ClassicData, type ClassicSpace, type ClassicSchedule, type NonSpaceTask
 } from "./classicStore";
+import {
+  deptColorMap, colorForDept, assignDepartment, departmentsOf, DEPT_PALETTE
+} from "./departments";
 import { navVisit, navBack, hubHashFor } from "./nav";
 import {
   MapCanvas, BuildingPicker, BuildingBadge, planBuilding, planBuildings,
@@ -138,6 +141,12 @@ export function MapsApp() {
 
   const [roomSel, setRoomSel] = useState<string | null>(null);
   const [schedSel, setSchedSel] = useState<string | null>(null);
+  // department tooling (Josh, 2026-09-25): select rooms in Max Space, assign
+  // a department + color; outline by department on the Schedules map
+  const [deptMode, setDeptMode] = useState(false);
+  const [deptPick, setDeptPick] = useState<Set<string>>(new Set());
+  const [deptDraft, setDeptDraft] = useState({ name: "", color: "" });
+  const [deptOutline, setDeptOutline] = useState(false);
   // the first brick of the role system: local build = the owner; cloud =
   // the signed-in profile's role (directors administer, others don't)
   const [role, setRole] = useState<AccountRole>(() => (cloudConfigured ? "staff" : "owner"));
@@ -342,7 +351,15 @@ export function MapsApp() {
               opts={[["unscheduled", "Unscheduled rooms"], ["untasked", "Has unscheduled tasks"], ["complete", "Fully scheduled"]]} />
             <Sel label="Shift" v={filters.shift ?? ""} on={(v) => setFilters({ ...filters, shift: v })}
               opts={["1st Shift", "2nd Shift", "3rd Shift"].map((s) => [s, s])} />
+            <button className={"pbtn small" + (deptOutline ? " primary" : "")}
+              onClick={() => setDeptOutline(!deptOutline)}>🏛 Dept outlines</button>
           </>}
+          {tab === "spaces" && spacesView === "map" && (
+            <button className={"pbtn small" + (deptMode ? " primary" : "")}
+              onClick={() => { setDeptMode(!deptMode); setDeptPick(new Set()); setRoomSel(null); }}>
+              🏷 Departments
+            </button>
+          )}
           <Sel label="Room type" v={filters.rtype ?? ""} on={(v) => setFilters({ ...filters, rtype: v })}
             opts={rules.roomTypes.map((rt) => [rt.id, rt.label])} />
           <Sel label="Task" v={filters.task ?? ""} on={(v) => setFilters({ ...filters, task: v })}
@@ -350,11 +367,47 @@ export function MapsApp() {
               .filter((t) => tab !== "map" || !t.floorCare) // floor-care work is Max Floor Care's
               .map((t) => [t.id, t.label])} />
           {anyFilter && <button className="pbtn small" onClick={() => setFilters({})}>Clear</button>}
-          {tab === "map" && schedSelected && (
-            <span className="linkhint">
-              ✏ Editing <b style={{ color: String(schedSelected.color) }}>{schedSelected.num} {schedSelected.name}</b> —
-              click rooms to add/remove
-              <button className="pbtn small primary" onClick={() => setSchedSel(null)}>Done</button>
+          {tab === "map" && schedSelected && (() => {
+            // the SAME totaler and bar the Schedules tab uses — one truth,
+            // live while tapping (Josh, 2026-09-25). Minutes can also DROP:
+            // tapping a room already on this schedule removes it, and taking
+            // a room's base clean makes the schedule that had it shrink.
+            const liveMins = Math.round(scheduleMinutes(data, rules, schedSelected));
+            const liveTarget = (Number(schedSelected.targetHours) || 8) * 60;
+            return (
+              <span className="linkhint schedlive">
+                ✏ Editing <b style={{ color: String(schedSelected.color) }}>{schedSelected.num} {schedSelected.name}</b> —
+                click rooms to add/remove
+                <em className={"schedlivemins" + (liveMins > liveTarget ? " over" : "")}>{liveMins}m of {liveTarget}m</em>
+                <HoursBar minutes={liveMins} />
+                <button className="pbtn small primary" onClick={() => setSchedSel(null)}>Done</button>
+              </span>
+            );
+          })()}
+          {tab === "spaces" && spacesView === "map" && deptMode && (
+            <span className="linkhint schedlive">
+              🏷 Tap rooms to select — <b>{deptPick.size}</b> picked
+              <input list="dept-assign" placeholder="department name" value={deptDraft.name}
+                style={{ minWidth: 150 }}
+                onChange={(e) => setDeptDraft({ ...deptDraft, name: e.target.value })} />
+              <datalist id="dept-assign">
+                {departmentsOf(spaces).map((d) => <option key={d} value={d} />)}
+              </datalist>
+              {DEPT_PALETTE.map((c) => (
+                <button key={c} className={"colordot" + (deptDraft.color === c ? " on" : "")}
+                  style={{ background: c }} aria-label={"Department color " + c}
+                  onClick={() => setDeptDraft({ ...deptDraft, color: deptDraft.color === c ? "" : c })} />
+              ))}
+              <button className="pbtn small primary" disabled={!deptPick.size || !deptDraft.name.trim()}
+                onClick={() => {
+                  commit((d) => {
+                    assignDepartment(d, deptPick, deptDraft.name, deptDraft.color || undefined);
+                  });
+                  setDeptPick(new Set()); // stay in the mode for the next wing
+                }}>
+                ✓ Assign{deptPick.size ? ` ${deptPick.size} room${deptPick.size === 1 ? "" : "s"}` : ""}
+              </button>
+              <button className="pbtn small" onClick={() => { setDeptMode(false); setDeptPick(new Set()); }}>Done</button>
             </span>
           )}
         </div>
@@ -374,6 +427,11 @@ export function MapsApp() {
             mode={tab === "spaces" ? "spaces" : "map"}
             fillFor={(sp) => {
               if (tab === "spaces") {
+                if (deptMode) {
+                  // the department view: rooms wear their department's color,
+                  // unassigned rooms recede
+                  return colorForDept(sp.department, deptColorMap(data)) ?? "#33404d";
+                }
                 return spaceIncomplete(sp).length ? RED : "#475569";
               }
               const active = !anyFilter || matches(sp);
@@ -391,7 +449,10 @@ export function MapsApp() {
               const secondary = cov.find((c) => !c.primary) ?? cov[1];
               const col = scheduleColor(schedules, secondary.scheduleId);
               return col === "#64748b" ? null : col;
-            } : undefined}
+            } : deptMode ? (sp) => (deptPick.has(sp.id) ? "#ffffff" : null) : undefined}
+            strokeFor={tab === "map" && deptOutline
+              ? (sp) => colorForDept(sp.department, deptColorMap(data))
+              : undefined}
             flagFor={tab === "map" ? (sp) => {
               // ⚠ = this room isn't fully scheduled yet: its base clean or
               // one of its tasks (floor care counts — shipped Floor Care
@@ -401,6 +462,17 @@ export function MapsApp() {
             } : undefined}
             selectedId={roomSel}
             onRoom={(sp) => {
+              // department assign mode: taps SELECT rooms, nothing else
+              if (tab === "spaces" && deptMode) {
+                if (!sp) return;
+                setDeptPick((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(sp.id)) next.delete(sp.id);
+                  else next.add(sp.id);
+                  return next;
+                });
+                return;
+              }
               if (!sp) { setRoomSel(null); return; }
               if (tab === "map" && schedSelected && (schedSelected.floorCareId || schedSelected.routeOnly)) {
                 // engine-built schedules are edited in their engine only
@@ -445,6 +517,19 @@ export function MapsApp() {
                   </span>
                 ))}
                 <span className="lgrow"><i style={{ background: GRAY }} />Unscheduled</span>
+                {deptOutline && departmentsOf(spaces).map((dp) => (
+                  <span key={"dept-" + dp}>
+                    <i style={{ background: "transparent", border: `2.5px solid ${colorForDept(dp, deptColorMap(data))}` }} />
+                    {dp}
+                  </span>
+                ))}
+              </div>
+            ) : deptMode ? (
+              <div className="pro-legend">
+                {departmentsOf(spaces).map((dp) => (
+                  <span key={dp}><i style={{ background: colorForDept(dp, deptColorMap(data)) ?? "#33404d" }} />{dp}</span>
+                ))}
+                <span><i style={{ background: "#33404d" }} />No department yet</span>
               </div>
             ) : (
               <div className="pro-legend">
@@ -1014,75 +1099,98 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
   onChange: (patch: Partial<ClassicSpace>) => void;
   onOpenEditor: () => void;
 }) {
-  const typeId = typeIdFromLabel(rules, space.roomType ?? "");
-  const carpet = isCarpet(space.floorType);
-  const req = requiredTasks(rules, space);
-  const issues = spaceIncomplete(space);
+  // edits BUFFER locally and commit on 💾 Save (Josh, 2026-09-25: "a save
+  // button confirms it was finished"). Nothing is ever lost: switching rooms
+  // or closing the sidebar saves any pending changes automatically — the
+  // button exists for confirmation, not as a trap.
+  const [draft, setDraft] = useState<Partial<ClassicSpace>>({});
+  const cur = { ...space, ...draft } as ClassicSpace;
+  const dirty = Object.keys(draft).length > 0;
+  const set = (patch: Partial<ClassicSpace>) => setDraft((prev) => ({ ...prev, ...patch }));
+  const save = () => {
+    if (Object.keys(draft).length) onChange(draft);
+    setDraft({});
+  };
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  useEffect(() => () => {
+    // unmount = room switched or sidebar closed — save what's pending
+    if (Object.keys(draftRef.current).length) onChangeRef.current(draftRef.current);
+  }, []);
+
+  const typeId = typeIdFromLabel(rules, cur.roomType ?? "");
+  const carpet = isCarpet(cur.floorType);
+  const req = requiredTasks(rules, cur);
+  const issues = spaceIncomplete(cur);
 
   return (
     <aside className="pro-side">
       <div className="pshead">
-        <h2>{space.roomNumber || space.roomName || "Room"}</h2>
+        <h2>{cur.roomNumber || cur.roomName || "Room"}</h2>
         <button className="pbtn ghost" onClick={onClose}>✕</button>
       </div>
       {issues.length > 0 && <p className="warntext">⚠ Missing: {issues.join(", ")}</p>}
       <p className="pnote">
-        {[space.building, space.floor, space.department].map((v) => String(v ?? "").trim()).filter(Boolean).join(" · ") || " "}
+        {[cur.building, cur.floor, cur.department].map((v) => String(v ?? "").trim()).filter(Boolean).join(" · ") || " "}
         {" "}<button className="plink" onClick={onOpenEditor}>open the full editor →</button>
       </p>
 
       <div className="prow">
         <label className="pfield">Room number
-          <input value={String(space.roomNumber ?? "")} placeholder="e.g. 4E-102"
-            onChange={(e) => onChange({ roomNumber: e.target.value })} />
+          <input value={String(cur.roomNumber ?? "")} placeholder="e.g. 4E-102"
+            onChange={(e) => set({ roomNumber: e.target.value })} />
         </label>
         <label className="pfield">Room name
-          <input value={String(space.roomName ?? "")} placeholder="e.g. Patient Room"
-            onChange={(e) => onChange({ roomName: e.target.value })} />
+          <input value={String(cur.roomName ?? "")} placeholder="e.g. Patient Room"
+            onChange={(e) => set({ roomName: e.target.value })} />
         </label>
       </div>
       <label className="pfield">Room type
         <select value={typeId} onChange={(e) => {
           const rt = rules.roomTypes.find((x) => x.id === e.target.value);
-          onChange({ roomType: rt?.label ?? e.target.value });
+          // changing the type refreshes its automatic tasks in the draft, so
+          // the chips below update live before anything is saved
+          set({ roomType: rt?.label ?? e.target.value, spaceTasks: autoTasksFor(rules, e.target.value) });
         }}>
           {rules.roomTypes.map((rt) => <option key={rt.id} value={rt.id}>{rt.label} · {rt.frequency}</option>)}
         </select>
       </label>
       <div className="prow">
         <label className="pfield">Floor type
-          <select value={space.floorType || ""}
-            onChange={(e) => onChange({ floorType: e.target.value })}>
-            <option value="">— pick floor type —</option>
+          <select value={cur.floorType || ""}
+            onChange={(e) => set({ floorType: e.target.value })}>
+            <option value="">— unset: prices as hard floor —</option>
             {FLOOR_TYPES.map((f) => <option key={f}>{f}</option>)}
           </select>
         </label>
         <label className="pfield">Square feet
-          <input type="number" min={0} value={Number(space.squareFeet) || 0}
-            onChange={(e) => onChange({ squareFeet: Number(e.target.value) || 0 })} />
+          <input type="number" min={0} value={Number(cur.squareFeet) || 0}
+            onChange={(e) => set({ squareFeet: Number(e.target.value) || 0 })} />
         </label>
       </div>
       <div className="pfield"><span>Priority</span>
         <div className="prio">
           {PRIORITIES.map((p) => (
-            <button key={p} className={"priobtn " + p.toLowerCase() + (spacePriority(space) === p ? " on" : "")}
-              onClick={() => onChange({ priority: p })}>{PRIORITY_WORD[p]}</button>
+            <button key={p} className={"priobtn " + p.toLowerCase() + (spacePriority(cur) === p ? " on" : "")}
+              onClick={() => set({ priority: p })}>{PRIORITY_WORD[p]}</button>
           ))}
         </div>
         <small>Prints on every schedule this room appears on, so the worker knows what cannot wait.</small>
       </div>
 
       <label className="pfield checkline">
-        <input type="checkbox" checked={spaceCleanability(rules, space) !== "Non-cleanable"}
-          onChange={(e) => onChange({ cleanability: e.target.checked ? "Cleanable" : "Non-cleanable" })} />
+        <input type="checkbox" checked={spaceCleanability(rules, cur) !== "Non-cleanable"}
+          onChange={(e) => set({ cleanability: e.target.checked ? "Cleanable" : "Non-cleanable" })} />
         <span>Cleanable — counts toward EVS workload</span>
       </label>
 
       <div className="prow">
         <label className="pfield">Department
-          <input list="side-depts" value={String(space.department ?? "")}
+          <input list="side-depts" value={String(cur.department ?? "")}
             placeholder="pick one, or type a new one"
-            onChange={(e) => onChange({ department: e.target.value })} />
+            onChange={(e) => set({ department: e.target.value })} />
           <datalist id="side-depts">
             {deptOptions.map((d) => <option key={d} value={d} />)}
           </datalist>
@@ -1091,13 +1199,13 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
 
       <div className="prow">
         <label className="pfield">Fixtures
-          <input type="number" min={0} value={Number(space.fixtureCount) || 0}
-            onChange={(e) => onChange({ fixtureCount: Number(e.target.value) || 0 })} />
+          <input type="number" min={0} value={Number(cur.fixtureCount) || 0}
+            onChange={(e) => set({ fixtureCount: Number(e.target.value) || 0 })} />
         </label>
         {carpet && (
           <label className="pfield accent">Vacuum days/week
-            <input type="number" min={1} max={7} value={Number(space.vacuumDaysPerWeek) || 5}
-              onChange={(e) => onChange({ vacuumDaysPerWeek: Math.max(1, Math.min(7, Number(e.target.value) || 5)) })} />
+            <input type="number" min={1} max={7} value={Number(cur.vacuumDaysPerWeek) || 5}
+              onChange={(e) => set({ vacuumDaysPerWeek: Math.max(1, Math.min(7, Number(e.target.value) || 5)) })} />
           </label>
         )}
       </div>
@@ -1110,7 +1218,7 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
             const auto = t.autoFor.includes(typeId);
             return (
               <button key={t.id} className={"ptask" + (on ? " on" : "") + (t.floorCare ? " fc" : "")}
-                onClick={() => onChange({ spaceTasks: on ? req.filter((x) => x !== t.id) : [...req, t.id] })}>
+                onClick={() => set({ spaceTasks: on ? req.filter((x) => x !== t.id) : [...req, t.id] })}>
                 {t.label}{auto ? " •" : ""}
               </button>
             );
@@ -1118,6 +1226,11 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
         </div>
         <small>• = automatic for this room type. Who does each task is decided on the Map tab — different tasks can go to different schedules.</small>
       </div>
+
+      <button className="pbtn primary wide" disabled={!dirty} onClick={save}>
+        {dirty ? "💾 Save room" : "✓ Saved"}
+      </button>
+      <small className="pnote">Changes also save automatically when you close this panel or switch rooms — nothing is lost either way.</small>
 
     </aside>
   );
