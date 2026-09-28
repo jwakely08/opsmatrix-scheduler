@@ -290,7 +290,7 @@
   function hubHash(tok) {
     var v = tok.replace(/^hub:/, "");
     if (v === "map") return "";
-    if (v === "schedules" || v === "rooms") return "#tab-" + v;
+    if (v === "schedules" || v === "rooms" || v === "matrix") return "#tab-" + v;
     if (v.indexOf("spaces") === 0) return "#spaces?view=" + (v.split("/")[1] || "explorer");
     return "#" + v;
   }
