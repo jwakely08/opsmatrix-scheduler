@@ -34,6 +34,7 @@ import { WorkloadApp, ImportResult } from "./WorkloadApp";
 import { FloorCareApp, HoursBar } from "./FloorCareApp";
 import { SanitationApp } from "./SanitationApp";
 import { PolicingApp } from "./PolicingApp";
+import { ScheduleMatrix } from "./ScheduleMatrix";
 import { buildScheduleDoc, parseClock, type SchedBreak } from "./scheduleDoc";
 import { importScan } from "../bridge/fusionEntry";
 import {
@@ -54,13 +55,14 @@ const RED = "#dc2626";
 
 function uid(p: string) { return p + "-" + Math.random().toString(36).slice(2, 9); }
 
-type Tab = "map" | "rooms" | "schedules" | "spaces" | "scope" | "workload" | "floorcare" | "exporting" | "sanitation" | "policing";
+type Tab = "map" | "rooms" | "schedules" | "matrix" | "spaces" | "scope" | "workload" | "floorcare" | "exporting" | "sanitation" | "policing";
 
 /**
  * The hash is the hub's single source of truth for WHICH view is on screen:
  *   (none)          Max Schedules — Map
  *   #tab-rooms      Max Schedules — Rooms (list scheduling)
  *   #tab-schedules  Max Schedules — Schedules
+ *   #tab-matrix     Max Schedules — Matrix (every schedule as a colored block)
  *   #spaces?view=explorer|list|map (&add=1)   Max Space
  *   #scope / #workload / #floorcare           the standalone admin pages
  * Keeping it in the hash (and re-reading it reactively) is what makes the
@@ -83,6 +85,7 @@ function parseHash(h: string): { tab: Tab; spacesView: SpacesView; autoAdd: bool
   }
   if (h === "#tab-schedules") return { tab: "schedules", spacesView: "explorer", autoAdd: false };
   if (h === "#tab-rooms") return { tab: "rooms", spacesView: "explorer", autoAdd: false };
+  if (h === "#tab-matrix") return { tab: "matrix", spacesView: "explorer", autoAdd: false };
   return { tab: "map", spacesView: "explorer", autoAdd: false };
 }
 
@@ -323,9 +326,9 @@ export function MapsApp() {
           <>
             <h1>Max <span>Schedules</span></h1>
             <nav className="ptabs">
-              {(["map", "rooms", "schedules"] as Tab[]).map((t) => (
+              {(["map", "rooms", "schedules", "matrix"] as Tab[]).map((t) => (
                 <button key={t} className={tab === t ? "on" : ""} onClick={() => go("hub:" + t)}>
-                  {t === "map" ? "Map" : t === "rooms" ? "Rooms" : "Schedules"}
+                  {t === "map" ? "Map" : t === "rooms" ? "Rooms" : t === "schedules" ? "Schedules" : "Matrix"}
                 </button>
               ))}
             </nav>
@@ -341,7 +344,7 @@ export function MapsApp() {
             autoPlan={planCal ? "calibrate" : planRead ? "choice" : undefined} />
           <button className="pbtn primary" onClick={() => openEditor(null)}>＋ Add Room</button>
         </>}
-        {(tab === "map" || tab === "rooms" || tab === "schedules") && (
+        {(tab === "map" || tab === "rooms" || tab === "schedules" || tab === "matrix") && (
           <button className="pbtn" onClick={() => setReport(true)}>⚠ Unassigned Tasks</button>
         )}
       </header>
@@ -361,7 +364,7 @@ export function MapsApp() {
             <Sel label="Coverage" v={filters.coverage ?? ""} on={(v) => setFilters({ ...filters, coverage: v })}
               opts={[["unscheduled", "Unscheduled rooms"], ["untasked", "Has unscheduled tasks"], ["complete", "Fully scheduled"]]} />
             <Sel label="Shift" v={filters.shift ?? ""} on={(v) => setFilters({ ...filters, shift: v })}
-              opts={["1st Shift", "2nd Shift", "3rd Shift"].map((s) => [s, s])} />
+              opts={["1st Shift", "2nd Shift", "3rd Shift", "Split Shift"].map((s) => [s, s])} />
             <button className={"pbtn small" + (deptOutline ? " primary" : "")}
               onClick={() => setDeptOutline(!deptOutline)}>🏛 Dept outlines</button>
           </>}
@@ -614,6 +617,13 @@ export function MapsApp() {
           <SchedulesTab data={data} rules={rules} schedules={schedules} employees={employees}
             commit={commit} onPrint={setPrintId}
             onOpenOnMap={(id) => { setSchedSel(id); go("hub:map"); }} />
+        )}
+
+        {tab === "matrix" && (
+          <ScheduleMatrix data={data} rules={rules} schedules={schedules}
+            onPrint={setPrintId}
+            onOpenOnMap={(id) => { setSchedSel(id); go("hub:map"); }}
+            onOpenList={() => go("hub:schedules")} />
         )}
 
         {tab === "scope" && (
@@ -1063,7 +1073,7 @@ function AddToScheduleBlock({ space, rules, schedules, cov, req, commit, addOpen
               <input autoFocus placeholder="Schedule name (e.g. East Wing — Days)" value={draft.name}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
               <select value={draft.shift} onChange={(e) => setDraft({ ...draft, shift: e.target.value })}>
-                <option>1st Shift</option><option>2nd Shift</option><option>3rd Shift</option>
+                <option>1st Shift</option><option>2nd Shift</option><option>3rd Shift</option><option>Split Shift</option>
               </select>
               <div className="colorrow">
                 <span>Color:</span>
@@ -1301,7 +1311,7 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
         <input placeholder="New schedule name (e.g. East Wing — Daily)" value={draft.name}
           onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
         <select value={draft.shift} onChange={(e) => setDraft({ ...draft, shift: e.target.value })}>
-          <option>1st Shift</option><option>2nd Shift</option><option>3rd Shift</option>
+          <option>1st Shift</option><option>2nd Shift</option><option>3rd Shift</option><option>Split Shift</option>
         </select>
         <select value={draft.employeeId} onChange={(e) => setDraft({ ...draft, employeeId: e.target.value })}
           title="Optional — you can hand the schedule to a worker any time">
@@ -2261,7 +2271,7 @@ function SideNav({ tab, go }: { tab: Tab; go: (token: string) => void }) {
   const items: { ico: string; label: string; token: string; on?: boolean }[] = [
     { ico: "home", label: "Dashboard", token: "classic:Dashboard" },
     { ico: "layers", label: "Max Space", token: "hub:spaces/explorer", on: tab === "spaces" },
-    { ico: "calendar", label: "Max Schedules", token: "hub:map", on: tab === "map" || tab === "rooms" || tab === "schedules" },
+    { ico: "calendar", label: "Max Schedules", token: "hub:map", on: tab === "map" || tab === "rooms" || tab === "schedules" || tab === "matrix" },
     { ico: "machine", label: "Max Floor Care", token: "hub:floorcare", on: tab === "floorcare" },
     { ico: "cart", label: "Max Sanitation", token: "hub:sanitation", on: tab === "sanitation" },
     { ico: "bell", label: "Max Policing", token: "hub:policing", on: tab === "policing" },

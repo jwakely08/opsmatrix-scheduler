@@ -59,6 +59,7 @@ describe("token → hash mapping", () => {
     expect(hubHashFor("hub:map")).toBe("#");
     expect(hubHashFor("hub:schedules")).toBe("#tab-schedules");
     expect(hubHashFor("hub:rooms")).toBe("#tab-rooms");
+    expect(hubHashFor("hub:matrix")).toBe("#tab-matrix");
     expect(hubHashFor("hub:spaces/explorer")).toBe("#spaces?view=explorer");
     expect(hubHashFor("hub:spaces/list")).toBe("#spaces?view=list");
     expect(hubHashFor("hub:spaces/map")).toBe("#spaces?view=map");

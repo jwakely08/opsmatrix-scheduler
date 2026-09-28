@@ -5,7 +5,7 @@
 //
 // Entries are plain strings:
 //   "classic:<sidebar label>"  — a page inside classic.html (e.g. "classic:Max Team")
-//   "hub:<view>"               — a maps.html view: map | rooms | schedules |
+//   "hub:<view>"               — a maps.html view: map | rooms | schedules | matrix |
 //                                spaces/explorer | spaces/list | spaces/map |
 //                                scope | workload | floorcare
 //
@@ -53,7 +53,7 @@ export function navBack(): string | null {
 /** hub token → the maps.html hash that shows that view */
 export function hubHashFor(token: string): string {
   const v = token.replace(/^hub:/, "");
-  if (v === "map" || v === "schedules" || v === "rooms") return "#" + (v === "map" ? "" : "tab-" + v);
+  if (v === "map" || v === "schedules" || v === "rooms" || v === "matrix") return "#" + (v === "map" ? "" : "tab-" + v);
   if (v.startsWith("spaces")) {
     const sub = v.split("/")[1] ?? "explorer";
     return "#spaces?view=" + sub;
