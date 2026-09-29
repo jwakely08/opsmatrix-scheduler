@@ -8,7 +8,7 @@
 import React, { useMemo, useRef, useState } from "react";
 import {
   scopeSpaces, scopeLabel, exportFilename,
-  reimportRows, dataExportRows, schedulesExportRows,
+  reimportRows, dataExportRows, schedulesWorkbookSheets,
   type ExportScope, type Cell
 } from "./exportData";
 import { loadSheetJs } from "./sheetFile";
@@ -176,17 +176,27 @@ export function ExportApp({ data, rules, commit }: {
     try {
       const XLSX = await loadSheetJs();
       const wb = XLSX.utils.book_new();
-      const rows = kind === "data" ? dataExportRows(data, scope)
-        : kind === "schedules" ? schedulesExportRows(data, rules)
-          : reimportRows(data, scope);
+      if (kind === "schedules") {
+        const sheets = schedulesWorkbookSheets(data, rules);
+        for (const sh of sheets) {
+          const ws = XLSX.utils.aoa_to_sheet(sh.rows);
+          ws["!cols"] = fitColumns(sh.rows);
+          XLSX.utils.book_append_sheet(wb, ws, sh.name);
+        }
+        const name = exportFilename(data, scope, kind);
+        XLSX.writeFile(wb, name);
+        const nSched = (data.v7.schedules ?? []).length;
+        const nStops = sheets[1].rows.length - 1;
+        setMsg(`✓ ${name} downloaded — ${nSched} schedule${nSched === 1 ? "" : "s"}, ${nStops} room stop${nStops === 1 ? "" : "s"}, ${sheets.length} sheets.`);
+        return;
+      }
+      const rows = kind === "data" ? dataExportRows(data, scope) : reimportRows(data, scope);
       const ws = XLSX.utils.aoa_to_sheet(rows);
       ws["!cols"] = fitColumns(rows);
-      XLSX.utils.book_append_sheet(wb, ws, kind === "schedules" ? "Schedules" : "Rooms");
+      XLSX.utils.book_append_sheet(wb, ws, "Rooms");
       const name = exportFilename(data, scope, kind);
       XLSX.writeFile(wb, name);
-      setMsg(kind === "schedules"
-        ? `✓ ${name} downloaded — ${(data.v7.schedules ?? []).length} schedule${(data.v7.schedules ?? []).length === 1 ? "" : "s"}, ${rows.length - 1} rows.`
-        : `✓ ${name} downloaded — ${selected.length} room${selected.length === 1 ? "" : "s"}.`);
+      setMsg(`✓ ${name} downloaded — ${selected.length} room${selected.length === 1 ? "" : "s"}.`);
     } catch (e) {
       setMsg("⚠ " + String((e as Error)?.message ?? e));
     }
@@ -254,10 +264,11 @@ export function ExportApp({ data, rules, commit }: {
       <button className="upltile" onClick={() => download("schedules")}>
         <b>🗓 Schedules export — Excel</b>
         <span>
-          Every schedule as raw rows — one row per room stop, in cleaning order: schedule,
-          shift, worker, start time, room, department, tasks for that visit and the minutes.
-          Made for handing to another system (a client's facilities database, their
-          digitization partner) — no totals, no formatting, just the data.
+          Everything another system needs to re-create your schedules, as raw rows across
+          five sheets: each schedule's shift hours, days and worker; every room stop in
+          cleaning order with start and end times; how long EACH task takes in each room;
+          discharges and other schedule-level work; and the breaks. Made for handing to a
+          client's facilities database or their digitization partner — no formatting, just data.
         </span>
       </button>
       {msg && <p className={msg.startsWith("⚠") ? "warntext" : "pnote keysaved"}>{msg}</p>}
