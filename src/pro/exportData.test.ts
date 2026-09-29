@@ -190,3 +190,46 @@ describe("new importer column smarts", () => {
     expect(normalizeFloorType(noAliases, "Carpet")).toBe("Carpet");
   });
 });
+
+// ── the schedules export: raw rows for another system ──────────────────────
+import { schedulesExportRows, SCHEDULES_EXPORT_HEADERS } from "./exportData";
+import { createSchedule } from "./classicStore";
+
+describe("the schedules export (raw rows a client's system can ingest)", () => {
+  it("one row per room stop, in cleaning order, with tasks and minutes", () => {
+    const d = fixture();
+    const s = createSchedule(d, "EVS 1 — East Wing Daily", "1st Shift", "");
+    s.spaceOrder = ["sp-manual", "sp-cad"]; // the tap order IS the route
+    // what a map tap writes: this schedule owns each room's base clean
+    s.roomTasks = { "sp-manual": ["general-cleaning"], "sp-cad": ["general-cleaning"] };
+    const rows = schedulesExportRows(d, rules);
+    expect(rows[0]).toEqual([...SCHEDULES_EXPORT_HEADERS]);
+    expect(rows.length).toBe(3);
+    const [r1, r2] = [rows[1], rows[2]];
+    expect(r1[1]).toBe("EVS 1 — East Wing Daily");
+    expect(r1[6]).toBe(1);                 // stop # follows the tap order
+    expect(r1[8]).toBe("E2-2040");         // first-tapped room first
+    expect(r2[6]).toBe(2);
+    expect(r2[8]).toBe("E1-1000");
+    expect(String(r1[16])).toMatch(/General Clean/); // tasks for this visit
+    expect(typeof r1[17]).toBe("number");  // minutes are numbers, not text
+    expect(r1[12]).toBe("EVS");            // the designations ride along
+    expect(r2[12]).toBe("Oncology (7 East)");
+    expect(r2[14]).toBe(1433);             // square feet as a number
+  });
+
+  it("schedule-level tasks (discharges) land as rows without a room", () => {
+    const d = fixture();
+    const s = createSchedule(d, "EVS 2", "2nd Shift", "");
+    d.nonSpace.push({ id: "ns1", name: "Discharge cleans", hours: 1.5, scheduleId: s.id, roomIds: [] });
+    const rows = schedulesExportRows(d, rules);
+    const t = rows.find((r) => String(r[16]).includes("Discharge"));
+    expect(t).toBeTruthy();
+    expect(t![8]).toBe("");                // no room — it's schedule-level work
+    expect(t![17]).toBe(90);               // 1.5h → 90 minutes
+  });
+
+  it("no schedules → just the header row", () => {
+    expect(schedulesExportRows(fixture(), rules).length).toBe(1);
+  });
+});
