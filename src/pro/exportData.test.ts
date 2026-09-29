@@ -191,45 +191,108 @@ describe("new importer column smarts", () => {
   });
 });
 
-// ── the schedules export: raw rows for another system ──────────────────────
-import { schedulesExportRows, SCHEDULES_EXPORT_HEADERS } from "./exportData";
+// ── the schedules export: a raw workbook another system can re-create ─────
+import {
+  schedulesWorkbookSheets, SCHEDULES_SHEET_HEADERS, STOPS_SHEET_HEADERS,
+  TASK_MINUTES_HEADERS, BREAKS_HEADERS
+} from "./exportData";
 import { createSchedule } from "./classicStore";
 
-describe("the schedules export (raw rows a client's system can ingest)", () => {
-  it("one row per room stop, in cleaning order, with tasks and minutes", () => {
+const sheetByName = (d: ClassicData) => {
+  const out = new Map(schedulesWorkbookSheets(d, rules).map((s) => [s.name, s.rows]));
+  return out;
+};
+
+describe("the schedules workbook (raw data to re-create the schedule elsewhere)", () => {
+  const build = () => {
     const d = fixture();
     const s = createSchedule(d, "EVS 1 — East Wing Daily", "1st Shift", "");
     s.spaceOrder = ["sp-manual", "sp-cad"]; // the tap order IS the route
-    // what a map tap writes: this schedule owns each room's base clean
-    s.roomTasks = { "sp-manual": ["general-cleaning"], "sp-cad": ["general-cleaning"] };
-    const rows = schedulesExportRows(d, rules);
-    expect(rows[0]).toEqual([...SCHEDULES_EXPORT_HEADERS]);
+    // what taps write: this schedule owns each room's base clean; the exam
+    // room also gets High Dusting on this schedule
+    s.roomTasks = {
+      "sp-manual": ["general-cleaning", "high-dusting"],
+      "sp-cad": ["general-cleaning"]
+    };
+    s.days = [1, 2, 3, 4, 5];
+    return { d, s };
+  };
+
+  it("five sheets, joined by Schedule #", () => {
+    const { d } = build();
+    const sheets = schedulesWorkbookSheets(d, rules);
+    expect(sheets.map((s) => s.name)).toEqual(
+      ["Schedules", "Room Stops", "Task Minutes", "Schedule Tasks", "Breaks"]);
+    for (const sh of sheets) expect(sh.rows.length).toBeGreaterThan(0);
+  });
+
+  it("Schedules sheet: shift hours, days, target and totals", () => {
+    const { d } = build();
+    const rows = sheetByName(d).get("Schedules")!;
+    expect(rows[0]).toEqual([...SCHEDULES_SHEET_HEADERS]);
+    const r = rows[1];
+    expect(r[1]).toBe("EVS 1 — East Wing Daily");
+    expect(r[5]).toBe("Mon Tue Wed Thu Fri");
+    expect(r[7]).toBe(8);                          // target hours
+    expect(r[8]).toBe(2);                          // room stops
+    expect(typeof r[12]).toBe("number");           // total est. minutes
+  });
+
+  it("Room Stops: tap order, timed start→end, designations riding along", () => {
+    const { d } = build();
+    const rows = sheetByName(d).get("Room Stops")!;
+    expect(rows[0]).toEqual([...STOPS_SHEET_HEADERS]);
     expect(rows.length).toBe(3);
-    const [r1, r2] = [rows[1], rows[2]];
-    expect(r1[1]).toBe("EVS 1 — East Wing Daily");
-    expect(r1[6]).toBe(1);                 // stop # follows the tap order
-    expect(r1[8]).toBe("E2-2040");         // first-tapped room first
-    expect(r2[6]).toBe(2);
-    expect(r2[8]).toBe("E1-1000");
-    expect(String(r1[16])).toMatch(/General Clean/); // tasks for this visit
-    expect(typeof r1[17]).toBe("number");  // minutes are numbers, not text
-    expect(r1[12]).toBe("EVS");            // the designations ride along
-    expect(r2[12]).toBe("Oncology (7 East)");
-    expect(r2[14]).toBe(1433);             // square feet as a number
+    const [r1x, r2x] = [rows[1], rows[2]];
+    expect(r1x[2]).toBe(1);                        // stop # follows tap order
+    expect(r1x[5]).toBe("E2-2040");                // first-tapped room first
+    expect(r2x[5]).toBe("E1-1000");
+    expect(String(r1x[13])).toMatch(/General Clean/);
+    expect(String(r1x[13])).toMatch(/High Dusting/);
+    expect(r1x[9]).toBe("EVS");                    // department
+    expect(typeof r1x[14]).toBe("number");         // minutes
+    // end time = start time + the stop's minutes (the next stop starts there)
+    expect(r1x[4]).toBe(r2x[3]);
   });
 
-  it("schedule-level tasks (discharges) land as rows without a room", () => {
-    const d = fixture();
-    const s = createSchedule(d, "EVS 2", "2nd Shift", "");
-    d.nonSpace.push({ id: "ns1", name: "Discharge cleans", hours: 1.5, scheduleId: s.id, roomIds: [] });
-    const rows = schedulesExportRows(d, rules);
-    const t = rows.find((r) => String(r[16]).includes("Discharge"));
-    expect(t).toBeTruthy();
-    expect(t![8]).toBe("");                // no room — it's schedule-level work
-    expect(t![17]).toBe(90);               // 1.5h → 90 minutes
+  it("Task Minutes: one row per task per stop — how long EACH task takes", () => {
+    const { d } = build();
+    const rows = sheetByName(d).get("Task Minutes")!;
+    expect(rows[0]).toEqual([...TASK_MINUTES_HEADERS]);
+    const stop1 = rows.filter((r) => r[1] === 1);
+    const names = stop1.map((r) => String(r[3]));
+    expect(names).toContain("General Clean");
+    expect(names).toContain("High Dusting");
+    // 180 carpet sqft: general = 180/40 = 4.5m, high dusting = 180/120 = 1.5m
+    const gc = stop1.find((r) => r[3] === "General Clean")!;
+    const hd = stop1.find((r) => r[3] === "High Dusting")!;
+    expect(gc[4]).toBe(4.5);
+    expect(hd[4]).toBe(1.5);
+    // and the task rows sum to the stop's total (top-up row included if any)
+    const stops = sheetByName(d).get("Room Stops")!;
+    const total = Number(stops[1][14]);
+    const sum = stop1.reduce((a, r) => a + Number(r[4]), 0);
+    expect(Math.abs(sum - total)).toBeLessThan(0.6);
   });
 
-  it("no schedules → just the header row", () => {
-    expect(schedulesExportRows(fixture(), rules).length).toBe(1);
+  it("Schedule Tasks: discharges with count and minutes; Breaks with windows", () => {
+    const { d, s } = build();
+    d.nonSpace.push({ id: "ns1", name: "Discharge cleans", hours: 0, scheduleId: s.id, roomIds: ["sp-cad"], count: 4, minutesPer: 25 } as never);
+    const sheets = sheetByName(d);
+    const ns = sheets.get("Schedule Tasks")!;
+    const row = ns.find((r) => String(r[1]).includes("Discharge"))!;
+    expect(row[2]).toBe(4);                        // count
+    expect(row[3]).toBe(100);                      // 4 × 25 min
+    expect(String(row[4])).toBe("E1-1000");        // linked room by number
+    const breaks = sheets.get("Breaks")!;
+    expect(breaks[0]).toEqual([...BREAKS_HEADERS]);
+    expect(breaks.length).toBeGreaterThan(1);      // shifts carry breaks
+    expect(typeof breaks[1][5]).toBe("number");    // after-stop marker
+  });
+
+  it("no schedules → headers only, on every sheet", () => {
+    for (const sh of schedulesWorkbookSheets(fixture(), rules)) {
+      expect(sh.rows.length).toBe(1);
+    }
   });
 });
