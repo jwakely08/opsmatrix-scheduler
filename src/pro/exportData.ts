@@ -10,10 +10,17 @@
 //     identity) with nothing invented and nothing lost.
 // Row building is pure so the round trip is provable by test; the UI layer
 // (ExportApp) only feeds these rows to SheetJS.
+//   • SCHEDULES EXPORT — the schedules as raw rows (one row per room stop,
+//     in cleaning order, plus schedule-level tasks), so a client's own
+//     system — or the partner digitizing their facilities data — can ingest
+//     who cleans what, when, with which tasks and minutes. Raw on purpose:
+//     no totals, no formatting, just columns.
 import {
   spacePriority, PRIORITY_NUM,
   type ClassicData, type ClassicSpace
 } from "./classicStore";
+import { buildScheduleDoc } from "./scheduleDoc";
+import type { Rules } from "./rules";
 
 const txt = (v: unknown) => String(v ?? "").trim();
 export type Cell = string | number;
@@ -53,8 +60,9 @@ export function scopeLabel(data: ClassicData, scope: ExportScope): string {
   return parts.length ? parts.join(" · ") : "Everything";
 }
 
-export function exportFilename(data: ClassicData, scope: ExportScope, kind: "data" | "reimport"): string {
+export function exportFilename(data: ClassicData, scope: ExportScope, kind: "data" | "reimport" | "schedules"): string {
   const day = new Date().toISOString().slice(0, 10);
+  if (kind === "schedules") return `opsmatrix-schedules-${day}.xlsx`;
   const slug = scopeLabel(data, scope).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "all";
   return `opsmatrix-${kind === "data" ? "export" : "reimport"}-${slug}-${day}.xlsx`;
 }
@@ -143,6 +151,46 @@ export function dataExportRows(data: ClassicData, scope: ExportScope): Cell[][] 
       PRIORITY_NUM[spacePriority(sp)],
       txt(src?.key) || sp.id
     ]);
+  }
+  return rows;
+}
+
+// ── the SCHEDULES shape ─────────────────────────────────────────────────────
+// One row per room stop, in the order the rooms are cleaned (the same order
+// the printed sheet uses), then one row per schedule-level task (discharges,
+// project work). Times, tasks and minutes come from the same engine as the
+// map and the printed sheet, so the file always matches what's on screen.
+
+export const SCHEDULES_EXPORT_HEADERS = [
+  "Schedule #", "Schedule Name", "Shift", "Shift Start", "Shift End", "Worker",
+  "Stop #", "Start Time", "Room Number", "Room Name", "Building", "Floor",
+  "Department", "Room Type", "Square Feet", "Priority (1-3)",
+  "Tasks This Visit", "Est. Minutes"
+] as const;
+
+export function schedulesExportRows(data: ClassicData, rules: Rules): Cell[][] {
+  const rows: Cell[][] = [[...SCHEDULES_EXPORT_HEADERS]];
+  const spaces = data.v7.spaces ?? [];
+  const byId = new Map(spaces.map((sp) => [sp.id, sp]));
+  for (const sched of data.v7.schedules ?? []) {
+    const doc = buildScheduleDoc(data, rules, sched);
+    const head: Cell[] = [
+      txt(doc.num), txt(doc.name), txt(doc.shift), txt(doc.shiftStart),
+      txt(doc.shiftEnd), txt(sched.employee)
+    ];
+    for (const r of doc.rows) {
+      const sp = byId.get(r.spaceId);
+      rows.push([
+        ...head, r.order, r.startTime, txt(r.roomNumber), txt(r.roomName),
+        txt(sp?.building), txt(sp?.floor), txt(sp?.department), txt(r.roomType),
+        Number(sp?.squareFeet) || "", PRIORITY_NUM[r.priority],
+        r.tasks.join(" + "), r.minutes
+      ]);
+    }
+    // schedule-level tasks (discharges, project work) — no room, still work
+    for (const t of doc.nonSpace) {
+      rows.push([...head, "", "", "", "", "", "", "", "", "", "", txt(t.name), t.minutes]);
+    }
   }
   return rows;
 }

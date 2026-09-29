@@ -8,7 +8,7 @@
 import React, { useMemo, useRef, useState } from "react";
 import {
   scopeSpaces, scopeLabel, exportFilename,
-  reimportRows, dataExportRows,
+  reimportRows, dataExportRows, schedulesExportRows,
   type ExportScope, type Cell
 } from "./exportData";
 import { loadSheetJs } from "./sheetFile";
@@ -168,19 +168,25 @@ export function ExportApp({ data, rules, commit }: {
   const inF = (sp: ClassicSpace) => inB(sp) && (!floor || txt(sp.floor) === floor);
   const inD = (sp: ClassicSpace) => inF(sp) && (!department || txt(sp.department) === department);
 
-  async function download(kind: "data" | "reimport") {
-    if (!selected.length) { setMsg("⚠ Nothing to export — this selection has no rooms."); return; }
+  async function download(kind: "data" | "reimport" | "schedules") {
+    if (kind === "schedules") {
+      if (!(data.v7.schedules ?? []).length) { setMsg("⚠ No schedules yet — build one in Max Schedules first."); return; }
+    } else if (!selected.length) { setMsg("⚠ Nothing to export — this selection has no rooms."); return; }
     setMsg("Building the file…");
     try {
       const XLSX = await loadSheetJs();
       const wb = XLSX.utils.book_new();
-      const rows = kind === "data" ? dataExportRows(data, scope) : reimportRows(data, scope);
+      const rows = kind === "data" ? dataExportRows(data, scope)
+        : kind === "schedules" ? schedulesExportRows(data, rules)
+          : reimportRows(data, scope);
       const ws = XLSX.utils.aoa_to_sheet(rows);
       ws["!cols"] = fitColumns(rows);
-      XLSX.utils.book_append_sheet(wb, ws, "Rooms");
+      XLSX.utils.book_append_sheet(wb, ws, kind === "schedules" ? "Schedules" : "Rooms");
       const name = exportFilename(data, scope, kind);
       XLSX.writeFile(wb, name);
-      setMsg(`✓ ${name} downloaded — ${selected.length} room${selected.length === 1 ? "" : "s"}.`);
+      setMsg(kind === "schedules"
+        ? `✓ ${name} downloaded — ${(data.v7.schedules ?? []).length} schedule${(data.v7.schedules ?? []).length === 1 ? "" : "s"}, ${rows.length - 1} rows.`
+        : `✓ ${name} downloaded — ${selected.length} room${selected.length === 1 ? "" : "s"}.`);
     } catch (e) {
       setMsg("⚠ " + String((e as Error)?.message ?? e));
     }
@@ -243,6 +249,15 @@ export function ExportApp({ data, rules, commit }: {
           Columns in OpsMatrix's own import format. Upload it back through ⬆ Import (here or in
           another OpsMatrix) and every row lands on the right room — updated, never duplicated,
           and never overwriting a manager's newer edits.
+        </span>
+      </button>
+      <button className="upltile" onClick={() => download("schedules")}>
+        <b>🗓 Schedules export — Excel</b>
+        <span>
+          Every schedule as raw rows — one row per room stop, in cleaning order: schedule,
+          shift, worker, start time, room, department, tasks for that visit and the minutes.
+          Made for handing to another system (a client's facilities database, their
+          digitization partner) — no totals, no formatting, just the data.
         </span>
       </button>
       {msg && <p className={msg.startsWith("⚠") ? "warntext" : "pnote keysaved"}>{msg}</p>}
