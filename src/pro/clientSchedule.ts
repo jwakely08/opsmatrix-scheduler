@@ -60,6 +60,11 @@ export function windowLabel(start: string, minutes: number): string {
   return `${fmt12(start)}-${fmt12(addMinutes(start, minutes))}`;
 }
 
+/** one Break Schedule window as the header prints it — "11:15-12:00 (unpaid)" */
+export function windowText(w: BreakWindow): string {
+  return windowLabel(w.start, w.minutes) + (w.unpaid ? " (unpaid)" : "");
+}
+
 const DAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -204,13 +209,13 @@ export function planClientPages(input: ClientExportInput): ClientPagePlan {
   const lunch = input.windows.find((w) => w.kind === "lunch");
   if (breaks.length) {
     head.push(
-      { ref: "B5", text: breaks.map((b) => windowLabel(b.start, b.minutes)).join(", ") },
+      { ref: "B5", text: breaks.map(windowText).join(", ") },
       { ref: "A18", serial: excelSerial(breaks[0].start) }
     );
   }
   if (lunch) {
     head.push(
-      { ref: "B6", text: windowLabel(lunch.start, lunch.minutes) },
+      { ref: "B6", text: windowText(lunch) },
       { ref: "A25", serial: excelSerial(lunch.start) }
     );
   }

@@ -61,6 +61,19 @@ describe("per-section save isolation", () => {
     const brOnly = saveSection(saved, draft, "breaks");
     expect((brOnly.breaks ?? []).length).toBe(0);
   });
+
+  it("the cleaning procedure saves on its own", () => {
+    const saved = defaultRules();
+    const draft = clone(saved);
+    draft.procedure.steps[0].title = "Knock and announce";
+    draft.procedure.example = false;
+    draft.breaks = [];
+    expect(sectionDirty(saved, draft, "procedure")).toBe(true);
+    const next = saveSection(saved, draft, "procedure");
+    expect(next.procedure.steps[0].title).toBe("Knock and announce");
+    expect(next.procedure.example).toBe(false);
+    expect((next.breaks ?? []).length).toBe((saved.breaks ?? []).length);
+  });
 });
 
 describe("floor-care scheduling split", () => {

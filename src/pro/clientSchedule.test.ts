@@ -3,7 +3,7 @@
 // serial convention, and overflow rolls to page 2. Pure over XML strings.
 import { describe, it, expect } from "vitest";
 import {
-  excelSerial, addMinutes, fmt12, hoursLabel, windowLabel, daysLabel,
+  excelSerial, addMinutes, fmt12, hoursLabel, windowLabel, windowText, daysLabel,
   patchSheetXml, planClientPages, ASSIGNMENT_SLOTS
 } from "./clientSchedule";
 import { crc32, zipStore, utf8 } from "./xlsxZip";
@@ -32,6 +32,8 @@ describe("header labels", () => {
   it("break and lunch windows", () => {
     expect(windowLabel("9:00", 15)).toBe("9:00-9:15");
     expect(windowLabel("11:15", 45)).toBe("11:15-12:00");
+    expect(windowText({ kind: "lunch", start: "11:15", minutes: 45, unpaid: true })).toBe("11:15-12:00 (unpaid)");
+    expect(windowText({ kind: "break", start: "9:00", minutes: 15 })).toBe("9:00-9:15");
   });
 
   it("addMinutes wraps cleanly", () => {

@@ -53,6 +53,25 @@ describe("non-space defs and qualifiers", () => {
     expect(custom.qualifierIds).toEqual([]);
   });
 
+  it("cart setup and teardown are built in, pinned to the start and end of the shift", () => {
+    const r = defaultRules();
+    expect(r.nonSpaceDefs.find((d) => d.id === "cart-setup")).toMatchObject({ minutes: 15, position: "start" });
+    expect(r.nonSpaceDefs.find((d) => d.id === "cart-teardown")).toMatchObject({ minutes: 15, position: "end" });
+    expect(r.nonSpaceDefs.find((d) => d.id === "discharge")!.position).toBeUndefined();
+  });
+
+  it("cart defs saved before positions existed pick them up; a manager's choice stays", () => {
+    const r = defaultRules() as unknown as { nonSpaceDefs: Record<string, unknown>[] };
+    r.nonSpaceDefs = [
+      { id: "cart-setup", label: "Cart Setup", defaultHours: 0.25, minutes: 15, qualifierIds: [] },
+      { id: "cart-teardown", label: "Cart Teardown", defaultHours: 0.25, minutes: 15, qualifierIds: [], position: "anytime" }
+    ];
+    localStorage.setItem(RULES_KEY, JSON.stringify(r));
+    const loaded = loadRules();
+    expect(loaded.nonSpaceDefs.find((d) => d.id === "cart-setup")!.position).toBe("start");
+    expect(loaded.nonSpaceDefs.find((d) => d.id === "cart-teardown")!.position).toBe("anytime");
+  });
+
   it("counted schedule entries multiply out; legacy entries keep their hour block", () => {
     expect(nonSpaceTaskMinutes({ id: "a", name: "Discharges", hours: 0, scheduleId: "s", roomIds: [], count: 5, minutesPer: 45 })).toBe(225);
     expect(nonSpaceTaskMinutes({ id: "b", name: "Old Route", hours: 2, scheduleId: "s", roomIds: [] })).toBe(120);
@@ -79,6 +98,32 @@ describe("deleted built-ins stay deleted", () => {
     for (const d of r.nonSpaceDefs) d.qualifierIds = [];
     saveRules(r);
     expect(loadRules().nonSpaceQualifiers).toEqual([]);
+  });
+});
+
+describe("the cleaning procedure", () => {
+  it("starts as the labeled 7-step example", () => {
+    const p = defaultRules().procedure;
+    expect(p.example).toBe(true);
+    expect(p.show).toBe(true);
+    expect(p.steps.map((s) => s.title)).toEqual([
+      "Empty trash", "High dust", "Damp wipe / disinfect", "Spot clean",
+      "Clean the restroom", "Dust mop", "Damp mop"
+    ]);
+  });
+
+  it("an account saved before the procedure existed gets the example", () => {
+    const r = defaultRules() as unknown as Record<string, unknown>;
+    delete r.procedure;
+    localStorage.setItem(RULES_KEY, JSON.stringify(r));
+    expect(loadRules().procedure.example).toBe(true);
+  });
+
+  it("the facility's own steps and the hide switch survive a reload", () => {
+    const r = defaultRules();
+    r.procedure = { steps: [{ title: "Knock and announce" }], show: false, example: false };
+    saveRules(r);
+    expect(loadRules().procedure).toEqual({ steps: [{ title: "Knock and announce" }], show: false, example: false });
   });
 });
 

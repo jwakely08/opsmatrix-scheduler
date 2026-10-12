@@ -9,7 +9,7 @@
 import React, { useMemo, useState } from "react";
 import {
   type Rules, type RoomTypeRule, spaceCleanability, typeIdFromLabelStrict, gcFormula, gcFormulaText,
-  issaSourceLabel, includedTasksFor
+  issaSourceLabel, includedTasksFor, productiveFromScope, PAID_SHIFT_MINUTES
 } from "./rules";
 
 /** a room type's General Clean formula in words: "sq ft ÷ 2,150 sq ft/hr (ISSA Medical / clinical)" */
@@ -639,8 +639,19 @@ function AssumptionsTab({ rules, commitRules }: {
       <div className="wi-chart">
         <h3>Staffing</h3>
         <div className="pline"><span>Productive cleaning minutes per shift <small>(breaks and setup excluded)</small></span>
-          <input className="wi-num" type="number" min={60} step={5} defaultValue={rules.general.productiveMinutes}
+          <input key={rules.general.productiveMinutes} className="wi-num" type="number" min={60} step={5} defaultValue={rules.general.productiveMinutes}
             onBlur={(e) => setGeneral("productiveMinutes", e.target.value)} /></div>
+        {/* what Scope's breaks and start/end duties work out to — unpaid
+            breaks don't come out of it, they lengthen the day instead */}
+        {productiveFromScope(rules) !== rules.general.productiveMinutes && (
+          <p className="pnote">
+            From Scope: {PAID_SHIFT_MINUTES} paid min − paid breaks − start/end-of-shift duties
+            = <b>{productiveFromScope(rules)} min</b>.{" "}
+            <button className="plink" onClick={() => setGeneral("productiveMinutes", String(productiveFromScope(rules)))}>
+              Use {productiveFromScope(rules)}
+            </button>
+          </p>
+        )}
         <div className="pline"><span>Shifts one full-time employee works per week</span>
           <input className="wi-num" type="number" min={1} max={7} step={1} defaultValue={rules.general.shiftsPerWeekPerFte}
             onBlur={(e) => setGeneral("shiftsPerWeekPerFte", e.target.value)} /></div>

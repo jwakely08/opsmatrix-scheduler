@@ -261,7 +261,7 @@ export function schedulesWorkbookSheets(data: ClassicData, rules: Rules): NamedS
       }
     }
 
-    for (const t of doc.nonSpace) {
+    for (const t of [...doc.startDuties, ...doc.nonSpace, ...doc.endDuties]) {
       const raw = data.nonSpace.find((x) => x.id === t.id);
       nsRows.push([
         txt(doc.num), txt(raw?.name ?? t.name), Number(raw?.count) || "",

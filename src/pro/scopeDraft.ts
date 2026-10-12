@@ -6,7 +6,7 @@
 // tasks section owns everything else about a task.
 import type { Rules } from "./rules";
 
-export type ScopeSection = "general" | "roomTypes" | "tasks" | "nonSpace" | "breaks";
+export type ScopeSection = "general" | "roomTypes" | "tasks" | "nonSpace" | "breaks" | "procedure";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -21,6 +21,7 @@ function slice(r: Rules, section: ScopeSection): unknown {
     case "tasks": return r.tasks.map(({ autoFor: _a, ...rest }) => rest);
     case "nonSpace": return { defs: r.nonSpaceDefs, quals: r.nonSpaceQualifiers ?? [] };
     case "breaks": return { breaks: r.breaks ?? [], schedules: r.breakSchedules ?? [] };
+    case "procedure": return r.procedure ?? null;
   }
 }
 
@@ -61,6 +62,9 @@ export function saveSection(saved: Rules, draft: Rules, section: ScopeSection): 
     case "breaks":
       next.breaks = clone(draft.breaks ?? []);
       next.breakSchedules = clone(draft.breakSchedules ?? []);
+      break;
+    case "procedure":
+      next.procedure = clone(draft.procedure);
       break;
   }
   return next;
