@@ -12,12 +12,61 @@ export interface TaskRule {
   flatMin: number;
   /** room types that get this task automatically */
   autoFor: string[];
+  /**
+   * Floor types that get this task automatically, on top of autoFor (Josh,
+   * 2026-10-12: mopping on every hard floor, vacuuming on every carpet).
+   * Never applies to non-cleanable room types.
+   */
+  autoForFloor?: FloorKind[];
+  /** room types the floor rule skips (corridors: their floors are the floor crew's) */
+  floorSkipTypes?: string[];
   /** shown in the picker for manual adds */
   addable: boolean;
   /** floor-tech work: scheduled in Max Floor Care, not in Max Schedules */
   floorCare?: boolean;
   builtIn?: boolean;
 }
+
+/** the three floor types a room can have, as a task's floor trigger names them */
+export type FloorKind = "carpet" | "hard-finished" | "hard-unfinished";
+
+export const FLOOR_KINDS: { id: FloorKind; label: string }[] = [
+  { id: "carpet", label: "Carpet" },
+  { id: "hard-finished", label: "Hard floor — finished" },
+  { id: "hard-unfinished", label: "Hard floor — unfinished" }
+];
+
+/**
+ * A room's floor type as a FloorKind. Anything not carpet is hard floor, and
+ * a blank one reads as finished hard floor — what the room sidebar has always
+ * promised ("unset: prices as hard floor"), and Max Space flags it missing.
+ */
+export function floorKind(floorType: string | undefined): FloorKind {
+  const s = String(floorType ?? "").trim();
+  if (isCarpet(s)) return "carpet";
+  return /unfinished/i.test(s) ? "hard-unfinished" : "hard-finished";
+}
+
+/**
+ * Where a built-in floor task's starting rate comes from (ISSA 540 cleaning
+ * times). Shown in Scope while the task still uses that rate.
+ */
+export const FLOOR_TASK_SOURCES: Record<string, { sqftPerMin: number; source: string }> = {
+  "damp-mop": { sqftPerMin: 68.67, source: "ISSA 540 #429 — 18\" microfiber flat mop, single-use pad per room: 14.56 min per 1,000 sq ft (4,120 sq ft/hr)" },
+  vacuum: { sqftPerMin: 47.62, source: "ISSA 540 #280 — 14\" upright vacuum: 21 min per 1,000 sq ft (2,857 sq ft/hr)" }
+};
+
+/** the ISSA source line for a task still at its ISSA rate, else null */
+export function taskSourceLabel(t: TaskRule): string | null {
+  const src = FLOOR_TASK_SOURCES[t.id];
+  return src && t.sqftPerMin !== null && Math.abs(Number(t.sqftPerMin) - src.sqftPerMin) < 0.01 ? src.source : null;
+}
+
+/** the floor rule the built-in floor tasks start with (and pre-feature accounts get) */
+const FLOOR_TASK_DEFAULTS: Record<string, { autoForFloor: FloorKind[]; floorSkipTypes: string[] }> = {
+  "damp-mop": { autoForFloor: ["hard-finished", "hard-unfinished"], floorSkipTypes: ["corridor", "hallway"] },
+  vacuum: { autoForFloor: ["carpet"], floorSkipTypes: ["corridor", "hallway"] }
+};
 
 /**
  * How a room type builds its General Clean time (Josh, 2026-10-12):
@@ -414,6 +463,17 @@ export const FREQUENCIES = [
 
 export const RULES_KEY = "opsmatrix_fusion_rules";
 
+function floorRule(id: string): { autoForFloor: FloorKind[]; floorSkipTypes: string[] } {
+  const d = FLOOR_TASK_DEFAULTS[id];
+  return { autoForFloor: [...d.autoForFloor], floorSkipTypes: [...d.floorSkipTypes] };
+}
+
+/** the floor tasks' stock values before ISSA 540 (2026-10-12) — untouched ones move up */
+const OLD_FLOOR_TASK_RATES: Record<string, { label: string; sqftPerMin: number }> = {
+  "damp-mop": { label: "Mopping", sqftPerMin: 60 },
+  vacuum: { label: "Vacuuming", sqftPerMin: 55 }
+};
+
 export function defaultRules(): Rules {
   return {
     version: 2,
@@ -433,9 +493,12 @@ export function defaultRules(): Rules {
       { id: "trash-pull", label: "Trash Pull", sqftPerMin: null, flatMin: 2, autoFor: [], addable: true, builtIn: true },
       // mopping/vacuuming/trash are INCLUDED in every type's General Clean by
       // default (ISSA rates cover them); untick one on a type in Scope and it
-      // becomes an extra that adds its own time there
-      { id: "damp-mop", label: "Mopping", sqftPerMin: 60, flatMin: 0, autoFor: [], addable: true, builtIn: true },
-      { id: "vacuum", label: "Vacuuming", sqftPerMin: 55, flatMin: 0, autoFor: [], addable: true, builtIn: true }
+      // becomes an extra that adds its own time there — on every room of that
+      // type whose FLOOR matches (mop: hard floors, vacuum: carpet; corridors
+      // and hallways skipped, their floors are the floor crew's). Rates: ISSA
+      // 540 (FLOOR_TASK_SOURCES).
+      { id: "damp-mop", label: "Mopping", sqftPerMin: 68.67, flatMin: 0, autoFor: [], ...floorRule("damp-mop"), addable: true, builtIn: true },
+      { id: "vacuum", label: "Vacuuming", sqftPerMin: 47.62, flatMin: 0, autoFor: [], ...floorRule("vacuum"), addable: true, builtIn: true }
     ],
     // each type's General Clean formula — ISSA midpoints by default (2026-10-12)
     roomTypes: [
@@ -541,6 +604,16 @@ export function loadRules(): Rules {
       }
       // floor-care membership is structural, not a per-account edit
       if (t.floorCare) saved.floorCare = true;
+      // floor tasks saved before the floor trigger existed get the stock
+      // floor rule (an account that cleared it saved [] and keeps that), and
+      // an untouched stock rate moves to the ISSA 540 one
+      if (FLOOR_TASK_DEFAULTS[t.id]) {
+        const rule = floorRule(t.id);
+        if (!Array.isArray(saved.autoForFloor)) saved.autoForFloor = rule.autoForFloor;
+        if (!Array.isArray(saved.floorSkipTypes)) saved.floorSkipTypes = rule.floorSkipTypes;
+        const old = OLD_FLOOR_TASK_RATES[t.id];
+        if (saved.label === old.label && Number(saved.sqftPerMin) === old.sqftPerMin) saved.sqftPerMin = t.sqftPerMin;
+      }
       // accounts saved before the rename keep custom labels, but the old
       // DEFAULT labels move to the new defaults ("Dust Mop" → "Dust Mopping")
       if (saved.label === OLD_TASK_LABELS[t.id]) saved.label = t.label;
@@ -752,7 +825,7 @@ export function requiredTasks(rules: Rules, space: SpaceLike): string[] {
 export function rawSpaceTasks(rules: Rules, space: SpaceLike): string[] {
   const explicit = space.spaceTasks ?? space.fusionTasks;
   if (Array.isArray(explicit)) return explicit;
-  return autoTasksFor(rules, typeIdFromLabel(rules, space.roomType ?? ""));
+  return autoTasksForSpace(rules, space);
 }
 
 /** tasks a room lists that its type's General Clean already covers — flag these */
@@ -837,10 +910,45 @@ export function generalCleanLine(rules: Rules, space: SpaceLike): { text: string
   return { text: gcText(name, f, sqft), minutes: gcMinutes(f, sqft) };
 }
 
-/** extras a type may get: never one its General Clean already includes */
-export function autoTasksFor(rules: Rules, typeId: string): string[] {
+/**
+ * The extras a room gets automatically: the ones Scope gives its room type,
+ * plus the ones its FLOOR type triggers (an unset or omitted floor reads as
+ * hard floor, see floorKind). Never one its General Clean already includes.
+ */
+export function autoTasksFor(rules: Rules, typeId: string, floorType?: string): string[] {
   const included = includedTasksFor(rules, typeId);
-  return rules.tasks.filter((t) => t.autoFor.includes(typeId) && !included.includes(t.id)).map((t) => t.id);
+  return rules.tasks.filter((t) => ((t.autoFor ?? []).includes(typeId) || floorTriggers(rules, t, typeId, floorType))
+    && !included.includes(t.id)).map((t) => t.id);
+}
+
+/** autoTasksFor for a room as it stands: its type and its floor */
+export function autoTasksForSpace(rules: Rules, space: SpaceLike): string[] {
+  return autoTasksFor(rules, typeIdFromLabel(rules, space.roomType ?? ""), space.floorType);
+}
+
+/** does this room's floor give it task t? (cleanable types not on the task's skip list) */
+function floorTriggers(rules: Rules, t: TaskRule, typeId: string, floorType: string | undefined): boolean {
+  const kind = floorKind(floorType);
+  if (!(t.autoForFloor ?? []).includes(kind)) return false;
+  if ((t.floorSkipTypes ?? []).includes(typeId)) return false;
+  return rules.roomTypes.find((x) => x.id === typeId)?.cleanability !== "non-cleanable";
+}
+
+/**
+ * A room's task list after its floor type changes to nextFloorType: the
+ * automatic tasks the OLD floor gave it come off, the ones the NEW floor
+ * gives it go on (carpet → hard floor: Vacuuming out, Mopping in). Every
+ * other entry — manual adds, and manual removals the change doesn't touch —
+ * stays exactly as it was, so nothing duplicates and nothing a manager took
+ * off comes back unless the floor itself now calls for something new.
+ */
+export function tasksAfterFloorChange(rules: Rules, space: SpaceLike, nextFloorType: string | undefined): string[] {
+  const typeId = typeIdFromLabel(rules, space.roomType ?? "");
+  const before = autoTasksFor(rules, typeId, space.floorType);
+  const after = autoTasksFor(rules, typeId, nextFloorType);
+  const out = rawSpaceTasks(rules, space).filter((id) => !before.includes(id) || after.includes(id));
+  for (const id of after) if (!before.includes(id) && !out.includes(id)) out.push(id);
+  return out;
 }
 
 // ── our-vocab ↔ classic-vocab bridges (schedules store classic-friendly ids) ──

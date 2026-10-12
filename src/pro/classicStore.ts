@@ -13,7 +13,8 @@
 //   • space.assignedScheduleId mirrors the PRIMARY schedule for Classic.
 import {
   computeMinutes, requiredTasks, toClassicRoomTasks, fromClassicRoomTasks,
-  loadRules, autoTasksFor, typeIdFromLabel, typeIdFromLabelStrict, includedConflicts, ISSA_HELPER_TASK, type Rules
+  loadRules, autoTasksFor, tasksAfterFloorChange, typeIdFromLabel, typeIdFromLabelStrict, includedConflicts,
+  ISSA_HELPER_TASK, type Rules
 } from "./rules";
 import { resolvePendingRoomTypes, loadAliases } from "./roomListImport";
 
@@ -237,7 +238,20 @@ export function applyRoomType(space: ClassicSpace, typeId: string, rules: Rules)
   const rt = rules.roomTypes.find((x) => x.id === typeId);
   if (!rt) return;
   space.roomType = rt.label;
-  space.spaceTasks = autoTasksFor(rules, typeId);
+  space.spaceTasks = autoTasksFor(rules, typeId, space.floorType);
+  syncSpaceMinutes(space, rules);
+}
+
+/**
+ * Give a space a (new) floor type the whole way: the old floor's automatic
+ * tasks come off, the new floor's go on (tasksAfterFloorChange — manual
+ * edits the change doesn't touch stay), and the minutes recalculate. Every
+ * screen that changes a room's floor type comes through here.
+ */
+export function applyFloorType(space: ClassicSpace, floorType: string, rules: Rules) {
+  const next = fusionFloorLabel(floorType);
+  space.spaceTasks = tasksAfterFloorChange(rules, space, next);
+  space.floorType = next;
   syncSpaceMinutes(space, rules);
 }
 
@@ -282,9 +296,9 @@ export function refreshAutoTasks(spaces: ClassicSpace[], prev: Rules, next: Rule
     if (!Array.isArray(sp.spaceTasks)) continue; // legacy rooms follow autoFor live already
     const label = String(sp.roomType ?? "");
     if (!label.trim()) continue;
-    const prevAuto = autoTasksFor(prev, typeIdFromLabel(prev, label));
+    const prevAuto = autoTasksFor(prev, typeIdFromLabel(prev, label), sp.floorType);
     if (!sameSet(sp.spaceTasks, prevAuto)) continue; // hand-customized — keep it
-    const nextAuto = autoTasksFor(next, typeIdFromLabel(next, label));
+    const nextAuto = autoTasksFor(next, typeIdFromLabel(next, label), sp.floorType);
     if (!sameSet(sp.spaceTasks, nextAuto)) {
       sp.spaceTasks = nextAuto;
       changed++;

@@ -347,7 +347,7 @@ export {
 // the rules engine + retuning helpers, so Hey Max's fusion tools (injected
 // by fusion-ui.js) speak the SAME Scope rulebook as every other screen
 export {
-  loadRules, saveRules, computeMinutes, autoTasksFor, typeIdFromLabelStrict,
+  loadRules, saveRules, computeMinutes, autoTasksFor, tasksAfterFloorChange, typeIdFromLabelStrict,
   spaceCleanability, freqPerWeek, FREQUENCIES, gcFormula, gcFormulaText, issaSourceLabel, rateFromUnit,
   RATE_UNITS, includedTasksFor, resetToIssa, DEFAULT_INCLUDED_TASKS
 } from "../pro/rules";
