@@ -1,6 +1,8 @@
 # OpsMatrix — session bootstrap
 
-**Read `HANDOFF.md` (repo root) before doing anything else.** It is the complete, current project brief: architecture, data model, task-ownership concept, rules engine, geometry pipeline, demo seed, live links, and open items. This file is only the summary that gets you there.
+**Operating the app for Josh (imports, schedules, prints — not coding)? Read `OPERATOR.md` instead and follow it.**
+
+**Developing: read `HANDOFF.md` (repo root) before doing anything else.** It is the complete, current project brief: architecture, data model, task-ownership concept, rules engine, geometry pipeline, demo seed, live links, and open items. This file is only the summary that gets you there.
 
 ## What this is
 
