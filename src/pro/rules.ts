@@ -83,7 +83,49 @@ export interface NonSpaceDef {
   minutes: number;
   /** qualifiers added per occurrence (e.g. travel time) */
   qualifierIds: string[];
+  /**
+   * When in the shift it happens (Josh, 2026-10-12). "start" and "end"
+   * duties print as the first and last stops of the day (cart setup and
+   * teardown); "anytime" — or absent — is an ongoing duty worked around
+   * the rooms.
+   */
+  position?: DutyPosition;
   builtIn?: boolean;
+}
+
+export type DutyPosition = "start" | "end" | "anytime";
+
+/** one step of the account's cleaning procedure, printed above the room list */
+export interface ProcedureStep {
+  title: string;
+  detail?: string;
+}
+
+/**
+ * The cleaning procedure printed on every schedule (Josh, 2026-10-12). The
+ * packaged steps are an EXAMPLE, and the sheet says so, until the account
+ * edits them into its own.
+ */
+export interface CleaningProcedure {
+  steps: ProcedureStep[];
+  /** print it on schedules */
+  show: boolean;
+  /** still the packaged example (any edit makes it the facility's own) */
+  example: boolean;
+}
+
+export const EXAMPLE_PROCEDURE_STEPS: ProcedureStep[] = [
+  { title: "Empty trash", detail: "Remove trash and recycling; replace liners. Bag soiled linen if present." },
+  { title: "High dust", detail: "Dust vents, ledges and high surfaces first: work top to bottom." },
+  { title: "Damp wipe / disinfect", detail: "Disinfect high-touch surfaces clean-to-dirty; follow the product's wet contact time." },
+  { title: "Spot clean", detail: "Spot clean walls, doors, glass and mirrors." },
+  { title: "Clean the restroom", detail: "Clean and disinfect sink, toilet and fixtures; restock soap, paper and towels." },
+  { title: "Dust mop", detail: "Dust mop or vacuum the floor, removing loose debris from corners and under furniture." },
+  { title: "Damp mop", detail: "Damp mop hard floors with a fresh microfiber pad, working toward the door. Place a wet-floor sign." }
+];
+
+export function exampleProcedure(): CleaningProcedure {
+  return { steps: EXAMPLE_PROCEDURE_STEPS.map((s) => ({ ...s })), show: true, example: true };
 }
 
 /**
@@ -168,6 +210,7 @@ export interface Rules {
   nonSpaceQualifiers: NonSpaceQualifier[];
   breaks: BreakRule[];
   breakSchedules: BreakSchedule[];
+  procedure: CleaningProcedure;
 }
 
 /**
@@ -475,7 +518,10 @@ export function defaultRules(): Rules {
     nonSpaceDefs: [
       // 40 min = the middle of the published 35–45 min terminal-clean range
       { id: "discharge", label: "Discharges", defaultHours: 2, minutes: 40, qualifierIds: ["travel-time"], builtIn: true },
-      { id: "day-porter", label: "Day Porter", defaultHours: 8, minutes: 480, qualifierIds: [], builtIn: true }
+      { id: "day-porter", label: "Day Porter", defaultHours: 8, minutes: 480, qualifierIds: [], builtIn: true },
+      // 15 min each — HFM Magazine EVS staffing guidance (Josh, 2026-10-12)
+      { id: "cart-setup", label: "Cart Setup", defaultHours: 0.25, minutes: 15, qualifierIds: [], position: "start", builtIn: true },
+      { id: "cart-teardown", label: "Cart Teardown", defaultHours: 0.25, minutes: 15, qualifierIds: [], position: "end", builtIn: true }
     ],
     nonSpaceQualifiers: [
       { id: "travel-time", label: "Travel time", minutes: 5, builtIn: true }
@@ -494,7 +540,8 @@ export function defaultRules(): Rules {
           { kind: "lunch", start: "11:15", minutes: 45 }
         ]
       }
-    ]
+    ],
+    procedure: exampleProcedure()
   };
 }
 
@@ -525,7 +572,11 @@ export function loadRules(): Rules {
       breaks: Array.isArray(parsed.breaks) ? parsed.breaks : def.breaks,
       // a saved EMPTY list means the account deleted them all — only a
       // missing field (pre-feature account) gets the starter
-      breakSchedules: Array.isArray(parsed.breakSchedules) ? parsed.breakSchedules : def.breakSchedules
+      breakSchedules: Array.isArray(parsed.breakSchedules) ? parsed.breakSchedules : def.breakSchedules,
+      // accounts saved before the procedure existed start on the example
+      procedure: parsed.procedure && Array.isArray(parsed.procedure.steps)
+        ? { show: parsed.procedure.show !== false, example: parsed.procedure.example === true, steps: parsed.procedure.steps }
+        : def.procedure
     };
     rules.nonSpaceDefs = Array.isArray(parsed.nonSpaceDefs) ? parsed.nonSpaceDefs : def.nonSpaceDefs;
     // Sanitation Route retired 2026-08-31: the Max Sanitation engine builds
@@ -572,6 +623,11 @@ export function loadRules(): Rules {
       }
       if (!Array.isArray(ns.qualifierIds)) {
         ns.qualifierIds = def.nonSpaceDefs.find((x) => x.id === ns.id)?.qualifierIds ?? [];
+      }
+      // cart setup/teardown saved before positions existed take the built-in's
+      if (!ns.position) {
+        const pos = def.nonSpaceDefs.find((x) => x.id === ns.id)?.position;
+        if (pos) ns.position = pos;
       }
     }
     // the 2026-10-12 General Clean model: per-type formulas + included tasks

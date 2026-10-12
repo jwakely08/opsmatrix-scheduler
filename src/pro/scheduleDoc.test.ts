@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildScheduleDoc, parseClock, formatClock, shiftFor } from "./scheduleDoc";
+import { buildScheduleDoc, parseClock, formatClock, shiftFor, shiftDutyPhrase } from "./scheduleDoc";
 import { setCoverage, moveInSchedule, spacePriority, type ClassicData } from "./classicStore";
 import { defaultRules } from "./rules";
 
@@ -296,5 +296,130 @@ describe("buildScheduleDoc", () => {
     expect(doc.rows.map((r) => r.roomNumber)).toEqual(["101", "102"]);
     expect(doc.rows[1].tasks).toEqual([]);
     expect(doc.rows[1].minutes).toBe(0);
+  });
+});
+
+/** a schedule's cart duty, the way Max Schedules stores a counted task */
+function cart(defId: "cart-setup" | "cart-teardown", name: string) {
+  return { id: "ns-" + defId, name, defId, count: 1, minutesPer: 15, hours: 0.25, scheduleId: "sched-a", roomIds: [] };
+}
+
+describe("start- and end-of-shift duties (Josh, 2026-10-12)", () => {
+  it("runs cart setup first, the rooms after it, and cart teardown as the shift ends", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    setCoverage(data, "sp-102", "sched-a", true, []);
+    data.nonSpace.push(cart("cart-teardown", "Cart Teardown"), cart("cart-setup", "Cart Setup"));
+    const rules = { ...RULES, breaks: [{ id: "b", label: "Break", minutes: 15, start: "7:20 AM" }] };
+
+    const doc = buildScheduleDoc(data, rules, data.v7.schedules![0], { date: DATE });
+    expect(doc.timeline.map((s) => s.kind)).toEqual(["duty", "room", "break", "room", "duty"]);
+    expect(doc.startDuties).toEqual([{
+      id: "ns-cart-setup", name: "Cart Setup", minutes: 15, linkedRooms: [],
+      position: "start", startTime: "7:00 AM", endTime: "7:15 AM"
+    }]);
+    // the room clock begins after setup; the break still lands by clock time
+    expect(doc.rows.map((r) => r.startTime)).toEqual(["7:15 AM", "7:41 AM"]);
+    expect(doc.breaks[0]).toMatchObject({ startTime: "7:26 AM", endTime: "7:41 AM", afterRow: 1 });
+    expect(doc.roomsEnd).toBe("7:52 AM");
+    // teardown finishes as the shift does
+    expect(doc.endDuties[0]).toMatchObject({ name: "Cart Teardown", startTime: "2:45 PM", endTime: "3:00 PM" });
+    expect(doc.dayEnd).toBe("3:00 PM");
+    // they are stops, not ongoing duties
+    expect(doc.nonSpace).toEqual([]);
+    expect(doc.nonSpaceWindow).toBeNull();
+    expect(doc.totals.shiftDutyMinutes).toBe(30);
+    expect(doc.totals.nonSpaceMinutes).toBe(30);
+    expect(doc.totals.totalMinutes).toBe(22 + 30 + 15);
+  });
+
+  it("takes a break that falls during setup before the first room", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    data.nonSpace.push(cart("cart-setup", "Cart Setup"));
+    const rules = { ...RULES, breaks: [{ id: "b", label: "Break", minutes: 15, start: "7:05 AM" }] };
+
+    const doc = buildScheduleDoc(data, rules, data.v7.schedules![0], { date: DATE });
+    expect(doc.timeline.map((s) => s.kind)).toEqual(["duty", "break", "room"]);
+    expect(doc.breaks[0]).toMatchObject({ startTime: "7:15 AM", afterRow: 0 });
+    expect(doc.rows[0].startTime).toBe("7:30 AM");
+  });
+
+  it("prints the account's breaks in their place across a full day of stops", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    data.nonSpace.push(cart("cart-setup", "Cart Setup"), cart("cart-teardown", "Cart Teardown"));
+
+    const doc = buildScheduleDoc(data, RULES_BREAKS, data.v7.schedules![0], { date: DATE });
+    expect(doc.timeline.map((s) => s.kind === "break" ? s.brk.label : s.kind)).toEqual([
+      "duty", "room", "Morning Break", "Lunch", "Afternoon Break", "duty"
+    ]);
+    expect(doc.endDuties[0].startTime).toBe("2:45 PM");
+  });
+
+  it("teardown follows the last room straight away when the rooms run long", () => {
+    const data = fixture();
+    data.v7.shifts = [{ id: "sh1", name: "1st Shift", start: "7:00 AM", end: "7:30 AM", active: true }];
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    setCoverage(data, "sp-102", "sched-a", true, []);
+    data.nonSpace.push(cart("cart-setup", "Cart Setup"), cart("cart-teardown", "Cart Teardown"));
+
+    const doc = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
+    expect(doc.endDuties[0]).toMatchObject({ startTime: "7:37 AM", endTime: "7:52 AM" });
+    expect(doc.totals.overShift).toBe(true);
+  });
+
+  it("keeps anytime duties in the ongoing block, worked in before teardown", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    data.nonSpace.push(
+      { id: "ns1", name: "Discharges", defId: "discharge", count: 2, minutesPer: 45, hours: 1.5, scheduleId: "sched-a", roomIds: [] },
+      cart("cart-teardown", "Cart Teardown")
+    );
+
+    const doc = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
+    expect(doc.nonSpace).toEqual([{ id: "ns1", name: "Discharges × 2", minutes: 90, linkedRooms: [] }]);
+    expect(doc.nonSpaceWindow).toEqual({ start: "7:11 AM", end: "2:45 PM" });
+    expect(doc.totals.shiftDutyMinutes).toBe(15);
+    expect(doc.totals.nonSpaceMinutes).toBe(105);
+  });
+
+  it("follows the position set in Scope, and finds legacy entries by name", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    data.nonSpace.push({ id: "old", name: "Cart Setup", hours: 0.25, scheduleId: "sched-a", roomIds: [] });
+    const rules = JSON.parse(JSON.stringify(RULES)) as typeof RULES;
+    rules.nonSpaceDefs.find((d) => d.id === "discharge")!.position = "start";
+    data.nonSpace.push({ id: "d", name: "Discharges", defId: "discharge", count: 1, minutesPer: 45, hours: 0.75, scheduleId: "sched-a", roomIds: [] });
+
+    const doc = buildScheduleDoc(data, rules, data.v7.schedules![0], { date: DATE });
+    expect(doc.startDuties.map((d) => [d.name, d.startTime])).toEqual([["Cart Setup", "7:00 AM"], ["Discharges", "7:15 AM"]]);
+    expect(doc.rows[0].startTime).toBe("8:00 AM");
+  });
+
+  it("says the duties the way a supervisor would on the summary strip", () => {
+    expect(shiftDutyPhrase(["Cart Setup", "Cart Teardown"])).toBe("cart setup & teardown");
+    expect(shiftDutyPhrase(["Cart Setup"])).toBe("cart setup");
+    expect(shiftDutyPhrase(["Cart Setup", "Huddle"])).toBe("cart setup & huddle");
+    expect(shiftDutyPhrase(["Huddle", "Cart Setup", "Cart Teardown"])).toBe("huddle, cart setup & cart teardown");
+  });
+});
+
+describe("the cleaning procedure on the sheet", () => {
+  it("prints the packaged example, flagged as an example", () => {
+    const data = fixture();
+    const doc = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
+    expect(doc.procedure?.example).toBe(true);
+    expect(doc.procedure?.steps).toHaveLength(7);
+    expect(doc.procedure?.steps[0].title).toBe("Empty trash");
+  });
+
+  it("prints the facility's own steps unflagged, and nothing when hidden", () => {
+    const data = fixture();
+    const own = { ...RULES, procedure: { steps: [{ title: "Knock and announce" }, { title: "  " }], show: true, example: false } };
+    expect(buildScheduleDoc(data, own, data.v7.schedules![0], { date: DATE }).procedure)
+      .toEqual({ steps: [{ title: "Knock and announce" }], example: false });
+    const hidden = { ...own, procedure: { ...own.procedure, show: false } };
+    expect(buildScheduleDoc(data, hidden, data.v7.schedules![0], { date: DATE }).procedure).toBeNull();
   });
 });

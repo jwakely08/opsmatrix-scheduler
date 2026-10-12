@@ -47,8 +47,9 @@ import {
   typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
   nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, DEFAULT_INCLUDED_TASKS, RATE_UNITS, computeMinutes,
   gcFormula, gcMinutes, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
-  issaSourceLabel, categoryFor, resetToIssa, typeIdFromLabelStrict, RULES_KEY,
-  type Rules, type RoomTypeRule, type GcMethod, type GcFormula, type RateUnit
+  issaSourceLabel, categoryFor, resetToIssa, typeIdFromLabelStrict, RULES_KEY, exampleProcedure,
+  type Rules, type RoomTypeRule, type GcMethod, type GcFormula, type RateUnit,
+  type DutyPosition, type ProcedureStep
 } from "./rules";
 
 const WALL_STROKE = 13;
@@ -2213,6 +2214,13 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
                 </select>
               )}
             </span>
+            {/* when in the shift: start/end duties print as the first/last stops */}
+            <select value={ns.position ?? "anytime"} title="When in the shift this happens"
+              onChange={(e) => set((r) => { r.nonSpaceDefs.find((x) => x.id === ns.id)!.position = e.target.value as DutyPosition; })}>
+              <option value="anytime">Any time (ongoing duty)</option>
+              <option value="start">Start of shift (first stop)</option>
+              <option value="end">End of shift (last stop)</option>
+            </select>
             <em>{active.length ? `on ${active.length} schedule(s)` : "not on a schedule yet"}</em>
             <button className="pbtn small danger" onClick={() => {
               if (!confirm(`Delete "${ns.label}"? Takes effect when you hit Save.`)) return;
@@ -2270,6 +2278,54 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
         }}>Add qualifier</button>
       </div>
       <SectionSave sec="nonSpace" />
+
+      <h3>Cleaning procedure</h3>
+      <p className="pnote">
+        The steps every room is cleaned in, printed above the room list on each schedule.
+        {draft.procedure.example && " These are an EXAMPLE and print labeled as one — edit them into your facility's own steps."}
+      </p>
+      <label className="checkline">
+        <input type="checkbox" checked={draft.procedure.show}
+          onChange={(e) => set((r) => { r.procedure.show = e.target.checked; })} />
+        <span>Print the procedure on schedules</span>
+      </label>
+      {draft.procedure.steps.map((s, i) => {
+        const edit = (mut: (st: ProcedureStep) => void) => set((r) => { mut(r.procedure.steps[i]); r.procedure.example = false; });
+        const move = (d: number) => set((r) => {
+          const st = r.procedure.steps;
+          if (i + d < 0 || i + d >= st.length) return;
+          [st[i], st[i + d]] = [st[i + d], st[i]];
+          r.procedure.example = false;
+        });
+        return (
+          <div key={i} className="prule">
+            <b>{i + 1}.</b>
+            <input value={s.title} placeholder="Step" style={{ width: 170 }}
+              onChange={(e) => edit((st) => { st.title = e.target.value; })} />
+            <input value={s.detail ?? ""} placeholder="How (optional)" style={{ flex: 1, minWidth: 220 }}
+              onChange={(e) => edit((st) => { st.detail = e.target.value; })} />
+            <button className="pbtn small" disabled={i === 0} title="Move up" onClick={() => move(-1)}>↑</button>
+            <button className="pbtn small" disabled={i === draft.procedure.steps.length - 1} title="Move down" onClick={() => move(1)}>↓</button>
+            <button className="pbtn small danger" onClick={() => set((r) => {
+              r.procedure.steps.splice(i, 1);
+              r.procedure.example = false;
+            })}>✕</button>
+          </div>
+        );
+      })}
+      <div className="prule add">
+        <button className="pbtn small primary" onClick={() => set((r) => {
+          r.procedure.steps.push({ title: "", detail: "" });
+          r.procedure.example = false;
+        })}>Add step</button>
+        {!draft.procedure.example && (
+          <button className="pbtn small" onClick={() => {
+            if (!confirm("Replace these steps with the example procedure? Takes effect when you hit Save.")) return;
+            set((r) => { r.procedure = { ...exampleProcedure(), show: r.procedure.show }; });
+          }}>Use the example steps</button>
+        )}
+      </div>
+      <SectionSave sec="procedure" />
 
       <h3>Break and lunch times</h3>
       {(draft.breaks ?? []).map((b) => (

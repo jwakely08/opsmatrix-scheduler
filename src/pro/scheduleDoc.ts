@@ -14,9 +14,12 @@
 // This module is pure (no DOM, no storage) so the numbers can be tested.
 import {
   coverageForSpace, coverageMinutes, spacePriority, nonSpaceTaskMinutes,
-  type ClassicData, type ClassicSchedule, type ClassicSpace, type Priority
+  type ClassicData, type ClassicSchedule, type ClassicSpace, type NonSpaceTask, type Priority
 } from "./classicStore";
-import { generalCleanLine, includedTasksFor, typeIdFromLabel, type Rules, type BreakRule } from "./rules";
+import {
+  generalCleanLine, includedTasksFor, typeIdFromLabel,
+  type Rules, type BreakRule, type DutyPosition, type ProcedureStep
+} from "./rules";
 
 export interface DocRow {
   spaceId: string;
@@ -54,6 +57,19 @@ export interface DocNonSpace {
   linkedRooms: string[];
 }
 
+/** a start- or end-of-shift duty (cart setup, cart teardown): a real stop */
+export interface DocDuty extends DocNonSpace {
+  position: "start" | "end";
+  startTime: string;
+  endTime: string;
+}
+
+/** one line of the printed running order, in the order the day happens */
+export type DocStop =
+  | { kind: "duty"; duty: DocDuty }
+  | { kind: "room"; row: DocRow }
+  | { kind: "break"; brk: DocBreak };
+
 export interface ScheduleDoc {
   num: string;
   name: string;
@@ -67,14 +83,26 @@ export interface ScheduleDoc {
   color: string;
   rows: DocRow[];
   breaks: DocBreak[];
+  /** start duties, rooms, breaks and end duties, in clock order */
+  timeline: DocStop[];
+  startDuties: DocDuty[];
+  endDuties: DocDuty[];
   /** when the room-by-room run finishes */
   roomsEnd: string;
+  /** when the last stop finishes (the end duties, when there are any) */
+  dayEnd: string;
+  /** the "anytime" duties, worked around the rooms */
   nonSpace: DocNonSpace[];
   nonSpaceWindow: { start: string; end: string } | null;
+  /** the account's cleaning procedure, or null when hidden / empty */
+  procedure: { steps: ProcedureStep[]; example: boolean } | null;
   totals: {
     rooms: number;
     roomMinutes: number;
+    /** every non-space task on the schedule, start/end duties included */
     nonSpaceMinutes: number;
+    /** just the start- and end-of-shift duties */
+    shiftDutyMinutes: number;
     totalMinutes: number;
     shiftMinutes: number;
     breakMinutes: number;
@@ -175,6 +203,31 @@ export function breakChoices(rules: Rules): BreakRule[] {
   return rules.breaks ?? [];
 }
 
+// ── start / end-of-shift duties ─────────────────────────────────────────────
+
+/** when in the shift a schedule's non-space task happens, from its Scope def */
+export function dutyPosition(rules: Rules, t: Pick<NonSpaceTask, "defId" | "name">): DutyPosition {
+  const def = rules.nonSpaceDefs.find((d) => d.id === t.defId)
+    ?? (t.defId ? undefined : rules.nonSpaceDefs.find((d) => d.label === t.name));
+  return def?.position ?? "anytime";
+}
+
+/**
+ * The summary-strip wording for the start/end duties, said the way a
+ * supervisor would: ["Cart Setup", "Cart Teardown"] → "cart setup & teardown".
+ */
+export function shiftDutyPhrase(names: string[]): string {
+  const words = [...new Set(names.map((n) => n.trim().toLowerCase()).filter(Boolean))]
+    .map((n) => n.split(/\s+/));
+  const list = (xs: string[]) =>
+    xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} & ${xs[xs.length - 1]}`;
+  const lead = words[0]?.[0];
+  if (words.length > 1 && words.every((w) => w.length > 1 && w[0] === lead)) {
+    return `${lead} ${list(words.map((w) => w.slice(1).join(" ")))}`;
+  }
+  return list(words.map((w) => w.join(" ")));
+}
+
 // ── the builder ─────────────────────────────────────────────────────────────
 
 export interface DocOptions {
@@ -200,11 +253,12 @@ export function buildScheduleDoc(
 
   const rows: DocRow[] = [];
   const breaks: DocBreak[] = [];
+  const timeline: DocStop[] = [];
   // absolute minutes, counted forward from the shift start so a shift that
   // runs past midnight keeps moving forward instead of wrapping backwards
   let clock = shift.start;
 
-  /** take any breaks that are now due — always between rooms, never inside one */
+  /** take any breaks that are now due — always between stops, never inside one */
   const takeBreaksDue = (force = false) => {
     while (pending.length) {
       const b = pending[0];
@@ -212,13 +266,52 @@ export function buildScheduleDoc(
       if (!force && clock < due) break;
       pending.shift();
       const at = Math.max(clock, due);
-      breaks.push({
+      const brk: DocBreak = {
         id: b.id, label: b.label, minutes: b.minutes, afterRow: rows.length,
         startTime: formatClock(at), endTime: formatClock(at + b.minutes)
-      });
+      };
+      breaks.push(brk);
+      timeline.push({ kind: "break", brk });
       clock = at + b.minutes;
     }
   };
+
+  // this schedule's non-space work, each sorted by WHEN in the shift it falls
+  const tasks = data.nonSpace
+    .filter((t) => t.scheduleId === sched.id)
+    .map((t) => ({ t, position: dutyPosition(rules, t) }))
+    .map(({ t, position }) => ({
+      position,
+      item: {
+        id: t.id,
+        // counted tasks print the count so the worker knows the volume planned
+        // (a once-a-shift duty like cart setup is just its name)
+        name: Number(t.count) > 0 && !(position !== "anytime" && Number(t.count) === 1)
+          ? `${t.name} × ${t.count}` : t.name,
+        minutes: Math.round(nonSpaceTaskMinutes(t)),
+        linkedRooms: t.roomIds
+          .map((id) => spaces.find((s) => s.id === id))
+          .filter(Boolean)
+          .map((sp) => String((sp as ClassicSpace).roomNumber ?? (sp as ClassicSpace).roomName ?? ""))
+      } as DocNonSpace
+    }));
+  const startDuties: DocDuty[] = [];
+  const endDuties: DocDuty[] = [];
+  const runDuty = (item: DocNonSpace, position: "start" | "end", out: DocDuty[]) => {
+    const duty: DocDuty = {
+      ...item, position, startTime: formatClock(clock), endTime: formatClock(clock + item.minutes)
+    };
+    out.push(duty);
+    timeline.push({ kind: "duty", duty });
+    clock += item.minutes;
+  };
+
+  // start-of-shift duties (cart setup) are the first stops: rooms begin after
+  for (const t of tasks) {
+    if (t.position !== "start") continue;
+    takeBreaksDue();
+    runDuty(t.item, "start", startDuties);
+  }
 
   const ordered = (sched.spaceOrder ?? [])
     .map((id) => spaces.find((s) => s.id === id))
@@ -240,7 +333,7 @@ export function buildScheduleDoc(
     const minutes = routeMinutes
       ? Math.round(Number(routeMinutes[sp.id]) || 0)
       : coverageMinutes(rules, sp, cov!);
-    rows.push({
+    const row: DocRow = {
       spaceId: sp.id,
       order: rows.length + 1,
       startTime: formatClock(clock),
@@ -254,30 +347,31 @@ export function buildScheduleDoc(
       ...(cov?.primary && !rules.general.formulaOff ? { generalClean: generalCleanLine(rules, sp).text } : {}),
       priority: spacePriority(sp),
       minutes
-    });
+    };
+    rows.push(row);
+    timeline.push({ kind: "room", row });
     clock += minutes;
   }
 
+  // when the last room is done — before any breaks still to come
+  const roomsEnd = formatClock(clock);
+
+  const ends = tasks.filter((t) => t.position === "end");
   // a short list of rooms can finish before a break comes round — the worker
   // still gets it, so it prints at its proper time rather than vanishing
-  if (rows.length) takeBreaksDue(true);
-
-  const roomsEnd = formatClock(clock);
+  if (rows.length || startDuties.length || ends.length) takeBreaksDue(true);
   const roomMinutes = rows.reduce((s, r) => s + r.minutes, 0);
 
-  const nonSpace: DocNonSpace[] = data.nonSpace
-    .filter((t) => t.scheduleId === sched.id)
-    .map((t) => ({
-      id: t.id,
-      // counted tasks print the count so the worker knows the volume planned
-      name: Number(t.count) > 0 ? `${t.name} × ${t.count}` : t.name,
-      minutes: Math.round(nonSpaceTaskMinutes(t)),
-      linkedRooms: t.roomIds
-        .map((id) => spaces.find((s) => s.id === id))
-        .filter(Boolean)
-        .map((sp) => String((sp as ClassicSpace).roomNumber ?? (sp as ClassicSpace).roomName ?? ""))
-    }));
-  const nonSpaceMinutes = nonSpace.reduce((s, t) => s + t.minutes, 0);
+  // end-of-shift duties (cart teardown) are the last stops: they finish as
+  // the shift ends, or straight after the rooms when the rooms run long
+  const endTotal = ends.reduce((s, t) => s + t.item.minutes, 0);
+  const endsStart = Math.max(clock, shift.start + span - endTotal);
+  if (ends.length) clock = endsStart;
+  for (const t of ends) runDuty(t.item, "end", endDuties);
+
+  const nonSpace: DocNonSpace[] = tasks.filter((t) => t.position === "anytime").map((t) => t.item);
+  const nonSpaceMinutes = tasks.reduce((s, t) => s + t.item.minutes, 0);
+  const shiftDutyMinutes = [...startDuties, ...endDuties].reduce((s, t) => s + t.minutes, 0);
 
   const priority: Record<Priority, number> = { High: 0, Medium: 0, Low: 0 };
   for (const r of rows) priority[r.priority]++;
@@ -288,6 +382,9 @@ export function buildScheduleDoc(
   const breakMinutes = breaks.reduce((s, b) => s + b.minutes, 0);
   const totalMinutes = roomMinutes + nonSpaceMinutes + breakMinutes;
   const plan = spaces.find((s) => s.id === rows[0]?.spaceId);
+
+  const proc = rules.procedure;
+  const steps = (proc?.steps ?? []).filter((s) => String(s.title ?? "").trim());
 
   return {
     num: String(sched.num ?? ""),
@@ -303,13 +400,23 @@ export function buildScheduleDoc(
     color: String(sched.color ?? "#0d9488"),
     rows,
     breaks,
+    timeline,
+    startDuties,
+    endDuties,
     roomsEnd,
+    dayEnd: formatClock(clock),
     nonSpace,
-    nonSpaceWindow: nonSpace.length ? { start: roomsEnd, end: formatClock(shift.end) } : null,
+    nonSpaceWindow: nonSpace.length
+      ? { start: roomsEnd, end: formatClock(ends.length ? endsStart : shift.end) }
+      : null,
+    procedure: proc && proc.show !== false && steps.length
+      ? { steps, example: proc.example === true }
+      : null,
     totals: {
       rooms: rows.length,
       roomMinutes,
       nonSpaceMinutes,
+      shiftDutyMinutes,
       totalMinutes,
       shiftMinutes: span,
       breakMinutes,
