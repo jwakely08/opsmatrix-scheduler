@@ -866,13 +866,15 @@
       },
       {
         name: "set_room_type_rule",
-        description: "Create a room type or change how one is priced: cleaning frequency, extra minutes per clean, whether it counts toward EVS workload, and which tasks it gets automatically. Existing rooms of that type update immediately.",
+        description: "Create a room type or change how one is priced: its cleaning rate (sq ft per hour — ISSA by default — or fixed minutes per room), cleaning frequency, extra minutes per clean, whether it counts toward EVS workload, and which tasks it gets automatically. Existing rooms of that type update immediately.",
         input_schema: {
           type: "object",
           required: ["room_type"],
           properties: {
             room_type: { type: "string", description: "e.g. Patient Room, Telemetry Room" },
             frequency: { type: "string", description: "one of: 7x / week, 6x / week, 5x / week, 3x / week, 2x / week, 1x / week, Every other week, Monthly" },
+            sqft_per_hour: { type: "number", description: "this type's own general-clean production rate in sq ft per hour (replaces the floor formula; ISSA rates are the default)" },
+            minutes_per_room: { type: "number", description: "a fixed general-clean time per room regardless of size (a hospital's own per-room standard); 0 clears it" },
             extra_minutes: { type: "number", description: "flat minutes added on top of the general clean" },
             counts_toward_evs_workload: { type: "boolean", description: "false for infrastructure like mechanical rooms" },
             automatic_tasks: { type: "array", items: { type: "string" }, description: "task names this type gets automatically, e.g. [\"Auto Scrub\",\"Dust Mop\"]" }
@@ -1047,6 +1049,8 @@
           room_types: r.roomTypes.map(function (rt) {
             return {
               room_type: rt.label, frequency: rt.frequency, extra_minutes: rt.qualifierMin,
+              sqft_per_hour: rt.sqftPerHour || null, minutes_per_room: rt.flatMinutes || null,
+              rate_source: rt.flatMinutes > 0 ? "own minutes per room" : rt.sqftPerHour > 0 ? F.rateSourceLabel(rt) : "floor formula",
               counts_toward_evs_workload: rt.cleanability !== "non-cleanable",
               automatic_tasks: r.tasks.filter(function (t) { return (t.autoFor || []).indexOf(rt.id) >= 0; })
                 .map(function (t) { return t.label; })
@@ -1092,6 +1096,10 @@
         }
         if (inp.frequency !== undefined) rt.frequency = String(inp.frequency);
         if (inp.extra_minutes !== undefined && Number.isFinite(parseFloat(inp.extra_minutes))) rt.qualifierMin = parseFloat(inp.extra_minutes);
+        if (inp.sqft_per_hour !== undefined && parseFloat(inp.sqft_per_hour) > 0) rt.sqftPerHour = parseFloat(inp.sqft_per_hour);
+        if (inp.minutes_per_room !== undefined && Number.isFinite(parseFloat(inp.minutes_per_room))) {
+          if (parseFloat(inp.minutes_per_room) > 0) rt.flatMinutes = parseFloat(inp.minutes_per_room); else delete rt.flatMinutes;
+        }
         if (inp.counts_toward_evs_workload === false) rt.cleanability = "non-cleanable";
         if (inp.counts_toward_evs_workload === true) delete rt.cleanability;
         if (Array.isArray(inp.automatic_tasks)) {

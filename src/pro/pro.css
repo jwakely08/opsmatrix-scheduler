@@ -136,6 +136,8 @@ body {
 }
 .prule b { min-width: 110px; }
 .prule em { font-style: normal; color: #64748b; font-size: 11.5px; flex: 1; }
+.ratepick { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ratepick select { max-width: 280px; }
 .prule.add { border: 1px dashed rgba(148,163,184,.3); border-radius: 9px; margin-top: 10px; padding: 10px; }
 .prule.add input { flex: 1; min-width: 90px; }
 

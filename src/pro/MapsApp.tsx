@@ -4,7 +4,7 @@ import {
   loadClassic, saveClassic, syncSpaceMinutes, refreshAutoTasks, coverageForSpace, uncovered, setCoverage,
   coverageMinutes, scheduleMinutes, createSchedule, deleteSchedule, scheduleColor, SCHED_COLORS,
   spaceIncomplete, FLOOR_TYPES, rectifyForDisplay, pathFrom, centroidOf, boundsOf, pointIn,
-  moveInSchedule, spacePriority, PRIORITIES, PRIORITY_WORD, nonSpaceTaskMinutes,
+  moveInSchedule, spacePriority, PRIORITIES, PRIORITY_WORD, nonSpaceTaskMinutes, stripIssaHelperTasks,
   type ClassicData, type ClassicSpace, type ClassicSchedule, type NonSpaceTask
 } from "./classicStore";
 import {
@@ -45,7 +45,8 @@ import { collectWorkspace, applyWorkspace, backupFilename } from "./workspaceSto
 import {
   loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor,
   typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
-  nonSpaceOccurrenceMinutes, FREQUENCIES, type Rules
+  nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, issaCategory, basePricing, applyIssaStandards,
+  needsIssaMigration, type Rules, type RoomTypeRule
 } from "./rules";
 
 const WALL_STROKE = 13;
@@ -206,6 +207,13 @@ export function MapsApp() {
       for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, next);
     });
   }, [commit]);
+
+  // Scope's "use ISSA rates" button: every room type onto its ISSA rate, and
+  // the 2026-10-12 operator workaround's helper tasks gone from rules AND data
+  const applyIssa = useCallback((next: Rules) => {
+    commitRules(next);
+    commit((d) => { stripIssaHelperTasks(d); });
+  }, [commit, commitRules]);
 
   // fresh page load: rooms left unclassified by an earlier import get another
   // chance against whatever Scope holds NOW (types added since, new aliases)
@@ -617,7 +625,7 @@ export function MapsApp() {
         )}
 
         {tab === "scope" && (
-          <ScopeTab rules={rules} onChange={commitRules} data={data} isAdmin={canEditFormula(role)} />
+          <ScopeTab rules={rules} onChange={commitRules} onApplyIssa={applyIssa} data={data} isAdmin={canEditFormula(role)} />
         )}
 
         {tab === "workload" && (
@@ -1742,14 +1750,69 @@ function ClientRow({ sched, rules, commit }: {
 // built-ins included — breaks live at the bottom, and the general cleaning
 // formula is the account administrator's alone.
 
-function ScopeTab({ rules, onChange, data, isAdmin }: {
+/**
+ * How one room type prices its general clean (2026-10-12): an ISSA category
+ * at its published rate (the default), the hospital's own sq ft per hour,
+ * a flat number of minutes per room (a hospital's per-room standard — what
+ * clinical rooms usually come with), or the account's floor formula.
+ */
+function RoomRateEditor({ rt, edit }: { rt: RoomTypeRule; edit: (mut: (t: RoomTypeRule) => void) => void }) {
+  const mode = basePricing(rt);
+  const cat = issaCategory(rt.issaCategory);
+  const value = mode === "flat" ? "flat" : mode === "formula" ? "formula"
+    : cat && Number(rt.sqftPerHour) === cat.sqftPerHour ? "issa:" + cat.id : "own";
+  return (
+    <span className="ratepick">
+      <select value={value} onChange={(e) => {
+        const v = e.target.value;
+        edit((t) => {
+          if (v.startsWith("issa:")) {
+            const c = issaCategory(v.slice(5))!;
+            t.issaCategory = c.id;
+            t.sqftPerHour = c.sqftPerHour;
+            delete t.flatMinutes;
+          } else if (v === "own") {
+            // keep the number they're starting from; it's theirs now, not ISSA's
+            t.sqftPerHour = Number(t.sqftPerHour) > 0 ? t.sqftPerHour : issaCategory(t.issaCategory)?.sqftPerHour ?? 2000;
+            delete t.issaCategory;
+            delete t.flatMinutes;
+          } else if (v === "flat") {
+            t.flatMinutes = Number(t.flatMinutes) > 0 ? t.flatMinutes : 15;
+          } else {
+            delete t.sqftPerHour;
+            delete t.flatMinutes;
+          }
+        });
+      }}>
+        {ISSA_CATEGORIES.map((c) => (
+          <option key={c.id} value={"issa:" + c.id}>ISSA {c.label} — {c.sqftPerHour.toLocaleString()} sq ft/hr</option>
+        ))}
+        <option value="own">Our own rate (sq ft per hour)</option>
+        <option value="flat">Our own minutes per room</option>
+        <option value="formula">Floor formula (hard floor / carpet)</option>
+      </select>
+      {value === "own" && (<>
+        <input type="number" value={rt.sqftPerHour}
+          onChange={(e) => edit((t) => { t.sqftPerHour = Number(e.target.value) || 1; })} /> sq ft per hour
+      </>)}
+      {value === "flat" && (<>
+        <input type="number" value={rt.flatMinutes}
+          onChange={(e) => edit((t) => { t.flatMinutes = Number(e.target.value) || 1; })} /> min per room
+      </>)}
+    </span>
+  );
+}
+
+function ScopeTab({ rules, onChange, onApplyIssa, data, isAdmin }: {
   rules: Rules;
   onChange: (r: Rules) => void;
+  onApplyIssa: (r: Rules) => void;
   data: ClassicData;
   isAdmin: boolean;
 }) {
   const [draft, setDraft] = useState<Rules>(() => JSON.parse(JSON.stringify(rules)));
-  const [newType, setNewType] = useState({ label: "", freq: "7x / week", qual: "" });
+  const [newType, setNewType] = useState({ label: "", freq: "7x / week", qual: "", rate: "issa:office" });
+  const issaTodo = needsIssaMigration(rules);
   const [newTask, setNewTask] = useState({ label: "", per: "", flat: "", floorCare: false });
   const [newNS, setNewNS] = useState({ label: "", hours: "30" });
   const [newQual, setNewQual] = useState({ label: "", minutes: "5" });
@@ -1775,7 +1838,7 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
   return (
     <div className="pro-list">
       {isAdmin && !rules.general.formulaOff && (<>
-        <h3>General cleaning formula</h3>
+        <h3>General cleaning formula <small className="scopekey">used by room types set to "Floor formula"</small></h3>
         <div className="pformula">
           1 minute per <input type="number" value={draft.general.hardSqftPerMin}
             onChange={(e) => set((r) => { r.general.hardSqftPerMin = Number(e.target.value) || 1; })} />
@@ -1815,6 +1878,22 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
       )}
 
       <h3>Room types</h3>
+      {(issaTodo.helperTasks > 0 || issaTodo.formulaTypes > 0) && (
+        <p className="warntext">
+          {issaTodo.helperTasks > 0
+            ? <>This account still has {issaTodo.helperTasks} "ISSA" helper tasks from the earlier workaround. ISSA rates are built in now. </>
+            : <>{issaTodo.formulaTypes} room {issaTodo.formulaTypes === 1 ? "type still uses" : "types still use"} the floor formula instead of an ISSA rate. </>}
+          <button className="plink" onClick={() => {
+            if (!confirm("Put every room type on its ISSA rate? Each type gets the ISSA rate for its kind of space, extra minutes per clean go to 0 (ISSA rates already include everything), own rates and per-room minutes are replaced, and the old ISSA helper tasks are removed. Every room is recalculated right away.")) return;
+            const next = applyIssaStandards(rules);
+            // the draft follows, or the sections would read as unsaved edits
+            setDraft((prev) => ({ ...prev, ...JSON.parse(JSON.stringify({
+              general: next.general, roomTypes: next.roomTypes, tasks: next.tasks
+            })) }));
+            onApplyIssa(next);
+          }}>Use ISSA rates for every room type</button>
+        </p>
+      )}
       {draft.roomTypes.map((rt) => (
         <div key={rt.id} className="prule">
           <b>{rt.label}</b>
@@ -1822,6 +1901,7 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
             onChange={(e) => set((r) => { r.roomTypes.find((x) => x.id === rt.id)!.frequency = e.target.value; })}>
             {FREQUENCIES.map((f) => <option key={f}>{f}</option>)}
           </select>
+          <RoomRateEditor rt={rt} edit={(mut) => set((r) => mut(r.roomTypes.find((x) => x.id === rt.id)!))} />
           <span title="Flat extra minutes added once per clean — not per square foot">
             +<input type="number" value={rt.qualifierMin}
               onChange={(e) => set((r) => { r.roomTypes.find((x) => x.id === rt.id)!.qualifierMin = Number(e.target.value) || 0; })} /> min per clean</span>
@@ -1864,15 +1944,22 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
         <select value={newType.freq} onChange={(e) => setNewType({ ...newType, freq: e.target.value })}>
           {FREQUENCIES.map((f) => <option key={f}>{f}</option>)}
         </select>
+        <select value={newType.rate} onChange={(e) => setNewType({ ...newType, rate: e.target.value })}>
+          {ISSA_CATEGORIES.map((c) => (
+            <option key={c.id} value={"issa:" + c.id}>ISSA {c.label} — {c.sqftPerHour.toLocaleString()} sq ft/hr</option>
+          ))}
+        </select>
         <input type="number" placeholder="+min" value={newType.qual} style={{ width: 70 }}
           onChange={(e) => setNewType({ ...newType, qual: e.target.value })} />
         <button className="pbtn small primary" onClick={() => {
           if (!newType.label.trim()) return;
+          const cat = issaCategory(newType.rate.slice(5)) ?? ISSA_CATEGORIES[0];
           set((r) => r.roomTypes.push({
             id: uid("rt"), label: newType.label.trim(), frequency: newType.freq,
-            qualifierMin: Number(newType.qual) || 0
+            qualifierMin: Number(newType.qual) || 0,
+            issaCategory: cat.id, sqftPerHour: cat.sqftPerHour
           }));
-          setNewType({ label: "", freq: "7x / week", qual: "" });
+          setNewType({ label: "", freq: "7x / week", qual: "", rate: "issa:office" });
         }}>Add room type</button>
       </div>
       <SectionSave sec="roomTypes" />
@@ -1884,7 +1971,7 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
       {!rules.general.formulaOff && (
         <div className="prule">
           <b className="tname clean">General Clean</b>
-          <span>the account formula — 1 min per {rules.general.hardSqftPerMin} sq ft hard floor / {rules.general.carpetSqftPerMin} sq ft carpet, on every room automatically</span>
+          <span>on every room automatically — at its room type's rate (ISSA unless you changed it), or the floor formula: 1 min per {rules.general.hardSqftPerMin} sq ft hard floor / {rules.general.carpetSqftPerMin} sq ft carpet</span>
           {isAdmin && (
             <button className="pbtn small danger" onClick={() => {
               if (!confirm("Delete General Clean? This is the general cleaning formula — without it, room times stop counting the base clean entirely and only count added tasks and type minutes. Nothing will calculate correctly unless you restore it or build a replacement per-square-foot task. Are you sure?")) return;

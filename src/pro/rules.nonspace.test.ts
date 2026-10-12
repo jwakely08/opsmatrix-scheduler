@@ -96,6 +96,7 @@ describe("the General Clean formula toggles", () => {
 
   it("mopIncluded off is honest in the line label", () => {
     const r: Rules = defaultRules();
+    delete r.roomTypes.find((rt) => rt.id === "office")!.sqftPerHour; // back on the floor formula
     r.general.mopIncluded = false;
     const { lines } = computeMinutes(r, room);
     expect(lines[0].label).toContain("(hard floor)");

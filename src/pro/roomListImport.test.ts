@@ -109,7 +109,7 @@ describe("room type normalization (§24–25)", () => {
     expect(n("PAT. TLT.")).toBe("Restroom");
     expect(n("TLT.")).toBe("Restroom");
     expect(n("CORR.")).toBe("Corridor");
-    expect(n("NURSES STN.")).toBe("Office");
+    expect(n("NURSES STN.")).toBe("Nurses Station");
     expect(n("SOILED UTIL.")).toBe("Utility Room");
     expect(n("MECH. RM.")).toBe("Mechanical Room");
     expect(n("ELEC.")).toBe("Electrical Room");
@@ -171,14 +171,14 @@ describe("Scope determines classification (Josh's rule)", () => {
     expect(n("LKRS.")).toBe("Locker Room");
     expect(n("I.T.")).toBe("Data / Telecom Room");
     expect(n("SOILED HOLDING")).toBe("Utility Room");
-    expect(n("MEDS.")).toBe("Utility Room");
+    expect(n("MEDS.")).toBe("Clean Supply / Med Room");
     expect(n("DECONTAM.")).toBe("Utility Room");
     expect(n("VENTS")).toBe("Mechanical Room");
     expect(n("WATER TREATMENT")).toBe("Mechanical Room");
     expect(n("EQUIP. RM.")).toBe("Utility Room");
     expect(n("EQUIP. ALCOVE")).toBe("Utility Room");
-    expect(n("KITCHEN")).toBe("Lounge");
-    expect(n("VENDING")).toBe("Lounge");
+    expect(n("KITCHEN")).toBe("Break Room / Kitchen");
+    expect(n("VENDING")).toBe("Break Room / Kitchen");
     expect(n("CLASSROOM")).toBe("Office");
     expect(n("GROUP RM.")).toBe("Office");
     expect(n("ANTE")).toBe("Utility Room");
@@ -186,6 +186,24 @@ describe("Scope determines classification (Josh's rule)", () => {
     expect(n("P/R #4")).toBeNull();
     expect(n("TEE")).toBeNull();
     expect(n("DIR.")).toBeNull();
+  });
+  it("lands on the 2026-10-12 built-ins, or their stand-ins once deleted", () => {
+    const n = (r: typeof rules, name: string) => normalizeRoomType(r, noAliases, name);
+    expect(n(rules, "CONF. RM.")).toBe("Conference Room");
+    expect(n(rules, "BOARD RM.")).toBe("Conference Room");
+    expect(n(rules, "BREAK RM.")).toBe("Break Room / Kitchen");
+    expect(n(rules, "CLEAN SUPPLY")).toBe("Clean Supply / Med Room");
+    expect(n(rules, "LAB")).toBe("Laboratory");
+    expect(n(rules, "PATHOLOGY")).toBe("Laboratory");
+    expect(n(rules, "SOILED UTIL.")).toBe("Utility Room");      // soiled stays Utility
+    const old = defaultRules();
+    old.roomTypes = old.roomTypes.filter((rt) =>
+      !["conference-room", "nurses-station", "break-room", "lab", "clean-utility"].includes(rt.id));
+    expect(n(old, "NURSES STN.")).toBe("Office");
+    expect(n(old, "CONF. RM.")).toBe("Office");
+    expect(n(old, "KITCHEN")).toBe("Lounge");
+    expect(n(old, "MEDS.")).toBe("Utility Room");
+    expect(n(old, "LAB")).toBeNull();                            // no stand-in → Needs review
   });
 });
 
@@ -198,10 +216,11 @@ describe("classifying a room brings the WHOLE Scope rulebook with it", () => {
     applyRoomType(sp as never, "corridor", rules);
     expect(sp.roomType).toBe("Corridor");
     expect(sp.spaceTasks).toEqual(["auto-scrub", "dust-mop"]); // Scope's autoFor corridors
-    // per-visit: base 1000/33=30.3 + auto scrub 1000/200=5 + dust mop 1000/150=6.7 → 42
+    // per-visit: base 1000 sq ft at ISSA lobbies & corridors 5,500/hr = 10.9
+    // + auto scrub 1000/200=5 + dust mop 1000/150=6.7 → 23
     const perVisit = computeMinutes(rules, sp as never).total;
-    expect(perVisit).toBe(42);
-    expect(weeklyMinutes(rules, sp as never)).toBe(42 * 7);
+    expect(perVisit).toBe(23);
+    expect(weeklyMinutes(rules, sp as never)).toBe(23 * 7);
   });
   it("resolvePendingRoomTypes gives retroactively-claimed rooms their auto tasks too", () => {
     const blank: SpaceRecord[] = [{ id: "b", roomType: "", spaceTasks: [], squareFeet: 500,
@@ -216,10 +235,19 @@ describe("Scope changed AFTER the account was set up (Josh's scenario)", () => {
   it("a rate change reprices every existing room instantly", async () => {
     const { computeMinutes } = await import("./rules");
     const room = { roomType: "Office", squareFeet: 330, floorType: "Hard floor — finished", spaceTasks: [] };
-    expect(computeMinutes(rules, room as never).total).toBe(10); // 330/33
+    expect(computeMinutes(rules, room as never).total).toBe(5); // 330 at ISSA office 4,250/hr = 4.7
     const slower = defaultRules();
-    slower.general.hardSqftPerMin = 22; // manager tightens the rate in Scope
-    expect(computeMinutes(slower, room as never).total).toBe(15); // 330/22 — same room, new time
+    slower.roomTypes.find((rt) => rt.id === "office")!.sqftPerHour = 1980; // the hospital's own rate
+    expect(computeMinutes(slower, room as never).total).toBe(10); // 330 × 60 / 1980 — same room, new time
+  });
+  it("a type with no rate of its own follows the floor formula, and its changes", async () => {
+    const { computeMinutes } = await import("./rules");
+    const room = { roomType: "Office", squareFeet: 330, floorType: "Hard floor — finished", spaceTasks: [] };
+    const formula = defaultRules();
+    delete formula.roomTypes.find((rt) => rt.id === "office")!.sqftPerHour;
+    expect(computeMinutes(formula, room as never).total).toBe(10); // 330/33
+    formula.general.hardSqftPerMin = 22; // manager tightens the formula in Scope
+    expect(computeMinutes(formula, room as never).total).toBe(15); // 330/22
   });
   it("adding an automatic task to a type updates rooms that follow the rulebook, not hand-customized ones", async () => {
     const { refreshAutoTasks, syncSpaceMinutes } = await import("./classicStore");
@@ -235,16 +263,16 @@ describe("Scope changed AFTER the account was set up (Josh's scenario)", () => {
     expect(corridorA.spaceTasks).toContain("burnish");                   // follows the rulebook
     expect(corridorB.spaceTasks).toEqual(["auto-scrub"]);                // custom list respected
     syncSpaceMinutes(corridorA as never, next);
-    // base 1000/33=30.3 + scrub 5 + dust mop 6.7 + burnish 1000/100=10 → 52
-    expect(corridorA.spaceTasks && (corridorA as { estimatedCleaningMinutes?: number }).estimatedCleaningMinutes).toBe(52);
+    // base 1000 at 5,500/hr = 10.9 + scrub 5 + dust mop 6.7 + burnish 1000/100=10 → 33
+    expect(corridorA.spaceTasks && (corridorA as { estimatedCleaningMinutes?: number }).estimatedCleaningMinutes).toBe(33);
   });
   it("a frequency change moves the weekly workload and FTE", async () => {
     const { weeklyMinutes } = await import("./rules");
     const office = { roomType: "Office", squareFeet: 330, floorType: "Hard floor — finished", spaceTasks: [] };
-    expect(weeklyMinutes(rules, office as never)).toBe(50);              // 10 min × 5x/week
+    expect(weeklyMinutes(rules, office as never)).toBe(25);              // 5 min × 5x/week
     const daily = defaultRules();
     daily.roomTypes.find((rt) => rt.id === "office")!.frequency = "7x / week";
-    expect(weeklyMinutes(daily, office as never)).toBe(70);              // same room, new week
+    expect(weeklyMinutes(daily, office as never)).toBe(35);              // same room, new week
   });
 });
 
@@ -261,12 +289,12 @@ describe("retuneAllSpaces — one call retunes the whole account (Hey Max uses t
       { id: "b", roomType: "", spaceTasks: [], squareFeet: 500,
         source: { roomName: "CORR.", spaceDefinition: "" }, floorType: "" },
       // already perfect → untouched
-      { id: "c", roomType: "Office", floorType: "Hard floor — finished", squareFeet: 330, spaceTasks: [], estimatedCleaningMinutes: 10 }
+      { id: "c", roomType: "Office", floorType: "Hard floor — finished", squareFeet: 330, spaceTasks: [], estimatedCleaningMinutes: 5 }
     ];
     const changed = retuneAllSpaces(spaces as never, rules);
     expect(changed.map((s) => s.id).sort()).toEqual(["a", "b"]);
     expect(spaces[0].floorType).toBe("Hard floor — finished");
-    expect(spaces[0].estimatedCleaningMinutes).toBe(10);
+    expect(spaces[0].estimatedCleaningMinutes).toBe(5);
     expect(spaces[1].roomType).toBe("Corridor");
     expect(spaces[1].spaceTasks).toEqual(["auto-scrub", "dust-mop"]);
   });
@@ -422,8 +450,8 @@ describe("cleanability and workload (§28–§36)", () => {
   });
   it("weekly minutes = the SAME per-visit engine × frequency; unknowns are null, not zero", () => {
     const office = { roomType: "Office", squareFeet: 330, floorType: "Hard floor — finished" };
-    // per-visit: 330/33 = 10 min; Office is 5x/week → 50
-    expect(weeklyMinutes(rules, office)).toBe(50);
+    // per-visit: 330 sq ft at ISSA office 4,250/hr = 4.7 → 5 min; Office is 5x/week → 25
+    expect(weeklyMinutes(rules, office)).toBe(25);
     expect(weeklyMinutes(rules, { roomType: "Mechanical Room", squareFeet: 500 })).toBe(0);
     expect(weeklyMinutes(rules, { roomType: "", squareFeet: 500 })).toBeNull();
     expect(weeklyMinutes(rules, { roomType: "Office" })).toBeNull(); // no sqft yet
@@ -494,9 +522,9 @@ describe("facility totals and drill-down (§33, §41–§48)", () => {
     expect(t.unresolvedSqFt).toBe(100);
     expect(t.reviewRooms).toBe(1);
     expect(t.coverage).toBeCloseTo((1457 - 100) / 1457);
-    // patient room: (227/33 → 6.879 + 6 qual → round 13) × 7 = 91; office 10 × 5 = 50
-    expect(t.weeklyMinutes).toBe(91 + 50);
-    expect(t.fte).toBeCloseTo(141 / 2100);
+    // patient room: (227 at ISSA clinical 2,150/hr = 6.3 → 6) × 7 = 42; office 5 × 5 = 25
+    expect(t.weeklyMinutes).toBe(42 + 25);
+    expect(t.fte).toBeCloseTo(67 / 2100);
   });
   it("blank departments stay separate in the tree and the chart", () => {
     const depts = byDepartment(spaces, rules);

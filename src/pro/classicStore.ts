@@ -13,7 +13,7 @@
 //   • space.assignedScheduleId mirrors the PRIMARY schedule for Classic.
 import {
   computeMinutes, requiredTasks, toClassicRoomTasks, fromClassicRoomTasks,
-  loadRules, autoTasksFor, typeIdFromLabel, type Rules
+  loadRules, autoTasksFor, typeIdFromLabel, ISSA_HELPER_TASK, type Rules
 } from "./rules";
 import { resolvePendingRoomTypes, loadAliases } from "./roomListImport";
 
@@ -286,6 +286,30 @@ export function refreshAutoTasks(spaces: ClassicSpace[], prev: Rules, next: Rule
     }
   }
   return changed;
+}
+
+/**
+ * The data half of applyIssaStandards: drop the operator workaround's
+ * "issa-*" helper task ids from hand-customized rooms and from schedule
+ * coverage (rulebook-following rooms already lose them through
+ * refreshAutoTasks). Run AFTER the rules change. Returns rooms + schedule
+ * stops touched.
+ */
+export function stripIssaHelperTasks(data: ClassicData): number {
+  let n = 0;
+  for (const sp of data.v7.spaces ?? []) {
+    if (!Array.isArray(sp.spaceTasks) || !sp.spaceTasks.some((t) => ISSA_HELPER_TASK.test(t))) continue;
+    sp.spaceTasks = sp.spaceTasks.filter((t) => !ISSA_HELPER_TASK.test(t));
+    n++;
+  }
+  for (const sched of data.v7.schedules ?? []) {
+    for (const [spaceId, ids] of Object.entries(sched.roomTasks ?? {})) {
+      if (!ids.some((t) => ISSA_HELPER_TASK.test(t))) continue;
+      sched.roomTasks![spaceId] = ids.filter((t) => !ISSA_HELPER_TASK.test(t));
+      n++;
+    }
+  }
+  return n;
 }
 
 // ── coverage: which schedules cover which tasks in which rooms ──────────────

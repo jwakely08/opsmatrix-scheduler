@@ -22,8 +22,26 @@ export interface TaskRule {
 export interface RoomTypeRule {
   id: string;
   label: string;
-  /** flat qualifier minutes on top of general cleaning */
+  /** flat qualifier minutes on top of general cleaning (optional add-on) */
   qualifierMin: number;
+  /**
+   * The ISSA space category this type is priced as (an ISSA_CATEGORIES id).
+   * Names the source on the breakdown line while sqftPerHour still equals
+   * that category's published rate.
+   */
+  issaCategory?: string;
+  /**
+   * This type's own production rate, sq ft per HOUR, for the whole general
+   * clean (floor included). Set → it replaces the floor-type formula;
+   * absent → the type falls back to that formula (rules saved before
+   * 2026-10-12 keep pricing exactly as they did).
+   */
+  sqftPerHour?: number;
+  /**
+   * A hospital's own per-room standard: this many minutes per clean no
+   * matter the size (e.g. "an OR turnover is 45 min"). Wins over any rate.
+   */
+  flatMinutes?: number;
   /** how often this type is cleaned, e.g. "7x / week" — editable per account */
   frequency: string;
   /**
@@ -135,6 +153,127 @@ export interface Rules {
   breakSchedules: BreakSchedule[];
 }
 
+/**
+ * ISSA 612 production rates per space category (Josh, 2026-10-12: "ISSA by
+ * default for everything" until a hospital supplies its own per-room times).
+ * Midpoints of the published ranges, sq ft per hour, as listed at
+ * os.xiri.ai/blog/issa-612-cleaning-rates-explained. Editable per room type.
+ */
+export interface IssaCategory { id: string; label: string; sqftPerHour: number; }
+
+export const ISSA_CATEGORIES: IssaCategory[] = [
+  { id: "office", label: "General office", sqftPerHour: 4250 },
+  { id: "conference", label: "Conference", sqftPerHour: 3500 },
+  { id: "lobby-corridor", label: "Lobbies & corridors", sqftPerHour: 5500 },
+  { id: "elevator", label: "Elevator", sqftPerHour: 600 },
+  { id: "restroom", label: "Restroom", sqftPerHour: 1000 },
+  { id: "break-room", label: "Break room / cafeteria", sqftPerHour: 3150 },
+  { id: "clinical", label: "Medical / clinical", sqftPerHour: 2150 },
+  { id: "lab", label: "Laboratory", sqftPerHour: 1850 },
+  { id: "locker", label: "Locker room", sqftPerHour: 1850 }
+];
+
+export function issaCategory(id: string | undefined): IssaCategory | undefined {
+  return ISSA_CATEGORIES.find((c) => c.id === id);
+}
+
+/** built-in room type → its ISSA category (the nearest one where ISSA has none) */
+export const ISSA_TYPE_CATEGORY: Record<string, string> = {
+  office: "office", storage: "office", "conference-room": "conference",
+  lobby: "lobby-corridor", "waiting-room": "lobby-corridor", corridor: "lobby-corridor",
+  hallway: "lobby-corridor", stairwell: "lobby-corridor",
+  elevator: "elevator", restroom: "restroom",
+  lounge: "break-room", "break-room": "break-room",
+  "exam-room": "clinical", "emergency-room": "clinical", "patient-room": "clinical",
+  "procedure-room": "clinical", "operating-room": "clinical", "utility-room": "clinical",
+  "nurses-station": "clinical", "clean-utility": "clinical",
+  lab: "lab", "locker-room": "locker",
+  // infrastructure is rarely cleaned; when it is, it prices like storage
+  "mechanical-room": "office", "electrical-room": "office", "data-telecom": "office",
+  shaft: "office", "shell-space": "office", roof: "office"
+};
+
+/** a built-in room type at its ISSA default (no qualifier — ISSA rates are all-in) */
+function issaType(id: string, label: string, frequency: string, extra?: Partial<RoomTypeRule>): RoomTypeRule {
+  const cat = issaCategory(ISSA_TYPE_CATEGORY[id])!;
+  return {
+    id, label, qualifierMin: 0, frequency, issaCategory: cat.id, sqftPerHour: cat.sqftPerHour,
+    ...extra, builtIn: true
+  };
+}
+
+export type BasePricing = "formula" | "rate" | "flat";
+
+/** how a room type prices its general clean: flat minutes › own rate › floor formula */
+export function basePricing(rt: RoomTypeRule | undefined): BasePricing {
+  if (rt && Number(rt.flatMinutes) > 0) return "flat";
+  if (rt && Number(rt.sqftPerHour) > 0) return "rate";
+  return "formula";
+}
+
+/** "ISSA Medical / clinical" while the rate is still ISSA's, else "your rate" */
+export function rateSourceLabel(rt: RoomTypeRule): string {
+  const cat = issaCategory(rt.issaCategory);
+  return cat && Number(rt.sqftPerHour) === cat.sqftPerHour ? `ISSA ${cat.label}` : "your rate";
+}
+
+/** 2150 sq ft/hr → "35.8" (sq ft per minute, one decimal, no trailing .0) */
+export function perMinuteText(sqftPerHour: number): string {
+  return String(Math.round((sqftPerHour / 60) * 10) / 10);
+}
+
+/** ids of the tasks the 2026-10-12 operator workaround added (one per ISSA category) */
+export const ISSA_HELPER_TASK = /^issa-/;
+const ISSA_HELPER_CATEGORY: Record<string, string> = {
+  "issa-office": "office", "issa-conference": "conference", "issa-elevator": "elevator",
+  "issa-restroom": "restroom", "issa-breakroom": "break-room", "issa-clinical": "clinical",
+  "issa-lab": "lab", "issa-locker": "locker"
+};
+/** the workaround's base rate: Lobbies & corridors, 5,500 sq ft/hr as sq ft/min */
+const ISSA_HELPER_BASE = 5500 / 60;
+
+/**
+ * Put every room type on the built-in ISSA rates — the one-click move for an
+ * account saved before they existed, and the clean-up for the operator
+ * workaround (base rate 5,500 sq ft/hr + one "issa-*" auto task per
+ * category). Each type gets its category's rate (built-in mapping, else the
+ * workaround task that was riding on it, else the base the workaround priced
+ * it at, else General office), qualifiers go to 0 (ISSA rates are all-in),
+ * flat minutes are cleared, the helper tasks are removed and a workaround
+ * base rate goes back to the stock floor formula. Cleanable rooms price the
+ * same as the workaround did, to rounding. Returns a NEW rulebook.
+ */
+export function applyIssaStandards(rules: Rules): Rules {
+  const next: Rules = JSON.parse(JSON.stringify(rules));
+  const helpers = next.tasks.filter((t) => ISSA_HELPER_TASK.test(t.id));
+  const helperCat = (typeId: string) =>
+    ISSA_HELPER_CATEGORY[helpers.find((t) => (t.autoFor ?? []).includes(typeId))?.id ?? ""];
+  for (const rt of next.roomTypes) {
+    const catId = rt.issaCategory ?? helperCat(rt.id) ?? ISSA_TYPE_CATEGORY[rt.id]
+      ?? (helpers.length ? "lobby-corridor" : "office");
+    const cat = issaCategory(catId) ?? issaCategory("office")!;
+    rt.issaCategory = cat.id;
+    rt.sqftPerHour = cat.sqftPerHour;
+    rt.qualifierMin = 0;
+    delete rt.flatMinutes;
+  }
+  if (helpers.length) {
+    next.tasks = next.tasks.filter((t) => !ISSA_HELPER_TASK.test(t.id));
+    const def = defaultRules().general;
+    if (Math.abs(next.general.hardSqftPerMin - ISSA_HELPER_BASE) < 0.05) next.general.hardSqftPerMin = def.hardSqftPerMin;
+    if (Math.abs(next.general.carpetSqftPerMin - ISSA_HELPER_BASE) < 0.05) next.general.carpetSqftPerMin = def.carpetSqftPerMin;
+  }
+  return next;
+}
+
+/** does this rulebook still need applyIssaStandards? (helper tasks, or a type on the floor formula) */
+export function needsIssaMigration(rules: Rules): { helperTasks: number; formulaTypes: number } {
+  return {
+    helperTasks: rules.tasks.filter((t) => ISSA_HELPER_TASK.test(t.id)).length,
+    formulaTypes: rules.roomTypes.filter((rt) => basePricing(rt) === "formula").length
+  };
+}
+
 export const FREQUENCIES = [
   "7x / week", "6x / week", "5x / week", "3x / week", "2x / week", "1x / week", "Every other week", "Monthly"
 ];
@@ -164,32 +303,39 @@ export function defaultRules(): Rules {
       { id: "damp-mop", label: "Mopping", sqftPerMin: 60, flatMin: 0, autoFor: [], addable: true, builtIn: true },
       { id: "vacuum", label: "Vacuuming", sqftPerMin: 55, flatMin: 0, autoFor: [], addable: true, builtIn: true }
     ],
+    // ISSA production rates per room type (2026-10-12) — the floor formula
+    // above only prices a type that has no rate of its own
     roomTypes: [
-      { id: "office", label: "Office", qualifierMin: 0, frequency: "5x / week", builtIn: true },
-      { id: "exam-room", label: "Exam Room", qualifierMin: 4, frequency: "7x / week", builtIn: true },
-      { id: "emergency-room", label: "Emergency Room", qualifierMin: 10, frequency: "7x / week", builtIn: true },
-      { id: "patient-room", label: "Patient Room", qualifierMin: 6, frequency: "7x / week", builtIn: true },
-      { id: "lounge", label: "Lounge", qualifierMin: 2, frequency: "7x / week", builtIn: true },
-      { id: "lobby", label: "Lobby", qualifierMin: 2, frequency: "7x / week", builtIn: true },
-      { id: "waiting-room", label: "Waiting Room", qualifierMin: 2, frequency: "7x / week", builtIn: true },
-      { id: "procedure-room", label: "Procedure Room", qualifierMin: 8, frequency: "7x / week", builtIn: true },
-      { id: "restroom", label: "Restroom", qualifierMin: 8, frequency: "7x / week", builtIn: true },
-      { id: "operating-room", label: "Operating Room", qualifierMin: 25, frequency: "7x / week", builtIn: true },
-      { id: "corridor", label: "Corridor", qualifierMin: 0, frequency: "7x / week", builtIn: true },
-      { id: "hallway", label: "Hallway", qualifierMin: 0, frequency: "7x / week", builtIn: true },
+      issaType("office", "Office", "5x / week"),
+      issaType("exam-room", "Exam Room", "7x / week"),
+      issaType("emergency-room", "Emergency Room", "7x / week"),
+      issaType("patient-room", "Patient Room", "7x / week"),
+      issaType("lounge", "Lounge", "7x / week"),
+      issaType("lobby", "Lobby", "7x / week"),
+      issaType("waiting-room", "Waiting Room", "7x / week"),
+      issaType("procedure-room", "Procedure Room", "7x / week"),
+      issaType("restroom", "Restroom", "7x / week"),
+      issaType("operating-room", "Operating Room", "7x / week"),
+      issaType("corridor", "Corridor", "7x / week"),
+      issaType("hallway", "Hallway", "7x / week"),
       // spaces a hospital CAD export names that EVS still cleans
-      { id: "stairwell", label: "Stairwell", qualifierMin: 0, frequency: "2x / week", builtIn: true },
-      { id: "elevator", label: "Elevator", qualifierMin: 2, frequency: "7x / week", builtIn: true },
-      { id: "storage", label: "Storage", qualifierMin: 0, frequency: "1x / week", builtIn: true },
-      { id: "utility-room", label: "Utility Room", qualifierMin: 2, frequency: "7x / week", builtIn: true },
-      { id: "locker-room", label: "Locker Room", qualifierMin: 4, frequency: "7x / week", builtIn: true },
+      issaType("stairwell", "Stairwell", "2x / week"),
+      issaType("elevator", "Elevator", "7x / week"),
+      issaType("storage", "Storage", "1x / week"),
+      issaType("utility-room", "Utility Room", "7x / week"),
+      issaType("locker-room", "Locker Room", "7x / week"),
+      issaType("conference-room", "Conference Room", "5x / week"),
+      issaType("nurses-station", "Nurses Station", "7x / week"),
+      issaType("break-room", "Break Room / Kitchen", "7x / week"),
+      issaType("lab", "Laboratory", "7x / week"),
+      issaType("clean-utility", "Clean Supply / Med Room", "7x / week"),
       // infrastructure: real square footage, but not normal EVS workload
-      { id: "mechanical-room", label: "Mechanical Room", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true },
-      { id: "electrical-room", label: "Electrical Room", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true },
-      { id: "data-telecom", label: "Data / Telecom Room", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true },
-      { id: "shaft", label: "Shaft", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true },
-      { id: "shell-space", label: "Shell Space", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true },
-      { id: "roof", label: "Roof", qualifierMin: 0, frequency: "1x / week", cleanability: "non-cleanable", builtIn: true }
+      issaType("mechanical-room", "Mechanical Room", "1x / week", { cleanability: "non-cleanable" }),
+      issaType("electrical-room", "Electrical Room", "1x / week", { cleanability: "non-cleanable" }),
+      issaType("data-telecom", "Data / Telecom Room", "1x / week", { cleanability: "non-cleanable" }),
+      issaType("shaft", "Shaft", "1x / week", { cleanability: "non-cleanable" }),
+      issaType("shell-space", "Shell Space", "1x / week", { cleanability: "non-cleanable" }),
+      issaType("roof", "Roof", "1x / week", { cleanability: "non-cleanable" })
     ],
     // Sanitation Route left this list 2026-08-31 — routes are built in the
     // Max Sanitation engine now, not booked as a flat block of hours.
@@ -337,11 +483,25 @@ export function typeIdFromLabel(rules: Rules, label: string): string {
   if (hit) return hit.id;
   // legacy classic labels → our ids
   const m: Record<string, string> = {
-    orroom: "operating-room", nursesstation: "office", utilityroom: "utility-room",
-    breakroom: "lounge", conferenceroom: "office", storage: "storage", other: "office",
+    orroom: "operating-room", utilityroom: "utility-room", storage: "storage", other: "office",
     erroom: "emergency-room"
   };
-  return m[norm(label)] ?? "office";
+  return m[norm(label)] ?? legacyNewType(rules, norm(label)) ?? "office";
+}
+
+/**
+ * Legacy labels that have a dedicated built-in type since 2026-10-12 — used
+ * only while the account has that type (deleted it → the old stand-in).
+ */
+const LEGACY_NEW_TYPES: Record<string, [string, string]> = {
+  nursesstation: ["nurses-station", "office"],
+  breakroom: ["break-room", "lounge"],
+  conferenceroom: ["conference-room", "office"]
+};
+function legacyNewType(rules: Rules, key: string): string | undefined {
+  const pair = LEGACY_NEW_TYPES[key];
+  if (!pair) return undefined;
+  return rules.roomTypes.some((rt) => rt.id === pair[0]) ? pair[0] : pair[1];
 }
 
 export function isCarpet(floorType: string | undefined): boolean {
@@ -360,11 +520,10 @@ export function typeIdFromLabelStrict(rules: Rules, label: string | undefined): 
   const hit = rules.roomTypes.find((rt) => norm(rt.label) === norm(raw) || norm(rt.id) === norm(raw));
   if (hit) return hit.id;
   const m: Record<string, string> = {
-    orroom: "operating-room", nursesstation: "office", utilityroom: "utility-room",
-    breakroom: "lounge", conferenceroom: "office", storage: "storage",
+    orroom: "operating-room", utilityroom: "utility-room", storage: "storage",
     erroom: "emergency-room", isolationroom: "patient-room"
   };
-  return m[norm(raw)] ?? null;
+  return m[norm(raw)] ?? legacyNewType(rules, norm(raw)) ?? null;
 }
 
 /** "7x / week" → 7, "Every other week" → 0.5, "Monthly" → 12/52. */
@@ -492,15 +651,28 @@ export function computeMinutes(
   const lines: MinuteLine[] = [];
 
   if (includeBase && !rules.general.formulaOff) {
-    const per = carpet ? rules.general.carpetSqftPerMin : rules.general.hardSqftPerMin;
-    const included = carpet
-      ? (rules.general.vacuumIncluded !== false ? "carpet, vacuuming included" : "carpet")
-      : (rules.general.mopIncluded !== false ? "hard floor, mopping included" : "hard floor");
-    lines.push({
-      label: `General cleaning — 1 min per ${per} sq ft (${included})`,
-      minutes: per > 0 ? sqft / per : 0
-    });
     const rt = rules.roomTypes.find((x) => x.id === typeIdFromLabel(rules, space.roomType ?? ""));
+    const pricing = basePricing(rt);
+    if (rt && pricing === "flat") {
+      // the hospital's own standard for this room type: size doesn't matter
+      lines.push({ label: `General cleaning — ${rt.flatMinutes} min per clean (${rt.label} standard)`, minutes: Number(rt.flatMinutes) });
+    } else if (rt && pricing === "rate") {
+      // a per-type production rate (ISSA by default) replaces the floor formula
+      const sfh = Number(rt.sqftPerHour);
+      lines.push({
+        label: `General cleaning — 1 min per ${perMinuteText(sfh)} sq ft (${rateSourceLabel(rt)})`,
+        minutes: sqft * 60 / sfh
+      });
+    } else {
+      const per = carpet ? rules.general.carpetSqftPerMin : rules.general.hardSqftPerMin;
+      const included = carpet
+        ? (rules.general.vacuumIncluded !== false ? "carpet, vacuuming included" : "carpet")
+        : (rules.general.mopIncluded !== false ? "hard floor, mopping included" : "hard floor");
+      lines.push({
+        label: `General cleaning — 1 min per ${per} sq ft (${included})`,
+        minutes: per > 0 ? sqft / per : 0
+      });
+    }
     if (rt && rt.qualifierMin) {
       lines.push({ label: `${rt.label} qualifier`, minutes: rt.qualifierMin });
     }
