@@ -16,7 +16,7 @@
 //   • Re-import must be safe: rows are matched to existing rooms by source
 //     identity, and a value the manager hand-edited is never clobbered.
 import {
-  type Rules, typeIdFromLabelStrict, autoTasksFor, computeMinutes, loadRules
+  type Rules, typeIdFromLabelStrict, autoTasksFor, tasksAfterFloorChange, computeMinutes, loadRules
 } from "./rules";
 
 /** one worksheet as raw cells (SheetJS sheet_to_json header:1, or CSV rows) */
@@ -379,7 +379,7 @@ export function resolvePendingRoomTypes(
     if (!label) continue;
     sp.roomType = label;
     if (!Array.isArray(sp.spaceTasks) || (sp.spaceTasks as unknown[]).length === 0) {
-      sp.spaceTasks = autoTasksFor(rules, typeIdFromLabelStrict(rules, label) ?? "");
+      sp.spaceTasks = autoTasksFor(rules, typeIdFromLabelStrict(rules, label) ?? "", String(sp.floorType ?? ""));
     }
     sp.estimatedCleaningMinutes = computeMinutes(rules, sp as never).total;
     sp.updatedAt = new Date().toISOString();
@@ -682,7 +682,7 @@ export function importRoomList(
       if (!sp.roomType) sp.roomType = "";
       if (!sp.floorType) sp.floorType = "";
       sp.spaceTasks = sp.roomType
-        ? autoTasksFor(rules, typeIdFromLabelStrict(rules, String(sp.roomType)) ?? "")
+        ? autoTasksFor(rules, typeIdFromLabelStrict(rules, String(sp.roomType)) ?? "", String(sp.floorType))
         : [];
       sp.estimatedCleaningMinutes = computeMinutes(rules, sp as never).total;
       spaces.push(sp);
@@ -701,6 +701,10 @@ export function importRoomList(
           continue; // already right
         }
         if (curBlank || String(cur ?? "") === String(prev[f] ?? " ")) {
+          // a new floor swaps the floor's automatic tasks (Mopping ↔ Vacuuming)
+          if (f === "floorType" && Array.isArray(existing.spaceTasks)) {
+            existing.spaceTasks = tasksAfterFloorChange(rules, existing as never, String(v));
+          }
           existing[f] = v;          // still what we set last time → safe to update
           source.applied[f] = v;
           changed = true;

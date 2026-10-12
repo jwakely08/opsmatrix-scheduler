@@ -19,7 +19,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  applyRoomType, spaceIncomplete, syncSpaceMinutes, FLOOR_TYPES,
+  applyRoomType, applyFloorType, spaceIncomplete, syncSpaceMinutes, FLOOR_TYPES,
   type ClassicData, type ClassicPlan, type ClassicSpace
 } from "./classicStore";
 import { typeIdFromLabelStrict, type Rules } from "./rules";
@@ -95,7 +95,8 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
       if (!sp) return;
       if (d.roomNumber !== undefined) sp.roomNumber = d.roomNumber;
       if (d.roomName !== undefined) sp.roomName = d.roomName;
-      if (d.floorType !== undefined) sp.floorType = d.floorType;
+      // floor before type, so a re-typed room gets the NEW floor's tasks
+      if (d.floorType !== undefined) applyFloorType(sp, d.floorType, rules);
       if (d.fixtureCount !== undefined) sp.fixtureCount = d.fixtureCount;
       if (d.department !== undefined) sp.department = d.department;
       if (d.roomType !== undefined) {

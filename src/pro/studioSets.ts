@@ -85,7 +85,7 @@ function applyShapeDetails(sp: ClassicSpace, shape: StudioShapeData, account: st
   sp.roomName = shape.roomName;
   if (shape.roomType) {
     sp.roomType = shape.roomType;
-    sp.spaceTasks = autoTasksFor(rules, typeIdFromLabel(rules, shape.roomType));
+    sp.spaceTasks = autoTasksFor(rules, typeIdFromLabel(rules, shape.roomType), sp.floorType);
   }
   syncSpaceMinutes(sp, rules);
 }
