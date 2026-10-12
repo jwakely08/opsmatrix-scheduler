@@ -85,25 +85,28 @@ describe("deleted built-ins stay deleted", () => {
 describe("the General Clean formula toggles", () => {
   const room = { squareFeet: 330, roomType: "Office", floorType: "Hard floor — finished" };
 
-  it("formulaOff drops the base line (and the type qualifier that rides on it)", () => {
+  it("formulaOff drops the General Clean line", () => {
     const r: Rules = defaultRules();
     const withBase = computeMinutes(r, room).total;
     r.general.formulaOff = true;
     const without = computeMinutes(r, room);
-    expect(without.lines.some((l) => l.label.startsWith("General cleaning"))).toBe(false);
+    expect(without.lines.some((l) => l.label.startsWith("General Clean"))).toBe(false);
     expect(without.total).toBeLessThan(withBase);
   });
 
-  it("mopIncluded off is honest in the line label", () => {
+  it("floor type no longer changes General Clean (2026-10-12)", () => {
     const r: Rules = defaultRules();
-    r.general.mopIncluded = false;
-    const { lines } = computeMinutes(r, room);
-    expect(lines[0].label).toContain("(hard floor)");
-    expect(lines[0].label).not.toContain("mopping included");
+    const hard = computeMinutes(r, room);
+    const carpet = computeMinutes(r, { ...room, floorType: "Carpet" });
+    expect(carpet.total).toBe(hard.total);
+    expect(carpet.lines[0].label).toBe(hard.lines[0].label);
   });
 
-  it("Mopping and Vacuuming exist as standalone priced space tasks", () => {
+  it("Mopping and Vacuuming are priced only where General Clean does not include them", () => {
     const r = defaultRules();
+    // included by default: listed on the room, it adds nothing
+    expect(computeMinutes(r, { ...room, spaceTasks: ["damp-mop"] }).lines.some((l) => l.label.startsWith("Mopping"))).toBe(false);
+    r.roomTypes.find((rt) => rt.id === "office")!.includedTasks = ["trash-pull", "vacuum"];
     const mins = computeMinutes(r, { ...room, spaceTasks: ["damp-mop"] });
     expect(mins.lines.some((l) => l.label.startsWith("Mopping"))).toBe(true);
   });

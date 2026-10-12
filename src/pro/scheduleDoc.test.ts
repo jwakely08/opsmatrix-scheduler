@@ -126,7 +126,7 @@ describe("buildScheduleDoc", () => {
     expect(a.rows[0].tasks).toEqual(["General Clean"]);
     expect(b.rows[0].tasks).toEqual(["High Dusting"]);
     // and the minutes split the same way — no double-counting the base clean
-    expect(a.rows[0].minutes).toBe(18);
+    expect(a.rows[0].minutes).toBe(11);
     expect(b.rows[0].minutes).toBe(3);
   });
 
@@ -136,10 +136,13 @@ describe("buildScheduleDoc", () => {
     setCoverage(data, "sp-102", "sched-a", true, []);
 
     const doc = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
-    // 400 sq ft ÷ 33 = 12.1 min + 6 min patient-room qualifier = 18 min
-    expect(doc.rows[0]).toMatchObject({ startTime: "7:00 AM", minutes: 18 });
-    expect(doc.rows[1]).toMatchObject({ startTime: "7:18 AM", minutes: 18 });
-    expect(doc.totals.roomMinutes).toBe(36);
+    // 400 sq ft at ISSA medical / clinical 2,150 sq ft/hr = 11.2 → 11 min
+    expect(doc.rows[0]).toMatchObject({ startTime: "7:00 AM", minutes: 11 });
+    expect(doc.rows[1]).toMatchObject({ startTime: "7:11 AM", minutes: 11 });
+    expect(doc.totals.roomMinutes).toBe(22);
+    // the sheet prints ONE General Clean line, worked out
+    expect(doc.rows[0].tasks).toEqual(["General Clean"]);
+    expect(doc.rows[0].generalClean).toBe("Patient Room: 400 sq ft ÷ 2,150 sq ft/hr = 11.2 min");
   });
 
   it("puts a break between rooms, never in the middle of one", () => {
@@ -149,10 +152,10 @@ describe("buildScheduleDoc", () => {
     const rules = { ...RULES, breaks: [{ id: "b", label: "Break", minutes: 15, start: "7:10 AM" }] };
 
     const doc = buildScheduleDoc(data, rules, data.v7.schedules![0], { date: DATE });
-    // room 1 runs 7:00–7:18, so the 7:10 break waits until the room is finished
+    // room 1 runs 7:00–7:11, so the 7:10 break waits until the room is finished
     expect(doc.breaks).toHaveLength(1);
-    expect(doc.breaks[0]).toMatchObject({ startTime: "7:18 AM", endTime: "7:33 AM", afterRow: 1 });
-    expect(doc.rows[1].startTime).toBe("7:33 AM");
+    expect(doc.breaks[0]).toMatchObject({ startTime: "7:11 AM", endTime: "7:26 AM", afterRow: 1 });
+    expect(doc.rows[1].startTime).toBe("7:26 AM");
     expect(doc.totals.breakMinutes).toBe(15);
   });
 
@@ -225,7 +228,7 @@ describe("buildScheduleDoc", () => {
     expect(doc.nonSpace).toEqual([
       { id: "ns1", name: "Discharges", minutes: 120, linkedRooms: ["102"] }
     ]);
-    expect(doc.nonSpaceWindow).toEqual({ start: "7:18 AM", end: "3:00 PM" });
+    expect(doc.nonSpaceWindow).toEqual({ start: "7:11 AM", end: "3:00 PM" });
     expect(doc.totals.nonSpaceMinutes).toBe(120);
   });
 

@@ -161,7 +161,11 @@ function RoomRow({ r }: { r: ScheduleDoc["rows"][0] }) {
       <td className="c-type">{r.roomType || "—"}</td>
       <td className="c-task">
         {r.tasks.length
-          ? r.tasks.map((t, i) => <span key={i} className="tchip">{t}</span>)
+          ? r.tasks.map((t, i) => (
+            <span key={i} className="tchip">
+              {t}{t === "General Clean" && r.generalClean ? <span className="gcf"> — {r.generalClean}</span> : null}
+            </span>
+          ))
           : <span className="tnone">No tasks assigned yet — see supervisor</span>}
       </td>
       <td className="c-pri"><span className={"pri " + PRIORITY_CLASS[r.priority]}>{r.priority.toUpperCase()}</span></td>

@@ -65,3 +65,43 @@ export function saveSection(saved: Rules, draft: Rules, section: ScopeSection): 
   }
   return next;
 }
+
+/** one room type's own slice — its card in Scope saves just this */
+function typeSlice(r: Rules, typeId: string): unknown {
+  return {
+    type: r.roomTypes.find((t) => t.id === typeId) ?? null,
+    autoFor: r.tasks.filter((t) => (t.autoFor ?? []).includes(typeId)).map((t) => t.id).sort()
+  };
+}
+
+export function roomTypeDirty(saved: Rules, draft: Rules, typeId: string): boolean {
+  return JSON.stringify(typeSlice(saved, typeId)) !== JSON.stringify(typeSlice(draft, typeId));
+}
+
+/**
+ * Commit ONE room type's card (formula, included tasks, name, frequency,
+ * its automatic extras) — every other unsaved edit stays a draft. A type
+ * that is new in the draft (a duplicate) lands at its draft position.
+ */
+export function saveRoomType(saved: Rules, draft: Rules, typeId: string): Rules {
+  const next = clone(saved);
+  const d = draft.roomTypes.find((t) => t.id === typeId);
+  const at = next.roomTypes.findIndex((t) => t.id === typeId);
+  if (!d) {
+    if (at >= 0) next.roomTypes.splice(at, 1);
+  } else if (at >= 0) {
+    next.roomTypes[at] = clone(d);
+  } else {
+    const prevId = draft.roomTypes[draft.roomTypes.findIndex((t) => t.id === typeId) - 1]?.id;
+    const after = next.roomTypes.findIndex((t) => t.id === prevId);
+    next.roomTypes.splice(after + 1, 0, clone(d));
+  }
+  for (const t of next.tasks) {
+    const dt = draft.tasks.find((x) => x.id === t.id);
+    const wants = Boolean(dt && (dt.autoFor ?? []).includes(typeId));
+    const has = (t.autoFor ?? []).includes(typeId);
+    if (wants && !has) t.autoFor = [...(t.autoFor ?? []), typeId];
+    if (!wants && has) t.autoFor = t.autoFor.filter((x) => x !== typeId);
+  }
+  return next;
+}

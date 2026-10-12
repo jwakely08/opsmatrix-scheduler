@@ -13,7 +13,7 @@
 //   • space.assignedScheduleId mirrors the PRIMARY schedule for Classic.
 import {
   computeMinutes, requiredTasks, toClassicRoomTasks, fromClassicRoomTasks,
-  loadRules, autoTasksFor, typeIdFromLabel, type Rules
+  loadRules, autoTasksFor, typeIdFromLabel, typeIdFromLabelStrict, includedConflicts, ISSA_HELPER_TASK, type Rules
 } from "./rules";
 import { resolvePendingRoomTypes, loadAliases } from "./roomListImport";
 
@@ -144,7 +144,11 @@ export function loadClassic(): ClassicData {
     }
     sp.floorType = fusionFloorLabel(sp.floorType);
   }
-  return { v7, plans, nonSpace };
+  const data = { v7, plans, nonSpace };
+  // the 2026-10-12 operator workaround's helper tasks are gone from the
+  // rulebook (migrateRules) — their ids go from rooms and schedules too
+  stripIssaHelperTasks(data);
+  return data;
 }
 
 /**
@@ -257,6 +261,7 @@ export function retuneAllSpaces(spaces: ClassicSpace[], next: Rules, prev?: Rule
   const snap = (sp: ClassicSpace) =>
     JSON.stringify([sp.roomType, sp.spaceTasks, sp.estimatedCleaningMinutes, sp.floorType]);
   const before = spaces.map(snap);
+  if (prev) renameRoomTypes(spaces, prev, next);
   resolvePendingRoomTypes(spaces as never, next, loadAliases());
   refreshAutoTasks(spaces, prev ?? next, next);
   for (const sp of spaces) {
@@ -286,6 +291,65 @@ export function refreshAutoTasks(spaces: ClassicSpace[], prev: Rules, next: Rule
     }
   }
   return changed;
+}
+
+/**
+ * The data half of applyIssaStandards: drop the operator workaround's
+ * "issa-*" helper task ids from hand-customized rooms and from schedule
+ * coverage (rulebook-following rooms already lose them through
+ * refreshAutoTasks). Run AFTER the rules change. Returns rooms + schedule
+ * stops touched.
+ */
+export function stripIssaHelperTasks(data: ClassicData): number {
+  let n = 0;
+  for (const sp of data.v7.spaces ?? []) {
+    if (!Array.isArray(sp.spaceTasks) || !sp.spaceTasks.some((t) => ISSA_HELPER_TASK.test(t))) continue;
+    sp.spaceTasks = sp.spaceTasks.filter((t) => !ISSA_HELPER_TASK.test(t));
+    n++;
+  }
+  for (const sched of data.v7.schedules ?? []) {
+    for (const [spaceId, ids] of Object.entries(sched.roomTasks ?? {})) {
+      if (!ids.some((t) => ISSA_HELPER_TASK.test(t))) continue;
+      sched.roomTasks![spaceId] = ids.filter((t) => !ISSA_HELPER_TASK.test(t));
+      n++;
+    }
+  }
+  return n;
+}
+
+/**
+ * A room type renamed in Scope takes its rooms with it (rooms store the
+ * type's LABEL) — e.g. a duplicated "Exam Room (copy)" renamed to "Exam
+ * Room – Bariatric". Returns how many rooms moved to the new name.
+ */
+export function renameRoomTypes(spaces: ClassicSpace[], prev: Rules, next: Rules): number {
+  let n = 0;
+  for (const rt of next.roomTypes) {
+    const old = prev.roomTypes.find((x) => x.id === rt.id);
+    if (!old || old.label === rt.label) continue;
+    for (const sp of spaces) {
+      if (typeIdFromLabelStrict(prev, String(sp.roomType ?? "")) !== rt.id) continue;
+      sp.roomType = rt.label;
+      n++;
+    }
+  }
+  return n;
+}
+
+/**
+ * Take tasks a room's type now INCLUDES in General Clean off that room's
+ * list (they add no time and can't be scheduled as extras) — Scope's
+ * "remove them" button behind the flag. Returns rooms changed.
+ */
+export function stripIncludedTasks(data: ClassicData, rules: Rules): number {
+  let n = 0;
+  for (const sp of data.v7.spaces ?? []) {
+    const extra = includedConflicts(rules, sp);
+    if (!extra.length || !Array.isArray(sp.spaceTasks)) continue;
+    sp.spaceTasks = sp.spaceTasks.filter((t) => !extra.includes(t));
+    n++;
+  }
+  return n;
 }
 
 // ── coverage: which schedules cover which tasks in which rooms ──────────────

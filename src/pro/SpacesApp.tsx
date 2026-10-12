@@ -17,7 +17,7 @@ import {
   BUILDING_PRESETS, buildingArtMap, buildingArtUrl, setBuildingArt, fileToBuildingArt
 } from "./buildingArt";
 import {
-  autoTasksFor, typeIdFromLabel, isCarpet, spaceCleanability, type Rules
+  autoTasksFor, typeIdFromLabel, isCarpet, spaceCleanability, includedTasksFor, type Rules
 } from "./rules";
 
 const fmt = (n: number) => Math.round(n).toLocaleString();
@@ -86,6 +86,8 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
   const typeId = typeIdFromLabel(rules, draft.roomType ?? "");
   const clean = spaceCleanability(rules, draft);
   const req = Array.isArray(draft.spaceTasks) ? draft.spaceTasks : [];
+  // tasks this type's General Clean already covers — never extras here
+  const included = includedTasksFor(rules, typeId);
   const linked = space ? notesForSpace(data, space).linked : [];
 
   const set = (patch: Partial<ClassicSpace>) => setDraft((d) => ({ ...d, ...patch }));
@@ -210,6 +212,14 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
             {rules.tasks.filter((t) => t.addable).map((t) => {
               const on = req.includes(t.id);
               const auto = t.autoFor.includes(typeId);
+              if (included.includes(t.id)) {
+                return on ? (
+                  <button key={t.id} className="ptask warn"
+                    onClick={() => set({ spaceTasks: req.filter((x) => x !== t.id) })}>
+                    ⚠ {t.label} is in General Clean — tap to remove
+                  </button>
+                ) : <span key={t.id} className="ptask incl">{t.label} ✓ in General Clean</span>;
+              }
               return (
                 <button key={t.id} className={"ptask" + (on ? " on" : "")}
                   onClick={() => set({ spaceTasks: on ? req.filter((x) => x !== t.id) : [...req, t.id] })}>

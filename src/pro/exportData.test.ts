@@ -263,10 +263,11 @@ describe("the schedules workbook (raw data to re-create the schedule elsewhere)"
     const names = stop1.map((r) => String(r[3]));
     expect(names).toContain("General Clean");
     expect(names).toContain("High Dusting");
-    // 180 carpet sqft: general = 180/40 = 4.5m, high dusting = 180/120 = 1.5m
+    // 180 sqft exam room: general = 180 at ISSA clinical 2,150/hr = 5.0m,
+    // high dusting = 180/120 = 1.5m
     const gc = stop1.find((r) => r[3] === "General Clean")!;
     const hd = stop1.find((r) => r[3] === "High Dusting")!;
-    expect(gc[4]).toBe(4.5);
+    expect(gc[4]).toBe(5);
     expect(hd[4]).toBe(1.5);
     // and the task rows sum to the stop's total (top-up row included if any)
     const stops = sheetByName(d).get("Room Stops")!;

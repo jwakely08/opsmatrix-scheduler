@@ -348,7 +348,8 @@ export {
 // by fusion-ui.js) speak the SAME Scope rulebook as every other screen
 export {
   loadRules, saveRules, computeMinutes, autoTasksFor, typeIdFromLabelStrict,
-  spaceCleanability, freqPerWeek, FREQUENCIES
+  spaceCleanability, freqPerWeek, FREQUENCIES, gcFormula, gcFormulaText, issaSourceLabel, rateFromUnit,
+  RATE_UNITS, includedTasksFor, resetToIssa, DEFAULT_INCLUDED_TASKS
 } from "../pro/rules";
 export { retuneAllSpaces, fusionFloorLabel, FLOOR_TYPES } from "../pro/classicStore";
 export { loadAliases, normalizeFloorType as normalizeFloorFinish } from "../pro/roomListImport";

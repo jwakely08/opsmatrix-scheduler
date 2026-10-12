@@ -16,7 +16,7 @@ import {
   coverageForSpace, coverageMinutes, spacePriority, nonSpaceTaskMinutes,
   type ClassicData, type ClassicSchedule, type ClassicSpace, type Priority
 } from "./classicStore";
-import { type Rules, type BreakRule } from "./rules";
+import { generalCleanLine, includedTasksFor, typeIdFromLabel, type Rules, type BreakRule } from "./rules";
 
 export interface DocRow {
   spaceId: string;
@@ -28,6 +28,11 @@ export interface DocRow {
   roomType: string;
   /** plain-English task names for this room ON THIS SCHEDULE */
   tasks: string[];
+  /**
+   * The General Clean worked out, when this schedule does it here:
+   * "Office: 152 sq ft ÷ 4,250 sq ft/hr = 2.1 min" — printed beside it
+   */
+  generalClean?: string;
   priority: Priority;
   minutes: number;
 }
@@ -242,7 +247,11 @@ export function buildScheduleDoc(
       roomNumber: String(sp.roomNumber ?? ""),
       roomName: String(sp.roomName ?? sp.roomNumber ?? ""),
       roomType: String(sp.roomType ?? ""),
-      tasks: cov ? coverageTaskLabels(rules, cov) : ["Route stop"],
+      // a task the type's General Clean includes is part of that line, not an extra
+      tasks: cov ? coverageTaskLabels(rules, {
+        ...cov, tasks: cov.tasks.filter((t) => !includedTasksFor(rules, typeIdFromLabel(rules, String(sp.roomType ?? ""))).includes(t))
+      }) : ["Route stop"],
+      ...(cov?.primary && !rules.general.formulaOff ? { generalClean: generalCleanLine(rules, sp).text } : {}),
       priority: spacePriority(sp),
       minutes
     });

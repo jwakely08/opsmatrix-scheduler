@@ -852,13 +852,10 @@
       },
       {
         name: "update_cleaning_rules",
-        description: "Change the account-wide cleaning rates or staffing assumptions. Every room, schedule and the Workload Intelligence FTE recalculate instantly.",
+        description: "Change the account's staffing assumptions. Every room, schedule and the Workload Intelligence FTE recalculate instantly. (General Clean time is set per room type — use set_room_type_rule.)",
         input_schema: {
           type: "object",
           properties: {
-            hard_floor_sqft_per_minute: { type: "number", description: "general clean covers this many sq ft of hard floor per minute (default 33)" },
-            carpet_sqft_per_minute: { type: "number", description: "sq ft of carpet per minute (default 40)" },
-            minimum_minutes_per_room: { type: "number" },
             productive_minutes_per_shift: { type: "number", description: "productive cleaning minutes in one shift (default 420)" },
             shifts_per_week_per_fte: { type: "number", description: "shifts one full-time employee works weekly (default 5)" }
           }
@@ -866,16 +863,21 @@
       },
       {
         name: "set_room_type_rule",
-        description: "Create a room type or change how one is priced: cleaning frequency, extra minutes per clean, whether it counts toward EVS workload, and which tasks it gets automatically. Existing rooms of that type update immediately.",
+        description: "Create a room type or change it: its General Clean formula (by size = sq ft ÷ rate, fixed minutes per room, or both — ISSA rates by default; a hospital's own numbers can be entered in the unit they give), the tasks its General Clean already includes, cleaning frequency, whether it counts toward EVS workload, and which extra tasks it gets automatically. Every room of that type is re-timed immediately. A room that differs gets its own room type — there are no per-room overrides.",
         input_schema: {
           type: "object",
           required: ["room_type"],
           properties: {
             room_type: { type: "string", description: "e.g. Patient Room, Telemetry Room" },
             frequency: { type: "string", description: "one of: 7x / week, 6x / week, 5x / week, 3x / week, 2x / week, 1x / week, Every other week, Monthly" },
-            extra_minutes: { type: "number", description: "flat minutes added on top of the general clean" },
+            general_clean_method: { type: "string", enum: ["size", "fixed", "both"], description: "size = sq ft ÷ rate; fixed = fixed minutes per room; both = fixed minutes + sq ft ÷ rate" },
+            fixed_minutes: { type: "number", description: "fixed General Clean minutes per room (method fixed or both)" },
+            rate: { type: "number", description: "the size rate, in rate_unit (method size or both)" },
+            rate_unit: { type: "string", enum: ["sqft_per_hour", "sqft_per_minute", "minutes_per_100_sqft", "minutes_per_1000_sqft"], description: "unit of rate, exactly as the hospital gives it (default sqft_per_hour)" },
+            reset_to_issa: { type: "boolean", description: "put the formula back on the ISSA rate for this kind of space" },
+            included_tasks: { type: "array", items: { type: "string" }, description: "task names this type's General Clean already covers, e.g. [\"Trash Pull\",\"Mopping\",\"Vacuuming\"]" },
             counts_toward_evs_workload: { type: "boolean", description: "false for infrastructure like mechanical rooms" },
-            automatic_tasks: { type: "array", items: { type: "string" }, description: "task names this type gets automatically, e.g. [\"Auto Scrub\",\"Dust Mop\"]" }
+            automatic_tasks: { type: "array", items: { type: "string" }, description: "EXTRA task names this type gets automatically, e.g. [\"Machine Scrubbing\",\"Dust Mopping\"]" }
           }
         }
       },
@@ -1036,17 +1038,19 @@
           var sched = (cx.schedules || []).find(function (s) { return s.id === t.scheduleId; });
           return { service: t.name, hours: t.hours, schedule: sched ? sched.num + " — " + (sched.name || "") : "(unattached)" };
         });
+        var taskLabel = function (id) { var t = r.tasks.find(function (x) { return x.id === id; }); return t ? t.label : id; };
         return {
           general: {
-            hard_floor_sqft_per_minute: r.general.hardSqftPerMin,
-            carpet_sqft_per_minute: r.general.carpetSqftPerMin,
-            minimum_minutes_per_room: r.general.minMinutes,
             productive_minutes_per_shift: r.general.productiveMinutes,
             shifts_per_week_per_fte: r.general.shiftsPerWeekPerFte
           },
           room_types: r.roomTypes.map(function (rt) {
+            var f = F.gcFormula(r, rt);
             return {
-              room_type: rt.label, frequency: rt.frequency, extra_minutes: rt.qualifierMin,
+              room_type: rt.label, frequency: rt.frequency,
+              general_clean: F.gcFormulaText(f) + (F.issaSourceLabel(r, rt) ? " (" + F.issaSourceLabel(r, rt) + ")" : ""),
+              general_clean_method: f.method, fixed_minutes: f.fixedMin, sqft_per_hour: Math.round(f.sqftPerHour * 100) / 100,
+              included_in_general_clean: F.includedTasksFor(r, rt.id).map(taskLabel),
               counts_toward_evs_workload: rt.cleanability !== "non-cleanable",
               automatic_tasks: r.tasks.filter(function (t) { return (t.autoFor || []).indexOf(rt.id) >= 0; })
                 .map(function (t) { return t.label; })
@@ -1068,12 +1072,9 @@
           var v = parseFloat(inp[field]);
           if (Number.isFinite(v) && v > 0) { next.general[target] = v; changed.push(field.replace(/_/g, " ") + " → " + v); }
         }
-        setNum("hard_floor_sqft_per_minute", "hardSqftPerMin");
-        setNum("carpet_sqft_per_minute", "carpetSqftPerMin");
-        setNum("minimum_minutes_per_room", "minMinutes");
         setNum("productive_minutes_per_shift", "productiveMinutes");
         setNum("shifts_per_week_per_fte", "shiftsPerWeekPerFte");
-        if (!changed.length) return { success: false, error: "No valid values given." };
+        if (!changed.length) return { success: false, error: "No valid values given. (General Clean time is set per room type with set_room_type_rule.)" };
         F.saveRules(next);
         var n = retune(cx, next, prev);
         return { success: true, message: "Updated " + changed.join(", ") + ". Repriced " + n + " rooms." };
@@ -1087,13 +1088,31 @@
         if (hit) {
           rt = next.roomTypes.find(function (x) { return x.id === hit.id; });
         } else {
-          rt = { id: slug(inp.room_type) || uid2("rt"), label: String(inp.room_type).trim(), qualifierMin: 0, frequency: "7x / week" };
+          rt = { id: slug(inp.room_type) || uid2("rt"), label: String(inp.room_type).trim(), frequency: "7x / week",
+            includedTasks: F.DEFAULT_INCLUDED_TASKS.slice() };
+          F.resetToIssa(next, rt);
           next.roomTypes.push(rt);
         }
         if (inp.frequency !== undefined) rt.frequency = String(inp.frequency);
-        if (inp.extra_minutes !== undefined && Number.isFinite(parseFloat(inp.extra_minutes))) rt.qualifierMin = parseFloat(inp.extra_minutes);
+        if (inp.reset_to_issa === true) F.resetToIssa(next, rt);
+        // the formula: start from what it is now, change what was given
+        var f = F.gcFormula(next, rt);
+        var UNITS = { sqft_per_hour: "sqftPerHour", sqft_per_minute: "sqftPerMin", minutes_per_100_sqft: "minPer100", minutes_per_1000_sqft: "minPer1000" };
+        if (["size", "fixed", "both"].indexOf(inp.general_clean_method) >= 0) f.method = inp.general_clean_method;
+        if (inp.fixed_minutes !== undefined && parseFloat(inp.fixed_minutes) >= 0) f.fixedMin = parseFloat(inp.fixed_minutes);
+        if (inp.rate_unit !== undefined && UNITS[inp.rate_unit]) f.rateUnit = UNITS[inp.rate_unit];
+        if (inp.rate !== undefined && parseFloat(inp.rate) > 0) f.sqftPerHour = F.rateFromUnit(parseFloat(inp.rate), f.rateUnit);
+        rt.method = f.method; rt.fixedMin = f.fixedMin; rt.sqftPerHour = f.sqftPerHour; rt.rateUnit = f.rateUnit;
+        delete rt.qualifierMin;
         if (inp.counts_toward_evs_workload === false) rt.cleanability = "non-cleanable";
         if (inp.counts_toward_evs_workload === true) delete rt.cleanability;
+        if (Array.isArray(inp.included_tasks)) {
+          var inc = taskIdsFor(next, inp.included_tasks);
+          if (inc.unknown.length) {
+            return { success: false, error: "Unknown task(s): " + inc.unknown.join(", ") + ". Existing tasks: " + next.tasks.map(function (t) { return t.label; }).join(", ") + "." };
+          }
+          rt.includedTasks = inc.ids;
+        }
         if (Array.isArray(inp.automatic_tasks)) {
           var mapped = taskIdsFor(next, inp.automatic_tasks);
           if (mapped.unknown.length) {
@@ -1104,9 +1123,14 @@
             if (mapped.ids.indexOf(t.id) >= 0) t.autoFor.push(rt.id);
           });
         }
+        // an included task is never an automatic extra
+        var included = F.includedTasksFor(next, rt.id);
+        next.tasks.forEach(function (t) {
+          if (included.indexOf(t.id) >= 0) t.autoFor = (t.autoFor || []).filter(function (id) { return id !== rt.id; });
+        });
         F.saveRules(next);
         var n = retune(cx, next, prev);
-        return { success: true, message: (hit ? "Updated" : "Created") + " room type " + rt.label + ". " + n + " rooms updated." };
+        return { success: true, message: (hit ? "Updated" : "Created") + " room type " + rt.label + " — General Clean = " + F.gcFormulaText(F.gcFormula(next, rt)) + ". " + n + " rooms re-timed." };
       },
 
       set_task_rule: function (inp, cx) {
