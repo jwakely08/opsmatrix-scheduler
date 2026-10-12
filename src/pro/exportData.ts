@@ -198,7 +198,7 @@ function daysText(days: unknown): string {
 /** an engine minute-line, reduced to the task's plain name */
 function lineTaskName(label: string): string {
   const short = label.split(" — ")[0].trim();
-  return /^general cleaning/i.test(short) ? "General Clean" : short;
+  return /^general clean/i.test(short) ? "General Clean" : short;
 }
 
 const r1 = (n: number) => Math.round(n * 10) / 10;

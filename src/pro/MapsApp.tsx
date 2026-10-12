@@ -4,7 +4,7 @@ import {
   loadClassic, saveClassic, syncSpaceMinutes, refreshAutoTasks, coverageForSpace, uncovered, setCoverage,
   coverageMinutes, scheduleMinutes, createSchedule, deleteSchedule, scheduleColor, SCHED_COLORS,
   spaceIncomplete, FLOOR_TYPES, rectifyForDisplay, pathFrom, centroidOf, boundsOf, pointIn,
-  moveInSchedule, spacePriority, PRIORITIES, PRIORITY_WORD, nonSpaceTaskMinutes, stripIssaHelperTasks,
+  moveInSchedule, spacePriority, PRIORITIES, PRIORITY_WORD, nonSpaceTaskMinutes, stripIncludedTasks, renameRoomTypes,
   type ClassicData, type ClassicSpace, type ClassicSchedule, type NonSpaceTask
 } from "./classicStore";
 import {
@@ -21,7 +21,7 @@ import {
 } from "./SpacesApp";
 import { ExportApp } from "./ExportApp";
 import { CalibrationEditorHome } from "./PlanStudio";
-import { sectionDirty, saveSection, type ScopeSection } from "./scopeDraft";
+import { sectionDirty, saveSection, roomTypeDirty, saveRoomType, type ScopeSection } from "./scopeDraft";
 import { downloadClientSchedule, type ClientExportInput } from "./clientSchedule";
 import { downloadTemplateExport } from "./templateExport";
 import { loadTemplates, b64ToBytes, type ClientTemplate } from "./templateStore";
@@ -45,8 +45,10 @@ import { collectWorkspace, applyWorkspace, backupFilename } from "./workspaceSto
 import {
   loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor,
   typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
-  nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, issaCategory, basePricing, applyIssaStandards,
-  needsIssaMigration, type Rules, type RoomTypeRule
+  nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, DEFAULT_INCLUDED_TASKS, RATE_UNITS, computeMinutes,
+  gcFormula, gcMinutes, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
+  issaSourceLabel, categoryFor, resetToIssa, typeIdFromLabelStrict, RULES_KEY,
+  type Rules, type RoomTypeRule, type GcMethod, type GcFormula, type RateUnit
 } from "./rules";
 
 const WALL_STROKE = 13;
@@ -201,19 +203,34 @@ export function MapsApp() {
       // Scope determines everything, after the fact too: re-test rooms still
       // in Needs Review, move rulebook-following rooms to the new automatic
       // task lists (hand-customized rooms keep their custom lists), and
-      // recalculate every room's minutes under the new rules
+      // recalculate every room's minutes under the new rules. A renamed room
+      // type takes its rooms with it (rooms store the type's label).
+      renameRoomTypes(d.v7.spaces ?? [], prev, next);
       resolvePendingRoomTypes((d.v7.spaces ?? []) as never, next, loadAliases());
       refreshAutoTasks(d.v7.spaces ?? [], prev, next);
       for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, next);
     });
   }, [commit]);
 
-  // Scope's "use ISSA rates" button: every room type onto its ISSA rate, and
-  // the 2026-10-12 operator workaround's helper tasks gone from rules AND data
-  const applyIssa = useCallback((next: Rules) => {
-    commitRules(next);
-    commit((d) => { stripIssaHelperTasks(d); });
-  }, [commit, commitRules]);
+  // Scope's flag "rooms still list a task General Clean includes" → take it off
+  const cleanIncluded = useCallback(() => {
+    commit((d) => { stripIncludedTasks(d, rules); });
+  }, [commit, rules]);
+
+  // the 2026-10-12 General Clean model re-times every room once: rules saved
+  // before it are migrated on load (persist that), and any room whose stored
+  // minutes or task list (old issa-* helper ids) disagree is brought in line
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(RULES_KEY) ?? "null");
+      if (stored && !(Number(stored.version) >= 2)) saveRules(rules);
+    } catch { /* unreadable — loadRules already fell back to defaults */ }
+    const stale = (sp: ClassicSpace) => sp.estimatedCleaningMinutes !== computeMinutes(rules, sp).total;
+    if (!(data.v7.spaces ?? []).some(stale)) return;
+    commit((d) => {
+      for (const sp of d.v7.spaces ?? []) if (stale(sp)) syncSpaceMinutes(sp, rules);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // fresh page load: rooms left unclassified by an earlier import get another
   // chance against whatever Scope holds NOW (types added since, new aliases)
@@ -625,7 +642,7 @@ export function MapsApp() {
         )}
 
         {tab === "scope" && (
-          <ScopeTab rules={rules} onChange={commitRules} onApplyIssa={applyIssa} data={data} isAdmin={canEditFormula(role)} />
+          <ScopeTab rules={rules} onChange={commitRules} onCleanIncluded={cleanIncluded} data={data} isAdmin={canEditFormula(role)} />
         )}
 
         {tab === "workload" && (
@@ -1139,7 +1156,10 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
 
   const typeId = typeIdFromLabel(rules, cur.roomType ?? "");
   const carpet = isCarpet(cur.floorType);
-  const req = requiredTasks(rules, cur);
+  // the stored list (an editor shows what's really there), and the tasks
+  // this type's General Clean already covers — those can't be extras
+  const req = rawSpaceTasks(rules, cur);
+  const included = includedTasksFor(rules, typeId);
   const issues = spaceIncomplete(cur);
 
   return (
@@ -1233,6 +1253,15 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
           {rules.tasks.filter((t) => t.addable).map((t) => {
             const on = req.includes(t.id);
             const auto = t.autoFor.includes(typeId);
+            if (included.includes(t.id)) {
+              // part of General Clean here: never an extra — flagged if listed
+              return on ? (
+                <button key={t.id} className="ptask warn"
+                  onClick={() => set({ spaceTasks: req.filter((x) => x !== t.id) })}>
+                  ⚠ {t.label} is in General Clean — tap to remove
+                </button>
+              ) : <span key={t.id} className="ptask incl">{t.label} ✓ in General Clean</span>;
+            }
             return (
               <button key={t.id} className={"ptask" + (on ? " on" : "") + (t.floorCare ? " fc" : "")}
                 onClick={() => set({ spaceTasks: on ? req.filter((x) => x !== t.id) : [...req, t.id] })}>
@@ -1748,71 +1777,210 @@ function ClientRow({ sched, rules, commit }: {
 // Josh's rules: no explainer prose, each section saves ITSELF (a Save button
 // per section, drafts never leak between them), everything is deletable —
 // built-ins included — breaks live at the bottom, and the general cleaning
-// formula is the account administrator's alone.
+// formula is the account administrator's alone (2026-10-12: each room type's
+// General Clean formula — editing it is the admin's; names, frequency and
+// extras are anyone's).
 
-/**
- * How one room type prices its general clean (2026-10-12): an ISSA category
- * at its published rate (the default), the hospital's own sq ft per hour,
- * a flat number of minutes per room (a hospital's per-room standard — what
- * clinical rooms usually come with), or the account's floor formula.
- */
-function RoomRateEditor({ rt, edit }: { rt: RoomTypeRule; edit: (mut: (t: RoomTypeRule) => void) => void }) {
-  const mode = basePricing(rt);
-  const cat = issaCategory(rt.issaCategory);
-  const value = mode === "flat" ? "flat" : mode === "formula" ? "formula"
-    : cat && Number(rt.sqftPerHour) === cat.sqftPerHour ? "issa:" + cat.id : "own";
+/** a number box that keeps what's typed ("0.5" survives) while the stored value follows */
+function NumBox({ value, onValue, disabled }: { value: number; onValue: (n: number) => void; disabled?: boolean }) {
+  const show = (v: number) => (v > 0 ? String(v) : "");
+  const [text, setText] = useState(show(value));
+  useEffect(() => {
+    if (Math.abs((parseFloat(text) || 0) - value) > 1e-6) setText(show(value));
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <span className="ratepick">
-      <select value={value} onChange={(e) => {
-        const v = e.target.value;
-        edit((t) => {
-          if (v.startsWith("issa:")) {
-            const c = issaCategory(v.slice(5))!;
-            t.issaCategory = c.id;
-            t.sqftPerHour = c.sqftPerHour;
-            delete t.flatMinutes;
-          } else if (v === "own") {
-            // keep the number they're starting from; it's theirs now, not ISSA's
-            t.sqftPerHour = Number(t.sqftPerHour) > 0 ? t.sqftPerHour : issaCategory(t.issaCategory)?.sqftPerHour ?? 2000;
-            delete t.issaCategory;
-            delete t.flatMinutes;
-          } else if (v === "flat") {
-            t.flatMinutes = Number(t.flatMinutes) > 0 ? t.flatMinutes : 15;
-          } else {
-            delete t.sqftPerHour;
-            delete t.flatMinutes;
-          }
-        });
-      }}>
-        {ISSA_CATEGORIES.map((c) => (
-          <option key={c.id} value={"issa:" + c.id}>ISSA {c.label} — {c.sqftPerHour.toLocaleString()} sq ft/hr</option>
-        ))}
-        <option value="own">Our own rate (sq ft per hour)</option>
-        <option value="flat">Our own minutes per room</option>
-        <option value="formula">Floor formula (hard floor / carpet)</option>
-      </select>
-      {value === "own" && (<>
-        <input type="number" value={rt.sqftPerHour}
-          onChange={(e) => edit((t) => { t.sqftPerHour = Number(e.target.value) || 1; })} /> sq ft per hour
-      </>)}
-      {value === "flat" && (<>
-        <input type="number" value={rt.flatMinutes}
-          onChange={(e) => edit((t) => { t.flatMinutes = Number(e.target.value) || 1; })} /> min per room
-      </>)}
-    </span>
+    <input type="number" min={0} step="any" value={text} disabled={disabled}
+      onChange={(e) => {
+        setText(e.target.value);
+        const n = parseFloat(e.target.value);
+        onValue(Number.isFinite(n) && n > 0 ? n : 0);
+      }} />
   );
 }
 
-function ScopeTab({ rules, onChange, onApplyIssa, data, isAdmin }: {
+const METHOD_WORDS: Record<GcMethod, string> = {
+  size: "by size",
+  fixed: "fixed minutes per room",
+  both: "fixed minutes + size"
+};
+
+/**
+ * One room type's card (Josh, 2026-10-12): its General Clean formula —
+ * "General Clean = [fixed min] + sq ft ÷ [rate] [unit]" typed exactly as a
+ * hospital gives it — a live example, Reset to ISSA, the tasks General Clean
+ * already includes, the automatic extras, and its own Save. A room that
+ * differs gets its own type: Duplicate, rename, adjust.
+ */
+function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts, dirty, nameTaken, autoFocusName,
+  onSave, onDuplicate, onDelete, onCleanIncluded }: {
+  rt: RoomTypeRule;
+  draft: Rules;
+  edit: (mut: (t: RoomTypeRule) => void) => void;
+  editAll: (mut: (r: Rules) => void) => void;
+  isAdmin: boolean;
+  sampleSqft: { sqft: number; fromRooms: boolean };
+  conflicts: number;
+  dirty: boolean;
+  nameTaken: boolean;
+  autoFocusName: boolean;
+  onSave: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  onCleanIncluded: () => void;
+}) {
+  const f = gcFormula(draft, rt);
+  const included = includedTasksFor(draft, rt.id);
+  const issa = issaSourceLabel(draft, rt);
+  const cat = categoryFor(draft, rt);
+  const times = f.rateUnit === "minPer100" || f.rateUnit === "minPer1000";
+  // every edit writes the whole formula, so an older type becomes explicit
+  const setF = (patch: Partial<GcFormula>) => edit((t) => {
+    const cur = gcFormula(draft, t);
+    const next = { ...cur, ...patch };
+    t.method = next.method; t.fixedMin = next.fixedMin; t.sqftPerHour = next.sqftPerHour; t.rateUnit = next.rateUnit;
+    delete t.qualifierMin;
+  });
+  const example = gcMinutes(f, sampleSqft.sqft);
+  const extras = draft.tasks.filter((t) => t.addable && !included.includes(t.id));
+  return (
+    <div className="gccard">
+      <div className="gchead">
+        <input type="text" className="gcname" value={rt.label} autoFocus={autoFocusName}
+          onChange={(e) => edit((t) => { t.label = e.target.value; })} />
+        <select value={rt.frequency} onChange={(e) => edit((t) => { t.frequency = e.target.value; })}>
+          {FREQUENCIES.map((x) => <option key={x}>{x}</option>)}
+        </select>
+        <span className="gcsrc">{issa ?? "your formula"}</span>
+        <span className="gcgrow" />
+        <button className="pbtn small" onClick={onDuplicate}>Duplicate type</button>
+        <button className="pbtn small danger" onClick={onDelete}>✕</button>
+      </div>
+
+      <div className="gcformula">
+        <select value={f.method} disabled={!isAdmin}
+          onChange={(e) => {
+            const method = e.target.value as GcMethod;
+            setF({
+              method,
+              fixedMin: method !== "size" && !(f.fixedMin > 0) ? 10 : f.fixedMin,
+              sqftPerHour: method !== "fixed" && !(f.sqftPerHour > 0) ? (cat?.sqftPerHour ?? 2150) : f.sqftPerHour
+            });
+          }}>
+          {(Object.keys(METHOD_WORDS) as GcMethod[]).map((m) => <option key={m} value={m}>Timed {METHOD_WORDS[m]}</option>)}
+        </select>
+        <span className="gceq">
+          <b>General Clean =</b>
+          {f.method !== "size" && (<>
+            <NumBox value={f.fixedMin} disabled={!isAdmin} onValue={(n) => setF({ fixedMin: n })} /> min per room
+          </>)}
+          {f.method === "both" && <b>+</b>}
+          {f.method !== "fixed" && (<>
+            sq ft {times ? "×" : "÷"}
+            <NumBox value={rateInUnit(f.sqftPerHour, f.rateUnit)} disabled={!isAdmin}
+              onValue={(n) => setF({ sqftPerHour: rateFromUnit(n, f.rateUnit) })} />
+            <select value={f.rateUnit} disabled={!isAdmin} onChange={(e) => setF({ rateUnit: e.target.value as RateUnit })}>
+              {RATE_UNITS.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}
+            </select>
+          </>)}
+        </span>
+      </div>
+
+      <div className="gcexample">
+        {sampleSqft.fromRooms ? "Your typical " : "A "}{Math.round(sampleSqft.sqft).toLocaleString()} sq ft {rt.label || "room"}
+        {" = "}<b>{(Math.round(example * 10) / 10).toLocaleString()} min</b>
+        {isAdmin && (
+          <span className="gcissa">
+            ISSA match
+            <select value={cat?.id ?? ""} onChange={(e) => edit((t) => resetToIssa(draft, t, e.target.value))}>
+              {!cat && <option value="">—</option>}
+              {ISSA_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label} — {c.sqftPerHour.toLocaleString()} sq ft/hr</option>)}
+            </select>
+            <button className="pbtn small" disabled={Boolean(issa)} onClick={() => edit((t) => resetToIssa(draft, t))}>Reset to ISSA</button>
+          </span>
+        )}
+      </div>
+
+      <div className="gcrow">
+        <span className="gclabel">Included in General Clean</span>
+        <span className="ptasks inline">
+          {draft.tasks.filter((t) => t.addable && !t.floorCare).map((t) => {
+            const on = included.includes(t.id);
+            return (
+              <button key={t.id} className={"ptask sm" + (on ? " on" : "")} disabled={!isAdmin}
+                onClick={() => editAll((r) => {
+                  const type = r.roomTypes.find((x) => x.id === rt.id)!;
+                  const list = includedTasksFor(r, rt.id);
+                  type.includedTasks = on ? list.filter((x) => x !== t.id) : [...list, t.id];
+                  // included work can't also be an automatic extra here
+                  if (!on) {
+                    const task = r.tasks.find((x) => x.id === t.id)!;
+                    task.autoFor = task.autoFor.filter((x) => x !== rt.id);
+                  }
+                })}>
+                {on ? "✓ " : ""}{t.label}
+              </button>
+            );
+          })}
+        </span>
+      </div>
+
+      <div className="gcrow">
+        <span className="gclabel">Extras every {rt.label || "room"} gets</span>
+        <span className="ptasks inline">
+          {extras.filter((t) => (t.autoFor ?? []).includes(rt.id)).map((t) => (
+            <span key={t.id} className={"ptask sm on" + (t.floorCare ? " fc" : "")}>
+              {t.label}
+              <button className="chipx" onClick={() => editAll((r) => {
+                const task = r.tasks.find((x) => x.id === t.id)!;
+                task.autoFor = task.autoFor.filter((x) => x !== rt.id);
+              })}>✕</button>
+            </span>
+          ))}
+          {extras.some((t) => !(t.autoFor ?? []).includes(rt.id)) && (
+            <select className="chipadd" value="" onChange={(e) => {
+              const id = e.target.value;
+              if (!id) return;
+              editAll((r) => {
+                const task = r.tasks.find((x) => x.id === id)!;
+                if (!task.autoFor.includes(rt.id)) task.autoFor = [...task.autoFor, rt.id];
+              });
+            }}>
+              <option value="">＋ extra…</option>
+              {extras.filter((t) => !(t.autoFor ?? []).includes(rt.id))
+                .map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </select>
+          )}
+        </span>
+      </div>
+
+      {conflicts > 0 && (
+        <p className="warntext">
+          ⚠ {conflicts} {conflicts === 1 ? "room still lists" : "rooms still list"} a task this General Clean includes — it adds no time there.{" "}
+          <button className="plink" onClick={onCleanIncluded}>Take it off {conflicts === 1 ? "that room" : "those rooms"}</button>
+        </p>
+      )}
+      {nameTaken && <p className="warntext">⚠ Another room type already has this name.</p>}
+      {dirty && (
+        <div className="scopesave">
+          <button className="pbtn primary" disabled={!rt.label.trim() || nameTaken} onClick={onSave}>
+            Save {rt.label.trim() || "room type"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
   rules: Rules;
   onChange: (r: Rules) => void;
-  onApplyIssa: (r: Rules) => void;
+  onCleanIncluded: () => void;
   data: ClassicData;
   isAdmin: boolean;
 }) {
   const [draft, setDraft] = useState<Rules>(() => JSON.parse(JSON.stringify(rules)));
-  const [newType, setNewType] = useState({ label: "", freq: "7x / week", qual: "", rate: "issa:office" });
-  const issaTodo = needsIssaMigration(rules);
+  const [newType, setNewType] = useState({ label: "", freq: "7x / week", cat: "office" });
+  const [focusType, setFocusType] = useState<string | null>(null);
   const [newTask, setNewTask] = useState({ label: "", per: "", flat: "", floorCare: false });
   const [newNS, setNewNS] = useState({ label: "", hours: "30" });
   const [newQual, setNewQual] = useState({ label: "", minutes: "5" });
@@ -1822,6 +1990,25 @@ function ScopeTab({ rules, onChange, onApplyIssa, data, isAdmin }: {
     mut(n);
     return n;
   });
+
+  // the live example on each card: the median size of that type's rooms
+  const byType = useMemo(() => {
+    const sizes = new Map<string, number[]>();
+    const conflicts = new Map<string, number>();
+    for (const sp of data.v7.spaces ?? []) {
+      const tid = typeIdFromLabelStrict(rules, String(sp.roomType ?? ""));
+      if (!tid) continue;
+      if (Number(sp.squareFeet) > 0) sizes.set(tid, [...(sizes.get(tid) ?? []), Number(sp.squareFeet)]);
+      if (includedConflicts(rules, sp).length) conflicts.set(tid, (conflicts.get(tid) ?? 0) + 1);
+    }
+    const median = new Map<string, number>();
+    for (const [tid, list] of sizes) {
+      const s = [...list].sort((a, b) => a - b);
+      const m = s.length >> 1;
+      median.set(tid, s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2);
+    }
+    return { median, conflicts };
+  }, [data, rules]);
 
   const SectionSave = ({ sec }: { sec: ScopeSection }) => {
     const dirty = sectionDirty(rules, draft, sec);
@@ -1837,129 +2024,81 @@ function ScopeTab({ rules, onChange, onApplyIssa, data, isAdmin }: {
 
   return (
     <div className="pro-list">
-      {isAdmin && !rules.general.formulaOff && (<>
-        <h3>General cleaning formula <small className="scopekey">used by room types set to "Floor formula"</small></h3>
-        <div className="pformula">
-          1 minute per <input type="number" value={draft.general.hardSqftPerMin}
-            onChange={(e) => set((r) => { r.general.hardSqftPerMin = Number(e.target.value) || 1; })} />
-          sq ft on <b>hard floor</b> · 1 minute per <input type="number" value={draft.general.carpetSqftPerMin}
-            onChange={(e) => set((r) => { r.general.carpetSqftPerMin = Number(e.target.value) || 1; })} />
-          sq ft on <b>carpet</b>
-        </div>
-        <div className="prow">
-          <label className="checkline">
-            <input type="checkbox" checked={draft.general.mopIncluded !== false}
-              onChange={(e) => set((r) => { r.general.mopIncluded = e.target.checked; })} />
-            <span>Hard-floor rate includes mopping</span>
-          </label>
-          <label className="checkline">
-            <input type="checkbox" checked={draft.general.vacuumIncluded !== false}
-              onChange={(e) => set((r) => { r.general.vacuumIncluded = e.target.checked; })} />
-            <span>Carpet rate includes vacuuming</span>
-          </label>
-        </div>
-        {(draft.general.mopIncluded === false || draft.general.vacuumIncluded === false) && (
-          <p className="pnote">Turned off? Add <b>Mopping</b> / <b>Vacuuming</b> to rooms as space tasks below, so the work is still priced.</p>
-        )}
-        <SectionSave sec="general" />
-      </>)}
       {rules.general.formulaOff && (
         <p className="warntext">
-          ⚠ The General Clean formula was deleted — room times only count their added tasks and
-          type minutes now. {isAdmin && (
+          ⚠ General Clean was deleted — room times only count their extra tasks now. {isAdmin && (
             <button className="plink" onClick={() => {
               const next: Rules = JSON.parse(JSON.stringify(rules));
               next.general.formulaOff = false;
               setDraft((prev) => { const d: Rules = JSON.parse(JSON.stringify(prev)); d.general.formulaOff = false; return d; });
               onChange(next);
-            }}>Restore the formula</button>
+            }}>Restore General Clean</button>
           )}
         </p>
       )}
 
       <h3>Room types</h3>
-      {(issaTodo.helperTasks > 0 || issaTodo.formulaTypes > 0) && (
-        <p className="warntext">
-          {issaTodo.helperTasks > 0
-            ? <>This account still has {issaTodo.helperTasks} "ISSA" helper tasks from the earlier workaround. ISSA rates are built in now. </>
-            : <>{issaTodo.formulaTypes} room {issaTodo.formulaTypes === 1 ? "type still uses" : "types still use"} the floor formula instead of an ISSA rate. </>}
-          <button className="plink" onClick={() => {
-            if (!confirm("Put every room type on its ISSA rate? Each type gets the ISSA rate for its kind of space, extra minutes per clean go to 0 (ISSA rates already include everything), own rates and per-room minutes are replaced, and the old ISSA helper tasks are removed. Every room is recalculated right away.")) return;
-            const next = applyIssaStandards(rules);
-            // the draft follows, or the sections would read as unsaved edits
-            setDraft((prev) => ({ ...prev, ...JSON.parse(JSON.stringify({
-              general: next.general, roomTypes: next.roomTypes, tasks: next.tasks
-            })) }));
-            onApplyIssa(next);
-          }}>Use ISSA rates for every room type</button>
-        </p>
-      )}
-      {draft.roomTypes.map((rt) => (
-        <div key={rt.id} className="prule">
-          <b>{rt.label}</b>
-          <select value={rt.frequency}
-            onChange={(e) => set((r) => { r.roomTypes.find((x) => x.id === rt.id)!.frequency = e.target.value; })}>
-            {FREQUENCIES.map((f) => <option key={f}>{f}</option>)}
-          </select>
-          <RoomRateEditor rt={rt} edit={(mut) => set((r) => mut(r.roomTypes.find((x) => x.id === rt.id)!))} />
-          <span title="Flat extra minutes added once per clean — not per square foot">
-            +<input type="number" value={rt.qualifierMin}
-              onChange={(e) => set((r) => { r.roomTypes.find((x) => x.id === rt.id)!.qualifierMin = Number(e.target.value) || 0; })} /> min per clean</span>
-          <span className="ptasks inline">
-            <span className="ptask locked sm">General</span>
-            {draft.tasks.filter((t) => t.addable && (t.autoFor ?? []).includes(rt.id)).map((t) => (
-              <span key={t.id} className={"ptask sm on" + (t.floorCare ? " fc" : "")}>
-                {t.label}
-                <button className="chipx" title={"Take " + t.label + " off every " + rt.label}
-                  onClick={() => set((r) => {
-                    const task = r.tasks.find((x) => x.id === t.id)!;
-                    task.autoFor = task.autoFor.filter((x) => x !== rt.id);
-                  })}>✕</button>
-              </span>
-            ))}
-            {draft.tasks.some((t) => t.addable && !(t.autoFor ?? []).includes(rt.id)) && (
-              <select className="chipadd" value="" onChange={(e) => {
-                const id = e.target.value;
-                if (!id) return;
-                set((r) => {
-                  const task = r.tasks.find((x) => x.id === id)!;
-                  if (!task.autoFor.includes(rt.id)) task.autoFor = [...task.autoFor, rt.id];
-                });
-              }}>
-                <option value="">＋ task…</option>
-                {draft.tasks.filter((t) => t.addable && !(t.autoFor ?? []).includes(rt.id))
-                  .map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-              </select>
-            )}
-          </span>
-          <button className="pbtn small danger" onClick={() => {
-            if (!confirm(`Delete room type "${rt.label}"? Rooms of this type keep their label but show as Needs review until you pick a new type. Takes effect when you hit Save.`)) return;
-            set((r) => { r.roomTypes = r.roomTypes.filter((x) => x.id !== rt.id); });
-          }}>✕</button>
-        </div>
-      ))}
+      {draft.roomTypes.map((rt) => {
+        const norm = (s: string) => s.trim().toLowerCase();
+        const nameTaken = draft.roomTypes.some((x) => x.id !== rt.id && norm(x.label) === norm(rt.label));
+        const median = byType.median.get(rt.id);
+        return (
+          <RoomTypeCard key={rt.id} rt={rt} draft={draft} isAdmin={isAdmin}
+            edit={(mut) => set((r) => mut(r.roomTypes.find((x) => x.id === rt.id)!))}
+            editAll={set}
+            sampleSqft={median ? { sqft: median, fromRooms: true } : { sqft: 150, fromRooms: false }}
+            conflicts={byType.conflicts.get(rt.id) ?? 0}
+            dirty={roomTypeDirty(rules, draft, rt.id)}
+            nameTaken={nameTaken}
+            autoFocusName={focusType === rt.id}
+            onSave={() => onChange(saveRoomType(rules, draft, rt.id))}
+            onCleanIncluded={onCleanIncluded}
+            onDuplicate={() => {
+              const id = uid("rt");
+              set((r) => {
+                const at = r.roomTypes.findIndex((x) => x.id === rt.id);
+                const src = r.roomTypes[at];
+                const f = gcFormula(r, src);
+                const copy: RoomTypeRule = {
+                  ...JSON.parse(JSON.stringify(src)), id, label: `${src.label} (copy)`,
+                  method: f.method, fixedMin: f.fixedMin, sqftPerHour: f.sqftPerHour, rateUnit: f.rateUnit,
+                  includedTasks: [...includedTasksFor(r, src.id)]
+                };
+                delete copy.builtIn;
+                delete copy.qualifierMin;
+                r.roomTypes.splice(at + 1, 0, copy);
+                for (const t of r.tasks) if ((t.autoFor ?? []).includes(src.id)) t.autoFor = [...t.autoFor, id];
+              });
+              setFocusType(id);
+            }}
+            onDelete={() => {
+              if (!confirm(`Delete room type "${rt.label}"? Rooms of this type keep their label but show as Needs review until you pick a new type. Takes effect when you hit Save changes below.`)) return;
+              set((r) => { r.roomTypes = r.roomTypes.filter((x) => x.id !== rt.id); });
+            }} />
+        );
+      })}
       <div className="prule add">
         <input placeholder="New room type name" value={newType.label}
           onChange={(e) => setNewType({ ...newType, label: e.target.value })} />
         <select value={newType.freq} onChange={(e) => setNewType({ ...newType, freq: e.target.value })}>
           {FREQUENCIES.map((f) => <option key={f}>{f}</option>)}
         </select>
-        <select value={newType.rate} onChange={(e) => setNewType({ ...newType, rate: e.target.value })}>
+        <select value={newType.cat} onChange={(e) => setNewType({ ...newType, cat: e.target.value })}>
           {ISSA_CATEGORIES.map((c) => (
-            <option key={c.id} value={"issa:" + c.id}>ISSA {c.label} — {c.sqftPerHour.toLocaleString()} sq ft/hr</option>
+            <option key={c.id} value={c.id}>ISSA {c.label} — {c.sqftPerHour.toLocaleString()} sq ft/hr</option>
           ))}
         </select>
-        <input type="number" placeholder="+min" value={newType.qual} style={{ width: 70 }}
-          onChange={(e) => setNewType({ ...newType, qual: e.target.value })} />
         <button className="pbtn small primary" onClick={() => {
           if (!newType.label.trim()) return;
-          const cat = issaCategory(newType.rate.slice(5)) ?? ISSA_CATEGORIES[0];
-          set((r) => r.roomTypes.push({
-            id: uid("rt"), label: newType.label.trim(), frequency: newType.freq,
-            qualifierMin: Number(newType.qual) || 0,
-            issaCategory: cat.id, sqftPerHour: cat.sqftPerHour
-          }));
-          setNewType({ label: "", freq: "7x / week", qual: "", rate: "issa:office" });
+          set((r) => {
+            const t: RoomTypeRule = {
+              id: uid("rt"), label: newType.label.trim(), frequency: newType.freq,
+              includedTasks: [...DEFAULT_INCLUDED_TASKS]
+            };
+            resetToIssa(r, t, newType.cat);
+            r.roomTypes.push(t);
+          });
+          setNewType({ label: "", freq: "7x / week", cat: "office" });
         }}>Add room type</button>
       </div>
       <SectionSave sec="roomTypes" />
@@ -1971,7 +2110,7 @@ function ScopeTab({ rules, onChange, onApplyIssa, data, isAdmin }: {
       {!rules.general.formulaOff && (
         <div className="prule">
           <b className="tname clean">General Clean</b>
-          <span>on every room automatically — at its room type's rate (ISSA unless you changed it), or the floor formula: 1 min per {rules.general.hardSqftPerMin} sq ft hard floor / {rules.general.carpetSqftPerMin} sq ft carpet</span>
+          <span>on every room automatically — timed by its room type's formula (Room types, above)</span>
           {isAdmin && (
             <button className="pbtn small danger" onClick={() => {
               if (!confirm("Delete General Clean? This is the general cleaning formula — without it, room times stop counting the base clean entirely and only count added tasks and type minutes. Nothing will calculate correctly unless you restore it or build a replacement per-square-foot task. Are you sure?")) return;

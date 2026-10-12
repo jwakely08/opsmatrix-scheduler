@@ -19,29 +19,42 @@ export interface TaskRule {
   builtIn?: boolean;
 }
 
+/**
+ * How a room type builds its General Clean time (Josh, 2026-10-12):
+ * by size (sq ft ÷ rate), a fixed number of minutes per room, or both.
+ */
+export type GcMethod = "size" | "fixed" | "both";
+
+/** the unit a rate is TYPED in — a hospital's numbers go in exactly as given */
+export type RateUnit = "sqftPerHour" | "sqftPerMin" | "minPer100" | "minPer1000";
+
 export interface RoomTypeRule {
   id: string;
   label: string;
-  /** flat qualifier minutes on top of general cleaning (optional add-on) */
-  qualifierMin: number;
   /**
-   * The ISSA space category this type is priced as (an ISSA_CATEGORIES id).
-   * Names the source on the breakdown line while sqftPerHour still equals
-   * that category's published rate.
+   * The room type's General Clean formula — General Clean ACTIVATES it.
+   * Floor type never changes it, and nothing else adds to it: a room that
+   * needs more gets an extra task, a room that differs gets its own type.
+   * Optional only because rules saved before 2026-10-12 lack it; loadRules
+   * fills it in (gcFormula reads an unmigrated type the same way).
    */
+  method?: GcMethod;
+  /** fixed minutes per room ("fixed" and "both") */
+  fixedMin?: number;
+  /** the rate, stored ONE way: sq ft per hour ("size" and "both") */
+  sqftPerHour?: number;
+  /** the unit the rate was entered in — display only, the math uses sqftPerHour */
+  rateUnit?: RateUnit;
+  /** the ISSA space category this type matches (ISSA_CATEGORIES id) — "Reset to ISSA" */
   issaCategory?: string;
   /**
-   * This type's own production rate, sq ft per HOUR, for the whole general
-   * clean (floor included). Set → it replaces the floor-type formula;
-   * absent → the type falls back to that formula (rules saved before
-   * 2026-10-12 keep pricing exactly as they did).
+   * Tasks this type's General Clean already covers (trash, damp mop, vacuum
+   * by default). They can't be added as extras to rooms of this type and
+   * never add time; a room still listing one is flagged.
    */
-  sqftPerHour?: number;
-  /**
-   * A hospital's own per-room standard: this many minutes per clean no
-   * matter the size (e.g. "an OR turnover is 45 min"). Wins over any rate.
-   */
-  flatMinutes?: number;
+  includedTasks?: string[];
+  /** @deprecated pre-2026-10-12 flat add-on; loadRules moves it into fixedMin */
+  qualifierMin?: number;
   /** how often this type is cleaned, e.g. "7x / week" — editable per account */
   frequency: string;
   /**
@@ -122,19 +135,23 @@ export interface BreakSchedule {
 export interface Rules {
   version: number;
   general: {
-    hardSqftPerMin: number;    // includes damp mop on hard floor (unless mopIncluded is off)
-    carpetSqftPerMin: number;  // includes vacuuming pass (unless vacuumIncluded is off)
-    /** does the hard-floor rate include mopping? off = schedule Mopping as its own task */
+    /**
+     * RETIRED 2026-10-12 — the old per-floor-type General Clean rates and
+     * the mop/vacuum toggles. Nothing prices from them any more (each room
+     * type has its own formula and included-tasks list); kept so saved
+     * accounts round-trip and migration can seed custom types' rates.
+     */
+    hardSqftPerMin: number;
+    carpetSqftPerMin: number;
     mopIncluded: boolean;
-    /** does the carpet rate include vacuuming? off = schedule Vacuuming as its own task */
     vacuumIncluded: boolean;
     /**
-     * The nuclear option: the General Clean formula itself was deleted in
-     * Scope. Rooms then price ONLY their explicit tasks + type qualifier —
-     * the warning in Scope says exactly that until it's restored or a
-     * replacement per-sq-ft task exists.
+     * The nuclear option: General Clean itself was deleted in Scope. Rooms
+     * then price ONLY their extra tasks — the warning in Scope says exactly
+     * that until it's restored.
      */
     formulaOff?: boolean;
+    /** RETIRED 2026-10-12: General Clean time is the pure formula, no minimum */
     minMinutes: number;
     /**
      * Productive cleaning minutes in one shift, breaks and setup excluded.
@@ -193,33 +210,53 @@ export const ISSA_TYPE_CATEGORY: Record<string, string> = {
   shaft: "office", "shell-space": "office", roof: "office"
 };
 
-/** a built-in room type at its ISSA default (no qualifier — ISSA rates are all-in) */
+/** what ISSA rates already cover, so these never add time on top (default list) */
+export const DEFAULT_INCLUDED_TASKS = ["trash-pull", "damp-mop", "vacuum"];
+
+/** a built-in room type at its ISSA default: by size, at its category's rate */
 function issaType(id: string, label: string, frequency: string, extra?: Partial<RoomTypeRule>): RoomTypeRule {
   const cat = issaCategory(ISSA_TYPE_CATEGORY[id])!;
   return {
-    id, label, qualifierMin: 0, frequency, issaCategory: cat.id, sqftPerHour: cat.sqftPerHour,
-    ...extra, builtIn: true
+    id, label, frequency, method: "size", fixedMin: 0, sqftPerHour: cat.sqftPerHour, rateUnit: "sqftPerHour",
+    issaCategory: cat.id, includedTasks: [...DEFAULT_INCLUDED_TASKS], ...extra, builtIn: true
   };
 }
 
-export type BasePricing = "formula" | "rate" | "flat";
+// ── the General Clean formula ───────────────────────────────────────────────
 
-/** how a room type prices its general clean: flat minutes › own rate › floor formula */
-export function basePricing(rt: RoomTypeRule | undefined): BasePricing {
-  if (rt && Number(rt.flatMinutes) > 0) return "flat";
-  if (rt && Number(rt.sqftPerHour) > 0) return "rate";
-  return "formula";
+export const RATE_UNITS: { id: RateUnit; label: string; short: string }[] = [
+  { id: "sqftPerHour", label: "sq ft per hour", short: "sq ft/hr" },
+  { id: "sqftPerMin", label: "sq ft per minute", short: "sq ft/min" },
+  { id: "minPer100", label: "minutes per 100 sq ft", short: "min per 100 sq ft" },
+  { id: "minPer1000", label: "minutes per 1,000 sq ft", short: "min per 1,000 sq ft" }
+];
+
+/** a rate as typed in `unit` → the one stored form, sq ft per hour (0 = no rate) */
+export function rateFromUnit(value: number, unit: RateUnit): number {
+  const v = Number(value);
+  if (!(v > 0)) return 0;
+  switch (unit) {
+    case "sqftPerMin": return v * 60;
+    case "minPer100": return 6000 / v;
+    case "minPer1000": return 60000 / v;
+    default: return v;
+  }
 }
 
-/** "ISSA Medical / clinical" while the rate is still ISSA's, else "your rate" */
-export function rateSourceLabel(rt: RoomTypeRule): string {
-  const cat = issaCategory(rt.issaCategory);
-  return cat && Number(rt.sqftPerHour) === cat.sqftPerHour ? `ISSA ${cat.label}` : "your rate";
+/** the stored sq ft per hour shown in `unit` (exact inverse of rateFromUnit, 4 decimals) */
+export function rateInUnit(sqftPerHour: number, unit: RateUnit): number {
+  const r = Number(sqftPerHour);
+  if (!(r > 0)) return 0;
+  const v = unit === "sqftPerMin" ? r / 60 : unit === "minPer100" ? 6000 / r : unit === "minPer1000" ? 60000 / r : r;
+  return Math.round(v * 10000) / 10000;
 }
 
-/** 2150 sq ft/hr → "35.8" (sq ft per minute, one decimal, no trailing .0) */
-export function perMinuteText(sqftPerHour: number): string {
-  return String(Math.round((sqftPerHour / 60) * 10) / 10);
+export interface GcFormula {
+  method: GcMethod;
+  fixedMin: number;
+  /** stored rate, sq ft per hour (0 = none) */
+  sqftPerHour: number;
+  rateUnit: RateUnit;
 }
 
 /** ids of the tasks the 2026-10-12 operator workaround added (one per ISSA category) */
@@ -229,49 +266,146 @@ const ISSA_HELPER_CATEGORY: Record<string, string> = {
   "issa-restroom": "restroom", "issa-breakroom": "break-room", "issa-clinical": "clinical",
   "issa-lab": "lab", "issa-locker": "locker"
 };
-/** the workaround's base rate: Lobbies & corridors, 5,500 sq ft/hr as sq ft/min */
-const ISSA_HELPER_BASE = 5500 / 60;
 
-/**
- * Put every room type on the built-in ISSA rates — the one-click move for an
- * account saved before they existed, and the clean-up for the operator
- * workaround (base rate 5,500 sq ft/hr + one "issa-*" auto task per
- * category). Each type gets its category's rate (built-in mapping, else the
- * workaround task that was riding on it, else the base the workaround priced
- * it at, else General office), qualifiers go to 0 (ISSA rates are all-in),
- * flat minutes are cleared, the helper tasks are removed and a workaround
- * base rate goes back to the stock floor formula. Cleanable rooms price the
- * same as the workaround did, to rounding. Returns a NEW rulebook.
- */
-export function applyIssaStandards(rules: Rules): Rules {
-  const next: Rules = JSON.parse(JSON.stringify(rules));
-  const helpers = next.tasks.filter((t) => ISSA_HELPER_TASK.test(t.id));
-  const helperCat = (typeId: string) =>
-    ISSA_HELPER_CATEGORY[helpers.find((t) => (t.autoFor ?? []).includes(typeId))?.id ?? ""];
-  for (const rt of next.roomTypes) {
-    const catId = rt.issaCategory ?? helperCat(rt.id) ?? ISSA_TYPE_CATEGORY[rt.id]
-      ?? (helpers.length ? "lobby-corridor" : "office");
-    const cat = issaCategory(catId) ?? issaCategory("office")!;
-    rt.issaCategory = cat.id;
-    rt.sqftPerHour = cat.sqftPerHour;
-    rt.qualifierMin = 0;
-    delete rt.flatMinutes;
-  }
-  if (helpers.length) {
-    next.tasks = next.tasks.filter((t) => !ISSA_HELPER_TASK.test(t.id));
-    const def = defaultRules().general;
-    if (Math.abs(next.general.hardSqftPerMin - ISSA_HELPER_BASE) < 0.05) next.general.hardSqftPerMin = def.hardSqftPerMin;
-    if (Math.abs(next.general.carpetSqftPerMin - ISSA_HELPER_BASE) < 0.05) next.general.carpetSqftPerMin = def.carpetSqftPerMin;
-  }
-  return next;
+/** the ISSA category a type matches: its own, the workaround task riding on it, the built-in map */
+export function categoryFor(rules: Rules, rt: RoomTypeRule): IssaCategory | undefined {
+  const helpers = rules.tasks.filter((t) => ISSA_HELPER_TASK.test(t.id));
+  const helper = helpers.find((t) => (t.autoFor ?? []).includes(rt.id));
+  return issaCategory(rt.issaCategory)
+    ?? issaCategory(helper ? ISSA_HELPER_CATEGORY[helper.id] : undefined)
+    ?? issaCategory(ISSA_TYPE_CATEGORY[rt.id])
+    // the workaround priced every type without a helper at its 5,500 sf/hr base
+    ?? (helpers.length ? issaCategory("lobby-corridor") : undefined);
 }
 
-/** does this rulebook still need applyIssaStandards? (helper tasks, or a type on the floor formula) */
-export function needsIssaMigration(rules: Rules): { helperTasks: number; formulaTypes: number } {
+/**
+ * A room type's General Clean formula. Types saved since 2026-10-12 carry
+ * it; an older one is read the way migrateRules converts it: its ISSA rate
+ * where ISSA applies (else the old hard-floor rate), its old qualifier as
+ * the fixed minutes.
+ */
+export function gcFormula(rules: Rules, rt: RoomTypeRule): GcFormula {
+  const num = (v: unknown) => (Number(v) > 0 ? Number(v) : 0);
+  if (rt.method) {
+    return { method: rt.method, fixedMin: num(rt.fixedMin), sqftPerHour: num(rt.sqftPerHour), rateUnit: rt.rateUnit ?? "sqftPerHour" };
+  }
+  const cat = categoryFor(rules, rt);
+  const own = num(rt.sqftPerHour);
+  const sqftPerHour = own || (cat ? cat.sqftPerHour : num(rules.general.hardSqftPerMin) * 60);
+  const fixedMin = num(rt.fixedMin) || num(rt.qualifierMin);
   return {
-    helperTasks: rules.tasks.filter((t) => ISSA_HELPER_TASK.test(t.id)).length,
-    formulaTypes: rules.roomTypes.filter((rt) => basePricing(rt) === "formula").length
+    method: fixedMin > 0 ? (sqftPerHour > 0 ? "both" : "fixed") : "size",
+    fixedMin, sqftPerHour,
+    // an old floor rate reads in the unit it was known by
+    rateUnit: own || cat ? "sqftPerHour" : "sqftPerMin"
   };
+}
+
+/** minutes the formula gives a room of `sqft` — unrounded, so audits reproduce */
+export function gcMinutes(f: GcFormula, sqft: number): number {
+  const fixed = f.method === "size" ? 0 : f.fixedMin;
+  const size = f.method === "fixed" || !(f.sqftPerHour > 0) ? 0 : (Number(sqft) || 0) * 60 / f.sqftPerHour;
+  return fixed + size;
+}
+
+const fmtNum = (n: number, digits = 1) =>
+  (Math.round(n * 10 ** digits) / 10 ** digits).toLocaleString("en-US", { maximumFractionDigits: digits });
+
+/** "4,250 sq ft/hr", "3 min per 100 sq ft" — the rate as it was typed */
+export function rateText(f: GcFormula): string {
+  const unit = RATE_UNITS.find((u) => u.id === f.rateUnit) ?? RATE_UNITS[0];
+  return `${fmtNum(rateInUnit(f.sqftPerHour, unit.id), 4)} ${unit.short}`;
+}
+
+const timesUnit = (f: GcFormula) => f.rateUnit === "minPer100" || f.rateUnit === "minPer1000";
+
+/**
+ * The ONE General Clean line, worked so anyone can redo it by hand:
+ * "Office: 152 sq ft ÷ 4,250 sq ft/hr = 2.1 min", "Exam Room: 10 min",
+ * "Exam Room: 4 min + 161 sq ft ÷ 2,150 sq ft/hr = 8.5 min".
+ */
+export function gcText(typeLabel: string, f: GcFormula, sqft: number): string {
+  const total = fmtNum(gcMinutes(f, sqft));
+  const size = `${fmtNum(Number(sqft) || 0)} sq ft ${timesUnit(f) ? "×" : "÷"} ${rateText(f)}`;
+  if (f.method === "fixed") return `${typeLabel}: ${fmtNum(f.fixedMin)} min`;
+  if (f.method === "size") return `${typeLabel}: ${size} = ${total} min`;
+  return `${typeLabel}: ${fmtNum(f.fixedMin)} min + ${size} = ${total} min`;
+}
+
+/** the formula in words, no room: "4 min + sq ft ÷ 2,150 sq ft/hr" */
+export function gcFormulaText(f: GcFormula): string {
+  const size = `sq ft ${timesUnit(f) ? "×" : "÷"} ${rateText(f)}`;
+  if (f.method === "fixed") return `${fmtNum(f.fixedMin)} min per room`;
+  if (f.method === "size") return size;
+  return `${fmtNum(f.fixedMin)} min + ${size}`;
+}
+
+/** "ISSA Medical / clinical" while the formula is still ISSA's own, else null */
+export function issaSourceLabel(rules: Rules, rt: RoomTypeRule): string | null {
+  const f = gcFormula(rules, rt);
+  const cat = categoryFor(rules, rt);
+  return cat && f.method === "size" && Math.abs(f.sqftPerHour - cat.sqftPerHour) < 0.01 ? `ISSA ${cat.label}` : null;
+}
+
+/** put a type back on its ISSA formula (category given, else its own/built-in, else General office) */
+export function resetToIssa(rules: Rules, rt: RoomTypeRule, categoryId?: string): void {
+  const cat = issaCategory(categoryId) ?? categoryFor(rules, rt) ?? issaCategory("office")!;
+  rt.issaCategory = cat.id;
+  rt.method = "size";
+  rt.fixedMin = 0;
+  rt.sqftPerHour = cat.sqftPerHour;
+  rt.rateUnit = "sqftPerHour";
+}
+
+/** tasks a type's General Clean already covers */
+export function includedTasksFor(rules: Rules, typeId: string): string[] {
+  const rt = rules.roomTypes.find((x) => x.id === typeId);
+  return rt?.includedTasks ?? defaultIncluded(rules);
+}
+
+function defaultIncluded(rules: Rules): string[] {
+  const g = rules.general;
+  return DEFAULT_INCLUDED_TASKS.filter((id) =>
+    !(id === "damp-mop" && g.mopIncluded === false) && !(id === "vacuum" && g.vacuumIncluded === false));
+}
+
+/**
+ * Bring a saved rulebook up to the 2026-10-12 model, in place: every room
+ * type gets its formula (gcFormula's reading — ISSA where it applies, the
+ * old hard-floor rate otherwise, the old qualifier as fixed minutes) and an
+ * included-tasks list (trash + the mop/vacuum the old floor rates covered),
+ * and the operator workaround's "issa-*" helper tasks are removed — their
+ * categories already landed on the types. Rooms and schedules drop the
+ * helper ids through stripIssaHelperTasks (classicStore).
+ */
+export function migrateRules(rules: Rules): Rules {
+  const hadHelpers = rules.tasks.some((t) => ISSA_HELPER_TASK.test(t.id));
+  for (const rt of rules.roomTypes) {
+    if (!rt.method) {
+      const f = gcFormula(rules, rt);
+      const cat = categoryFor(rules, rt);
+      rt.method = f.method;
+      rt.fixedMin = f.fixedMin;
+      rt.sqftPerHour = f.sqftPerHour;
+      rt.rateUnit = f.rateUnit;
+      if (cat && !rt.issaCategory) rt.issaCategory = cat.id;
+    }
+    if (!Array.isArray(rt.includedTasks)) rt.includedTasks = defaultIncluded(rules);
+    delete rt.qualifierMin;
+  }
+  if (hadHelpers) {
+    rules.tasks = rules.tasks.filter((t) => !ISSA_HELPER_TASK.test(t.id));
+    // the workaround's 5,500 sf/hr base goes back to the stock numbers
+    const def = defaultRules().general;
+    rules.general.hardSqftPerMin = def.hardSqftPerMin;
+    rules.general.carpetSqftPerMin = def.carpetSqftPerMin;
+  }
+  // an included task is never an automatic extra for that type
+  for (const t of rules.tasks) {
+    t.autoFor = (t.autoFor ?? []).filter((typeId) => !includedTasksFor(rules, typeId).includes(t.id));
+  }
+  rules.version = 2;
+  return rules;
 }
 
 export const FREQUENCIES = [
@@ -282,7 +416,7 @@ export const RULES_KEY = "opsmatrix_fusion_rules";
 
 export function defaultRules(): Rules {
   return {
-    version: 1,
+    version: 2,
     general: {
       hardSqftPerMin: 33, carpetSqftPerMin: 40, mopIncluded: true, vacuumIncluded: true,
       minMinutes: 3, productiveMinutes: 420, shiftsPerWeekPerFte: 5
@@ -297,14 +431,13 @@ export function defaultRules(): Rules {
       // everyone-else tasks
       { id: "high-dusting", label: "High Dusting", sqftPerMin: 120, flatMin: 0, autoFor: [], addable: true, builtIn: true },
       { id: "trash-pull", label: "Trash Pull", sqftPerMin: null, flatMin: 2, autoFor: [], addable: true, builtIn: true },
-      // standalone mopping/vacuuming (Josh, 2026-08-31): normally the General
-      // Clean rate includes them, but with the formula toggles off — or the
-      // formula deleted — these price the work as explicit space tasks
+      // mopping/vacuuming/trash are INCLUDED in every type's General Clean by
+      // default (ISSA rates cover them); untick one on a type in Scope and it
+      // becomes an extra that adds its own time there
       { id: "damp-mop", label: "Mopping", sqftPerMin: 60, flatMin: 0, autoFor: [], addable: true, builtIn: true },
       { id: "vacuum", label: "Vacuuming", sqftPerMin: 55, flatMin: 0, autoFor: [], addable: true, builtIn: true }
     ],
-    // ISSA production rates per room type (2026-10-12) — the floor formula
-    // above only prices a type that has no rate of its own
+    // each type's General Clean formula — ISSA midpoints by default (2026-10-12)
     roomTypes: [
       issaType("office", "Office", "5x / week"),
       issaType("exam-room", "Exam Room", "7x / week"),
@@ -382,7 +515,7 @@ export function loadRules(): Rules {
     // merge: keep user edits, guarantee every built-in exists — EXCEPT the
     // ones the account deleted on purpose (the tombstones saveRules stamps)
     const rules: Rules = {
-      version: 1,
+      version: Number(parsed.version) || 1,
       general: { ...def.general, ...(parsed.general ?? {}) },
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : def.tasks,
       roomTypes: Array.isArray(parsed.roomTypes) ? parsed.roomTypes : def.roomTypes,
@@ -441,7 +574,8 @@ export function loadRules(): Rules {
         ns.qualifierIds = def.nonSpaceDefs.find((x) => x.id === ns.id)?.qualifierIds ?? [];
       }
     }
-    return rules;
+    // the 2026-10-12 General Clean model: per-type formulas + included tasks
+    return migrateRules(rules);
   } catch {
     return defaultRules();
   }
@@ -603,10 +737,28 @@ export interface SpaceLike {
   fcNotNeeded?: string[];
 }
 
+/**
+ * The extra tasks a room needs — what gets priced, scheduled and reported
+ * uncovered. A task the room type's General Clean already includes is not
+ * one of them, even if the room still lists it (see includedConflicts).
+ */
 export function requiredTasks(rules: Rules, space: SpaceLike): string[] {
+  const typeId = typeIdFromLabel(rules, space.roomType ?? "");
+  const included = includedTasksFor(rules, typeId);
+  return rawSpaceTasks(rules, space).filter((id) => !included.includes(id));
+}
+
+/** the room's task list exactly as stored (the editors' view) */
+export function rawSpaceTasks(rules: Rules, space: SpaceLike): string[] {
   const explicit = space.spaceTasks ?? space.fusionTasks;
   if (Array.isArray(explicit)) return explicit;
   return autoTasksFor(rules, typeIdFromLabel(rules, space.roomType ?? ""));
+}
+
+/** tasks a room lists that its type's General Clean already covers — flag these */
+export function includedConflicts(rules: Rules, space: SpaceLike): string[] {
+  const included = includedTasksFor(rules, typeIdFromLabel(rules, space.roomType ?? ""));
+  return rawSpaceTasks(rules, space).filter((id) => included.includes(id));
 }
 
 /** is this task the floor crew's (scheduled ONLY in Max Floor Care)? */
@@ -646,38 +798,22 @@ export function computeMinutes(
   opts?: MinuteOptions
 ): { lines: MinuteLine[]; total: number } {
   const sqft = Number(space.squareFeet) || 0;
-  const carpet = isCarpet(space.floorType);
   const includeBase = opts?.includeBase !== false;
   const lines: MinuteLine[] = [];
+  const typeId = typeIdFromLabel(rules, space.roomType ?? "");
+  const rt = rules.roomTypes.find((x) => x.id === typeId);
 
   if (includeBase && !rules.general.formulaOff) {
-    const rt = rules.roomTypes.find((x) => x.id === typeIdFromLabel(rules, space.roomType ?? ""));
-    const pricing = basePricing(rt);
-    if (rt && pricing === "flat") {
-      // the hospital's own standard for this room type: size doesn't matter
-      lines.push({ label: `General cleaning — ${rt.flatMinutes} min per clean (${rt.label} standard)`, minutes: Number(rt.flatMinutes) });
-    } else if (rt && pricing === "rate") {
-      // a per-type production rate (ISSA by default) replaces the floor formula
-      const sfh = Number(rt.sqftPerHour);
-      lines.push({
-        label: `General cleaning — 1 min per ${perMinuteText(sfh)} sq ft (${rateSourceLabel(rt)})`,
-        minutes: sqft * 60 / sfh
-      });
-    } else {
-      const per = carpet ? rules.general.carpetSqftPerMin : rules.general.hardSqftPerMin;
-      const included = carpet
-        ? (rules.general.vacuumIncluded !== false ? "carpet, vacuuming included" : "carpet")
-        : (rules.general.mopIncluded !== false ? "hard floor, mopping included" : "hard floor");
-      lines.push({
-        label: `General cleaning — 1 min per ${per} sq ft (${included})`,
-        minutes: per > 0 ? sqft / per : 0
-      });
-    }
-    if (rt && rt.qualifierMin) {
-      lines.push({ label: `${rt.label} qualifier`, minutes: rt.qualifierMin });
-    }
+    // ONE line: the room type's own formula, worked out. Floor type never
+    // changes it and there is no minimum — the time is the pure formula.
+    const g = generalCleanLine(rules, space);
+    lines.push({ label: "General Clean — " + g.text, minutes: g.minutes });
   }
-  const taskIds = opts?.tasks ?? requiredTasks(rules, space);
+  // extras on their own lines; anything the type's General Clean already
+  // includes adds nothing (requiredTasks drops it; a subset passed in is
+  // filtered the same way)
+  const included = rt ? includedTasksFor(rules, rt.id) : [];
+  const taskIds = (opts?.tasks ?? requiredTasks(rules, space)).filter((id) => !included.includes(id));
   for (const tid of taskIds) {
     const t = rules.tasks.find((x) => x.id === tid);
     if (!t) continue;
@@ -685,14 +821,26 @@ export function computeMinutes(
     lines.push({ label: t.label + (t.sqftPerMin ? ` — 1 min per ${t.sqftPerMin} sq ft` : ` — ${t.flatMin} min`), minutes: m });
   }
   const raw = lines.reduce((s, l) => s + l.minutes, 0);
-  const total = includeBase
-    ? Math.max(rules.general.minMinutes, Math.round(raw))
-    : Math.round(raw);
-  return { lines, total };
+  return { lines, total: Math.round(raw) };
 }
 
+/**
+ * The room's General Clean, worked: "Office: 152 sq ft ÷ 4,250 sq ft/hr =
+ * 2.1 min". A room whose type is gone prices as ISSA General office.
+ */
+export function generalCleanLine(rules: Rules, space: SpaceLike): { text: string; minutes: number } {
+  const sqft = Number(space.squareFeet) || 0;
+  const rt = rules.roomTypes.find((x) => x.id === typeIdFromLabel(rules, space.roomType ?? ""));
+  const f: GcFormula = rt ? gcFormula(rules, rt)
+    : { method: "size", fixedMin: 0, sqftPerHour: issaCategory("office")!.sqftPerHour, rateUnit: "sqftPerHour" };
+  const name = rt?.label ?? (String(space.roomType ?? "").trim() || "Room");
+  return { text: gcText(name, f, sqft), minutes: gcMinutes(f, sqft) };
+}
+
+/** extras a type may get: never one its General Clean already includes */
 export function autoTasksFor(rules: Rules, typeId: string): string[] {
-  return rules.tasks.filter((t) => t.autoFor.includes(typeId)).map((t) => t.id);
+  const included = includedTasksFor(rules, typeId);
+  return rules.tasks.filter((t) => t.autoFor.includes(typeId) && !included.includes(t.id)).map((t) => t.id);
 }
 
 // ── our-vocab ↔ classic-vocab bridges (schedules store classic-friendly ids) ──

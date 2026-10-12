@@ -8,15 +8,14 @@
 // directly on the chart.
 import React, { useMemo, useState } from "react";
 import {
-  type Rules, type RoomTypeRule, spaceCleanability, typeIdFromLabelStrict, basePricing, rateSourceLabel
+  type Rules, type RoomTypeRule, spaceCleanability, typeIdFromLabelStrict, gcFormula, gcFormulaText,
+  issaSourceLabel, includedTasksFor
 } from "./rules";
 
-/** a room type's general-clean rate in a word or two: "2,150 sq ft/hr (ISSA Medical / clinical)" */
-function rateText(rt: RoomTypeRule): string {
-  const mode = basePricing(rt);
-  if (mode === "flat") return `${rt.flatMinutes} min per room`;
-  if (mode === "rate") return `${Number(rt.sqftPerHour).toLocaleString()} sq ft/hr (${rateSourceLabel(rt)})`;
-  return "floor formula";
+/** a room type's General Clean formula in words: "sq ft ÷ 2,150 sq ft/hr (ISSA Medical / clinical)" */
+function formulaWords(rules: Rules, rt: RoomTypeRule): string {
+  const issa = issaSourceLabel(rules, rt);
+  return gcFormulaText(gcFormula(rules, rt)) + (issa ? ` (${issa})` : "");
 }
 import {
   loadAliases, saveAliases, blankDeptLabels, departmentDisplay,
@@ -648,24 +647,17 @@ function AssumptionsTab({ rules, commitRules }: {
         <p className="pnote">Estimated FTE = weekly workload minutes ÷ (productive minutes × shifts per week).</p>
       </div>
       <div className="wi-chart">
-        <h3>Floor formula <small>(for room types without their own rate — editable)</small></h3>
-        <div className="pline"><span>Hard floor</span><b>1 minute per {rules.general.hardSqftPerMin} sq ft (mopping included)</b></div>
-        <div className="pline"><span>Carpet</span><b>1 minute per {rules.general.carpetSqftPerMin} sq ft (vacuuming included)</b></div>
-        <div className="pline"><span>Minimum per room</span><b>{rules.general.minMinutes} minutes</b></div>
-        <p className="pnote">Edit these in Admin Settings → Scope.</p>
-      </div>
-      <div className="wi-chart">
-        <h3>Room types — rate, frequency, qualifier, cleanability</h3>
+        <h3>Room types — General Clean formula, frequency, cleanability</h3>
         <div className="wi-tablewrap">
           <table className="wi-table">
-            <thead><tr><th>Room type</th><th>Cleaning rate</th><th>Frequency</th><th>Extra minutes</th><th>Counts toward EVS workload</th></tr></thead>
+            <thead><tr><th>Room type</th><th>General Clean</th><th>Included in General Clean</th><th>Frequency</th><th>Counts toward EVS workload</th></tr></thead>
             <tbody>
               {rules.roomTypes.map((rt) => (
                 <tr key={rt.id}>
                   <td>{rt.label}</td>
-                  <td>{rateText(rt)}</td>
+                  <td>{formulaWords(rules, rt)}</td>
+                  <td>{includedTasksFor(rules, rt.id).map((id) => rules.tasks.find((t) => t.id === id)?.label ?? id).join(", ") || "—"}</td>
                   <td>{rt.frequency}</td>
-                  <td className="num">{rt.qualifierMin ? "+" + rt.qualifierMin : "—"}</td>
                   <td>
                     <select value={rt.cleanability === "non-cleanable" ? "non-cleanable" : "cleanable"}
                       onChange={(e) => {

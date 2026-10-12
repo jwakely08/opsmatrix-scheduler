@@ -240,14 +240,13 @@ describe("Scope changed AFTER the account was set up (Josh's scenario)", () => {
     slower.roomTypes.find((rt) => rt.id === "office")!.sqftPerHour = 1980; // the hospital's own rate
     expect(computeMinutes(slower, room as never).total).toBe(10); // 330 × 60 / 1980 — same room, new time
   });
-  it("a type with no rate of its own follows the floor formula, and its changes", async () => {
+  it("a type's formula switched to fixed minutes re-times its rooms, whatever their size", async () => {
     const { computeMinutes } = await import("./rules");
     const room = { roomType: "Office", squareFeet: 330, floorType: "Hard floor — finished", spaceTasks: [] };
-    const formula = defaultRules();
-    delete formula.roomTypes.find((rt) => rt.id === "office")!.sqftPerHour;
-    expect(computeMinutes(formula, room as never).total).toBe(10); // 330/33
-    formula.general.hardSqftPerMin = 22; // manager tightens the formula in Scope
-    expect(computeMinutes(formula, room as never).total).toBe(15); // 330/22
+    const fixed = defaultRules();
+    Object.assign(fixed.roomTypes.find((rt) => rt.id === "office")!, { method: "fixed", fixedMin: 12 });
+    expect(computeMinutes(fixed, room as never).total).toBe(12);
+    expect(computeMinutes(fixed, { ...room, squareFeet: 900 } as never).total).toBe(12);
   });
   it("adding an automatic task to a type updates rooms that follow the rulebook, not hand-customized ones", async () => {
     const { refreshAutoTasks, syncSpaceMinutes } = await import("./classicStore");

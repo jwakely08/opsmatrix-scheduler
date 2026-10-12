@@ -140,6 +140,9 @@ describe("buildScheduleDoc", () => {
     expect(doc.rows[0]).toMatchObject({ startTime: "7:00 AM", minutes: 11 });
     expect(doc.rows[1]).toMatchObject({ startTime: "7:11 AM", minutes: 11 });
     expect(doc.totals.roomMinutes).toBe(22);
+    // the sheet prints ONE General Clean line, worked out
+    expect(doc.rows[0].tasks).toEqual(["General Clean"]);
+    expect(doc.rows[0].generalClean).toBe("Patient Room: 400 sq ft ÷ 2,150 sq ft/hr = 11.2 min");
   });
 
   it("puts a break between rooms, never in the middle of one", () => {
