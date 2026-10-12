@@ -115,7 +115,7 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
               : (
                 <tr className="plunch" key={"b" + item.brk.id + i}>
                   <td colSpan={9}>
-                    {item.brk.label.toUpperCase()} · {item.brk.startTime} – {item.brk.endTime} · {item.brk.minutes} MIN
+                    {item.brk.label.toUpperCase()} · {item.brk.startTime} – {item.brk.endTime} · {item.brk.minutes} MIN{item.brk.unpaid ? " · UNPAID" : ""}
                   </td>
                 </tr>
               ))}
@@ -216,6 +216,7 @@ function SectionBar({ title, right, duties }: { title: string; right: string; du
 function SummaryStrip({ doc }: { doc: ScheduleDoc }) {
   const t = doc.totals;
   const shiftDuties = [...doc.startDuties, ...doc.endDuties];
+  const unpaid = doc.breaks.filter((b) => b.unpaid);
   return (
     <div className="pstrip">
       <span><b>{t.rooms}</b> rooms</span>
@@ -224,13 +225,30 @@ function SummaryStrip({ doc }: { doc: ScheduleDoc }) {
         <span><b>{hours(t.shiftDutyMinutes)}</b> {shiftDutyPhrase(shiftDuties.map((d) => d.name))}</span>
       )}
       {doc.nonSpace.length > 0 && <span><b>{doc.nonSpace.length}</b> ongoing duties</span>}
-      {t.breakMinutes > 0 && <span><b>{t.breakMinutes} min</b> breaks</span>}
+      {unpaid.length ? (
+        <>
+          {t.paidBreakMinutes > 0 && <span><b>{t.paidBreakMinutes} min</b> paid breaks</span>}
+          <span><b>{t.unpaidBreakMinutes} min</b> {unpaidPhrase(unpaid.map((b) => b.label))}</span>
+        </>
+      ) : t.breakMinutes > 0 && <span><b>{t.breakMinutes} min</b> breaks</span>}
       <span><b>{hours(t.roomMinutes)}</b> in rooms</span>
-      <span className={t.overShift ? "over" : ""}>
-        <b>{hours(t.totalMinutes)}</b> of {hours(t.shiftMinutes)} shift
-      </span>
+      {unpaid.length ? (
+        <span className={t.overShift ? "over" : ""}>
+          <b>{hours(t.paidMinutes)}</b> paid of {hours(t.paidShiftMinutes)} shift ({doc.shiftStart} – {doc.shiftEnd})
+        </span>
+      ) : (
+        <span className={t.overShift ? "over" : ""}>
+          <b>{hours(t.totalMinutes)}</b> of {hours(t.shiftMinutes)} shift
+        </span>
+      )}
     </div>
   );
+}
+
+/** "unpaid lunch" when the unpaid breaks are all one kind, else "unpaid breaks" */
+function unpaidPhrase(labels: string[]): string {
+  const kinds = [...new Set(labels.map((l) => l.trim().toLowerCase()))];
+  return kinds.length === 1 && kinds[0] ? `unpaid ${kinds[0]}` : "unpaid breaks";
 }
 
 // ── page 2: this schedule drawn on the real floor plan ──────────────────────

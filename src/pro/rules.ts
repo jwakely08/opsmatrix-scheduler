@@ -152,7 +152,29 @@ export interface BreakRule {
   minutes: number;
   /** when it starts, e.g. "12:30 PM" — a schedule may override it */
   start: string;
+  /**
+   * Unpaid (Josh, 2026-10-12): the break is ADDED to the day instead of
+   * coming out of the paid shift — an 8-hour shift with a 30-minute unpaid
+   * lunch runs 7:00 AM – 3:30 PM. Absent = paid, as before.
+   */
+  unpaid?: boolean;
   builtIn?: boolean;
+}
+
+/** minutes in one paid shift — a shift is 8 paid hours */
+export const PAID_SHIFT_MINUTES = 480;
+
+/**
+ * Room-work minutes in one paid shift, from Scope: 8 paid hours less the
+ * paid breaks and the start/end-of-shift duties (cart setup, teardown).
+ * Unpaid breaks don't come out of it — they lengthen the day instead.
+ */
+export function productiveFromScope(rules: Rules): number {
+  const paidBreaks = (rules.breaks ?? []).filter((b) => !b.unpaid)
+    .reduce((s, b) => s + (Number(b.minutes) || 0), 0);
+  const duties = rules.nonSpaceDefs.filter((d) => d.position === "start" || d.position === "end")
+    .reduce((s, d) => s + nonSpaceOccurrenceMinutes(rules, d), 0);
+  return PAID_SHIFT_MINUTES - paidBreaks - duties;
 }
 
 /**
@@ -166,6 +188,8 @@ export interface BreakWindow {
   kind: "break" | "lunch";
   start: string;
   minutes: number;
+  /** unpaid — the export marks it "(unpaid)" */
+  unpaid?: boolean;
 }
 
 export interface BreakSchedule {

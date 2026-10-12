@@ -48,6 +48,8 @@ export interface DocBreak {
   minutes: number;
   /** this break falls after this many rooms (index into rows) */
   afterRow: number;
+  /** unpaid: it lengthens the day rather than coming out of the paid shift */
+  unpaid: boolean;
 }
 
 export interface DocNonSpace {
@@ -103,9 +105,17 @@ export interface ScheduleDoc {
     nonSpaceMinutes: number;
     /** just the start- and end-of-shift duties */
     shiftDutyMinutes: number;
+    /** rooms + non-space work + every break: the whole day, start to finish */
     totalMinutes: number;
+    /** the whole day the worker is there: paid shift + unpaid breaks */
     shiftMinutes: number;
     breakMinutes: number;
+    paidBreakMinutes: number;
+    unpaidBreakMinutes: number;
+    /** rooms + non-space work + paid breaks — what the shift pays for */
+    paidMinutes: number;
+    /** the paid shift itself (the shift record's hours) */
+    paidShiftMinutes: number;
     overShift: boolean;
     priority: Record<Priority, number>;
     /** how many rooms carry each task, most common first */
@@ -144,8 +154,33 @@ function shiftSpan(start: number, end: number): number {
 
 interface ClassicShift { id?: string; name?: string; start?: string; end?: string; active?: boolean }
 
+export interface ShiftHours {
+  name: string;
+  start: number;
+  /** when the day ends — after any unpaid breaks, when rules were given */
+  end: number;
+  /** the paid shift, in minutes (the shift record's own hours) */
+  paidMinutes: number;
+  /** unpaid break minutes this schedule takes, added on to the day */
+  unpaidMinutes: number;
+}
+
+/**
+ * The hours this schedule works. The shift record is the PAID shift; with
+ * the account's rules, unpaid breaks are added on to the end of the day —
+ * 1st Shift 7:00 AM – 3:00 PM with a 30-minute unpaid lunch runs to 3:30 PM.
+ */
+export function shiftFor(data: ClassicData, sched: ClassicSchedule, rules?: Rules): ShiftHours {
+  const paid = paidShiftFor(data, sched);
+  const paidMinutes = shiftSpan(paid.start, paid.end);
+  const unpaidMinutes = rules
+    ? resolveBreaks(rules, sched, paid).filter((b) => b.unpaid).reduce((s, b) => s + b.minutes, 0)
+    : 0;
+  return { ...paid, end: (paid.end + unpaidMinutes) % 1440, paidMinutes, unpaidMinutes };
+}
+
 /** the shift record this schedule runs on, by name, with sane fallbacks */
-export function shiftFor(data: ClassicData, sched: ClassicSchedule): { name: string; start: number; end: number } {
+function paidShiftFor(data: ClassicData, sched: ClassicSchedule): { name: string; start: number; end: number } {
   const shifts = ((data.v7 as { shifts?: ClassicShift[] }).shifts ?? []).filter((s) => s.active !== false);
   const name = String(sched.shift ?? "").trim();
   const hit = shifts.find((s) => String(s.name ?? "").trim().toLowerCase() === name.toLowerCase());
@@ -163,10 +198,10 @@ export function shiftFor(data: ClassicData, sched: ClassicSchedule): { name: str
 // ── breaks: the account's, unless this schedule says otherwise ──────────────
 
 /** a break as it applies to one schedule, in minutes-since-shift-start */
-export interface ResolvedBreak { id: string; label: string; minutes: number; offset: number }
+export interface ResolvedBreak { id: string; label: string; minutes: number; offset: number; unpaid: boolean }
 
 /** per-schedule break override, stored on the schedule itself */
-export interface SchedBreak { id: string; start?: string; minutes?: number; off?: boolean }
+export interface SchedBreak { id: string; start?: string; minutes?: number; off?: boolean; unpaid?: boolean }
 
 /**
  * Which breaks this schedule takes and when. Account settings supply the
@@ -193,9 +228,24 @@ export function resolveBreaks(
     // measured from the shift's own start, so shifts crossing midnight work
     const offset = ((at - shift.start) % 1440 + 1440) % 1440;
     if (offset >= span) continue;
-    out.push({ id: b.id, label: b.label, minutes, offset });
+    out.push({ id: b.id, label: b.label, minutes, offset, unpaid: Boolean(ov?.unpaid ?? b.unpaid) });
   }
   return out.sort((a, b) => a.offset - b.offset);
+}
+
+/**
+ * How much work one schedule can hold (Josh, 2026-10-12): the paid shift
+ * (targetHours, 8 by default) less its paid breaks. Non-space duties count
+ * as work against it, like rooms; unpaid breaks don't touch it.
+ */
+export function scheduleCapacity(data: ClassicData, rules: Rules, sched: ClassicSchedule): {
+  paidMinutes: number; paidBreakMinutes: number; unpaidBreakMinutes: number; workMinutes: number;
+} {
+  const paidMinutes = (Number(sched.targetHours) || 8) * 60;
+  const breaks = resolveBreaks(rules, sched, paidShiftFor(data, sched));
+  const paidBreakMinutes = breaks.filter((b) => !b.unpaid).reduce((s, b) => s + b.minutes, 0);
+  const unpaidBreakMinutes = breaks.filter((b) => b.unpaid).reduce((s, b) => s + b.minutes, 0);
+  return { paidMinutes, paidBreakMinutes, unpaidBreakMinutes, workMinutes: paidMinutes - paidBreakMinutes };
 }
 
 /** the account breaks that would apply, for showing in the schedule editor */
@@ -246,10 +296,12 @@ export function buildScheduleDoc(
   opts: DocOptions = {}
 ): ScheduleDoc {
   const spaces = data.v7.spaces ?? [];
-  const shift = shiftFor(data, sched);
+  const shift = shiftFor(data, sched, rules);
 
-  const span = shiftSpan(shift.start, shift.end);
-  const pending = resolveBreaks(rules, sched, shift);
+  // the whole day: the paid shift plus any unpaid breaks
+  const span = shift.paidMinutes + shift.unpaidMinutes;
+  // breaks belong to the paid shift's hours — the same ones shiftFor added up
+  const pending = resolveBreaks(rules, sched, { start: shift.start, end: shift.start + shift.paidMinutes });
 
   const rows: DocRow[] = [];
   const breaks: DocBreak[] = [];
@@ -267,7 +319,7 @@ export function buildScheduleDoc(
       pending.shift();
       const at = Math.max(clock, due);
       const brk: DocBreak = {
-        id: b.id, label: b.label, minutes: b.minutes, afterRow: rows.length,
+        id: b.id, label: b.label, minutes: b.minutes, afterRow: rows.length, unpaid: b.unpaid,
         startTime: formatClock(at), endTime: formatClock(at + b.minutes)
       };
       breaks.push(brk);
@@ -380,6 +432,8 @@ export function buildScheduleDoc(
   for (const r of rows) for (const t of r.tasks) counts.set(t, (counts.get(t) ?? 0) + 1);
 
   const breakMinutes = breaks.reduce((s, b) => s + b.minutes, 0);
+  const unpaidBreakMinutes = breaks.filter((b) => b.unpaid).reduce((s, b) => s + b.minutes, 0);
+  const paidBreakMinutes = breakMinutes - unpaidBreakMinutes;
   const totalMinutes = roomMinutes + nonSpaceMinutes + breakMinutes;
   const plan = spaces.find((s) => s.id === rows[0]?.spaceId);
 
@@ -420,6 +474,10 @@ export function buildScheduleDoc(
       totalMinutes,
       shiftMinutes: span,
       breakMinutes,
+      paidBreakMinutes,
+      unpaidBreakMinutes,
+      paidMinutes: totalMinutes - unpaidBreakMinutes,
+      paidShiftMinutes: shift.paidMinutes,
       overShift: totalMinutes > span,
       priority,
       taskCounts: [...counts.entries()]

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { buildScheduleDoc, parseClock, formatClock, shiftFor, shiftDutyPhrase } from "./scheduleDoc";
+import { buildScheduleDoc, parseClock, formatClock, shiftFor, shiftDutyPhrase, scheduleCapacity } from "./scheduleDoc";
 import { setCoverage, moveInSchedule, spacePriority, type ClassicData } from "./classicStore";
-import { defaultRules } from "./rules";
+import { defaultRules, productiveFromScope } from "./rules";
 
 /**
  * A tiny but realistic hospital floor: two patient rooms and a corridor,
@@ -402,6 +402,76 @@ describe("start- and end-of-shift duties (Josh, 2026-10-12)", () => {
     expect(shiftDutyPhrase(["Cart Setup"])).toBe("cart setup");
     expect(shiftDutyPhrase(["Cart Setup", "Huddle"])).toBe("cart setup & huddle");
     expect(shiftDutyPhrase(["Huddle", "Cart Setup", "Cart Teardown"])).toBe("huddle, cart setup & cart teardown");
+  });
+});
+
+/** the account's standard breaks with lunch unpaid, the way Josh runs it */
+function unpaidLunch() {
+  const r = JSON.parse(JSON.stringify(RULES_BREAKS)) as typeof RULES_BREAKS;
+  r.breaks.find((b) => b.id === "lunch")!.unpaid = true;
+  return r;
+}
+
+describe("unpaid breaks (Josh, 2026-10-12)", () => {
+  it("adds an unpaid lunch on to the end of the paid shift", () => {
+    const data = fixture();
+    const sched = data.v7.schedules![0];
+    expect(shiftFor(data, sched, unpaidLunch())).toMatchObject({
+      start: 420, end: 930, paidMinutes: 480, unpaidMinutes: 30
+    });
+    // paid breaks don't move the end of the day
+    expect(shiftFor(data, sched, RULES_BREAKS)).toMatchObject({ end: 900, unpaidMinutes: 0 });
+    // a schedule that skips lunch, or makes it paid, ends at 3:00 again
+    sched.breaks = [{ id: "lunch", unpaid: false }];
+    expect(shiftFor(data, sched, unpaidLunch()).end).toBe(900);
+    sched.breaks = [{ id: "lunch", off: true }];
+    expect(shiftFor(data, sched, unpaidLunch()).end).toBe(900);
+  });
+
+  it("wraps past midnight on a 3rd shift", () => {
+    const data = fixture();
+    data.v7.schedules![0].shift = "3rd Shift";
+    data.v7.shifts = [{ id: "sh3", name: "3rd Shift", start: "11:00 PM", end: "7:00 AM", active: true }];
+    const rules = { ...RULES, breaks: [{ id: "n", label: "Lunch", minutes: 30, start: "3:00 AM", unpaid: true }] };
+    expect(formatClock(shiftFor(data, data.v7.schedules![0], rules).end)).toBe("7:30 AM");
+  });
+
+  it("runs Josh's day: 8 paid hours with an unpaid lunch is 7:00 AM – 3:30 PM", () => {
+    const data = fixture();
+    const sched = data.v7.schedules![0];
+    // 420 room minutes, as a route carries them
+    Object.assign(sched, { routeOnly: true, spaceOrder: ["sp-101", "sp-102", "sp-c1"],
+      routeStopMinutes: { "sp-101": 140, "sp-102": 140, "sp-c1": 140 } });
+    data.nonSpace.push(cart("cart-setup", "Cart Setup"), cart("cart-teardown", "Cart Teardown"));
+
+    const doc = buildScheduleDoc(data, unpaidLunch(), sched, { date: DATE });
+    expect([doc.shiftStart, doc.shiftEnd]).toEqual(["7:00 AM", "3:30 PM"]);
+    expect(doc.timeline.map((s) => s.kind === "break" ? s.brk.label : s.kind)).toEqual([
+      "duty", "room", "Morning Break", "room", "room", "Lunch", "Afternoon Break", "duty"
+    ]);
+    expect(doc.breaks.find((b) => b.label === "Lunch")).toMatchObject({ unpaid: true });
+    expect(doc.endDuties[0]).toMatchObject({ startTime: "3:15 PM", endTime: "3:30 PM" });
+    expect(doc.totals).toMatchObject({
+      roomMinutes: 420, shiftDutyMinutes: 30, paidBreakMinutes: 30, unpaidBreakMinutes: 30,
+      paidMinutes: 480, paidShiftMinutes: 480, shiftMinutes: 510, totalMinutes: 510, overShift: false
+    });
+  });
+
+  it("sizes a schedule's room work as the paid shift less its paid breaks", () => {
+    const data = fixture();
+    const sched = data.v7.schedules![0];
+    expect(scheduleCapacity(data, RULES_BREAKS, sched)).toEqual({
+      paidMinutes: 480, paidBreakMinutes: 60, unpaidBreakMinutes: 0, workMinutes: 420
+    });
+    expect(scheduleCapacity(data, unpaidLunch(), sched)).toEqual({
+      paidMinutes: 480, paidBreakMinutes: 30, unpaidBreakMinutes: 30, workMinutes: 450
+    });
+  });
+
+  it("works out productive minutes from Scope: 480 − paid breaks − start/end duties", () => {
+    // cart setup 15 + teardown 15 are built in
+    expect(productiveFromScope(RULES_BREAKS)).toBe(480 - 60 - 30);
+    expect(productiveFromScope(unpaidLunch())).toBe(480 - 30 - 30);
   });
 });
 

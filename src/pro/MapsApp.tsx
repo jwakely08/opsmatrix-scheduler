@@ -34,7 +34,7 @@ import { WorkloadApp, ImportResult } from "./WorkloadApp";
 import { FloorCareApp, HoursBar } from "./FloorCareApp";
 import { SanitationApp } from "./SanitationApp";
 import { PolicingApp } from "./PolicingApp";
-import { buildScheduleDoc, parseClock, type SchedBreak } from "./scheduleDoc";
+import { buildScheduleDoc, parseClock, scheduleCapacity, type SchedBreak } from "./scheduleDoc";
 import { importScan } from "../bridge/fusionEntry";
 import {
   attachPlanToRooms, resolvePendingRoomTypes, loadAliases,
@@ -410,13 +410,15 @@ export function MapsApp() {
             // tapping a room already on this schedule removes it, and taking
             // a room's base clean makes the schedule that had it shrink.
             const liveMins = Math.round(scheduleMinutes(data, rules, schedSelected));
-            const liveTarget = (Number(schedSelected.targetHours) || 8) * 60;
+            // room work fits in the paid shift less its paid breaks
+            const liveCap = scheduleCapacity(data, rules, schedSelected);
+            const liveTarget = liveCap.workMinutes;
             return (
               <span className="linkhint schedlive">
                 ✏ Editing <b style={{ color: String(schedSelected.color) }}>{schedSelected.num} {schedSelected.name}</b> —
                 click rooms to add/remove
                 <em className={"schedlivemins" + (liveMins > liveTarget ? " over" : "")}>{liveMins}m of {liveTarget}m</em>
-                <HoursBar minutes={liveMins} />
+                <HoursBar minutes={liveMins + liveCap.paidBreakMinutes} />
                 <button className="pbtn small primary" onClick={() => setSchedSel(null)}>Done</button>
               </span>
             );
@@ -1361,7 +1363,9 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
 
       {schedules.map((s) => {
         const mins = Math.round(scheduleMinutes(data, rules, s));
-        const target = (Number(s.targetHours) || 8) * 60;
+        // paid shift less paid breaks; the bar shows paid hours (work + paid breaks)
+        const cap = scheduleCapacity(data, rules, s);
+        const target = cap.workMinutes;
         const members = (s.spaceOrder ?? [])
           .map((id) => spaces.find((sp) => sp.id === id))
           .filter(Boolean) as ClassicSpace[];
@@ -1372,8 +1376,11 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
               <SchedColorDot sched={s} commit={commit} />
               <b>{s.num} · {s.name}</b>
               <span>{s.shift} · {s.employee || "unassigned"}</span>
-              <em className={mins > target ? "over" : ""}>{mins}m of {target}m</em>
-              <HoursBar minutes={mins} />
+              <em className={mins > target ? "over" : ""}
+                title={`${cap.paidMinutes} paid min − ${cap.paidBreakMinutes} min paid breaks${cap.unpaidBreakMinutes ? ` (+ ${cap.unpaidBreakMinutes} min unpaid, added to the day)` : ""}`}>
+                {mins}m of {target}m
+              </em>
+              <HoursBar minutes={mins + cap.paidBreakMinutes} />
               <span className="schedacts">
                 <button className="pbtn small primary" onClick={() => onPrint(s.id)}>🖨 Print schedule</button>
                 {templates.length ? templates.map((t) => (
@@ -1679,7 +1686,7 @@ function BreakRow({ sched, rules, commit }: {
 
   const taken = all.filter((b) => !overrides.find((o) => o.id === b.id)?.off);
   const summary = taken.length
-    ? taken.map((b) => `${b.label} ${overrides.find((o) => o.id === b.id)?.start ?? b.start}`).join(" · ")
+    ? taken.map((b) => { const ov = overrides.find((o) => o.id === b.id); return `${b.label} ${ov?.start ?? b.start}${(ov?.unpaid ?? b.unpaid) ? " (unpaid)" : ""}`; }).join(" · ")
     : "no breaks on this schedule";
 
   return (
@@ -1705,8 +1712,13 @@ function BreakRow({ sched, rules, commit }: {
                     onChange={(e) => setOv(b.id, { minutes: Number(e.target.value) || 0 })} />
                   min
                 </label>
-                {(ov?.start !== undefined || ov?.minutes !== undefined) && (
-                  <button className="plink" onClick={() => setOv(b.id, { start: undefined, minutes: undefined })}>
+                <label className="checkline">
+                  <input type="checkbox" checked={Boolean(ov?.unpaid ?? b.unpaid)} disabled={!on}
+                    onChange={(e) => setOv(b.id, { unpaid: e.target.checked })} />
+                  unpaid
+                </label>
+                {(ov?.start !== undefined || ov?.minutes !== undefined || ov?.unpaid !== undefined) && (
+                  <button className="plink" onClick={() => setOv(b.id, { start: undefined, minutes: undefined, unpaid: undefined })}>
                     reset to account time
                   </button>
                 )}
@@ -2335,6 +2347,12 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
             onChange={(e) => set((r) => { r.breaks.find((x) => x.id === b.id)!.start = e.target.value; })} /></span>
           <span>for <input type="number" min={0} value={b.minutes} style={{ width: 64 }}
             onChange={(e) => set((r) => { r.breaks.find((x) => x.id === b.id)!.minutes = Number(e.target.value) || 0; })} /> min</span>
+          {/* unpaid breaks lengthen the day instead of coming out of the paid shift */}
+          <label className="checkline" title="Unpaid: added on to the shift (8 paid hours + an unpaid 30-min lunch = 7:00 AM – 3:30 PM)">
+            <input type="checkbox" checked={Boolean(b.unpaid)}
+              onChange={(e) => set((r) => { r.breaks.find((x) => x.id === b.id)!.unpaid = e.target.checked; })} />
+            <span>Unpaid</span>
+          </label>
           {parseClock(b.start) === null && <em>⚠ write the time like 12:30 PM</em>}
           <button className="pbtn small danger" onClick={() => set((r) => { r.breaks = r.breaks.filter((x) => x.id !== b.id); })}>✕</button>
         </div>
@@ -2371,6 +2389,11 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
                 onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.windows[wi].start = e.target.value; })} />
               <input type="number" min={5} value={w.minutes} style={{ width: 60 }}
                 onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.windows[wi].minutes = Number(e.target.value) || 0; })} /> min
+              <label className="checkline" title="Unpaid — the export marks it (unpaid)">
+                <input type="checkbox" checked={Boolean(w.unpaid)}
+                  onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.windows[wi].unpaid = e.target.checked; })} />
+                <span>unpaid</span>
+              </label>
               <button className="plink" onClick={() => set((r) => {
                 const t = r.breakSchedules.find((x) => x.id === bs.id)!;
                 t.windows = t.windows.filter((_, j) => j !== wi);
