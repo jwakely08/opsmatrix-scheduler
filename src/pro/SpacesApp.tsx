@@ -17,7 +17,7 @@ import {
   BUILDING_PRESETS, buildingArtMap, buildingArtUrl, setBuildingArt, fileToBuildingArt
 } from "./buildingArt";
 import {
-  autoTasksFor, typeIdFromLabel, isCarpet, spaceCleanability, includedTasksFor, type Rules
+  autoTasksFor, tasksAfterFloorChange, typeIdFromLabel, isCarpet, spaceCleanability, includedTasksFor, type Rules
 } from "./rules";
 
 const fmt = (n: number) => Math.round(n).toLocaleString();
@@ -88,13 +88,21 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
   const req = Array.isArray(draft.spaceTasks) ? draft.spaceTasks : [];
   // tasks this type's General Clean already covers — never extras here
   const included = includedTasksFor(rules, typeId);
+  const autoTasks = autoTasksFor(rules, typeId, draft.floorType);
   const linked = space ? notesForSpace(data, space).linked : [];
 
   const set = (patch: Partial<ClassicSpace>) => setDraft((d) => ({ ...d, ...patch }));
   const setType = (id: string) => {
     const rt = rules.roomTypes.find((x) => x.id === id);
-    set({ roomType: rt?.label ?? "", spaceTasks: autoTasksFor(rules, id) });
+    set({ roomType: rt?.label ?? "", spaceTasks: autoTasksFor(rules, id, draft.floorType) });
   };
+  // a new floor swaps the floor's automatic tasks (carpet → hard: Vacuuming
+  // out, Mopping in) — worked from the LATEST draft, so a task tapped a
+  // moment earlier is never lost
+  const setFloor = (floorType: string) => setDraft((d) => ({
+    ...d, floorType,
+    spaceTasks: tasksAfterFloorChange(rules, { ...d, spaceTasks: Array.isArray(d.spaceTasks) ? d.spaceTasks : [] }, floorType)
+  }));
 
   const save = () => {
     if (!String(draft.roomNumber ?? "").trim() && !String(draft.roomName ?? "").trim()) {
@@ -166,7 +174,7 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
             </select>
           </label>
           <label className="pfield">Floor type
-            <select value={draft.floorType || ""} onChange={(e) => set({ floorType: e.target.value })}>
+            <select value={draft.floorType || ""} onChange={(e) => setFloor(e.target.value)}>
               <option value="">— pick floor type —</option>
               {FLOOR_TYPES.map((f) => <option key={f}>{f}</option>)}
             </select>
@@ -211,7 +219,7 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
             <span className="ptask locked">General Clean</span>
             {rules.tasks.filter((t) => t.addable).map((t) => {
               const on = req.includes(t.id);
-              const auto = t.autoFor.includes(typeId);
+              const auto = autoTasks.includes(t.id);
               if (included.includes(t.id)) {
                 return on ? (
                   <button key={t.id} className="ptask warn"
@@ -228,7 +236,7 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
               );
             })}
           </div>
-          <small>• = automatic for this room type. Who does each task is decided in Max Schedules.</small>
+          <small>• = automatic for this room type or floor type. Who does each task is decided in Max Schedules.</small>
         </div>
 
         <label className="pfield">Notes <small>show wherever this room appears — including while scheduling</small>

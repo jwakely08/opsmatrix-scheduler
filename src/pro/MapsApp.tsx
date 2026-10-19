@@ -43,8 +43,8 @@ import {
 import { fileToSheets, isSpreadsheet } from "./sheetFile";
 import { collectWorkspace, applyWorkspace, backupFilename } from "./workspaceStore";
 import {
-  loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor,
-  typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
+  loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor, autoTasksForSpace, tasksAfterFloorChange,
+  taskSourceLabel, FLOOR_KINDS, typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
   nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, DEFAULT_INCLUDED_TASKS, RATE_UNITS, computeMinutes,
   gcFormula, gcMinutes, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
   issaSourceLabel, categoryFor, resetToIssa, typeIdFromLabelStrict, RULES_KEY, exampleProcedure,
@@ -253,7 +253,7 @@ export function MapsApp() {
     commit((d) => {
       for (const sp of d.v7.spaces ?? []) {
         if (!Array.isArray(sp.spaceTasks)) {
-          sp.spaceTasks = sp.fusionTasks ?? autoTasksFor(rules, typeIdFromLabel(rules, sp.roomType ?? ""));
+          sp.spaceTasks = sp.fusionTasks ?? autoTasksForSpace(rules, sp);
         }
         syncSpaceMinutes(sp, rules);
         if (sp.assignedScheduleId && coverageForSpace(d, sp.id).length === 0) {
@@ -624,9 +624,15 @@ export function MapsApp() {
             onOpenEditor={() => openEditor(roomSelected)}
             onChange={(patch) => commit((d) => {
               const sp = (d.v7.spaces ?? []).find((s) => s.id === roomSelected.id)!;
+              // a floor change with no task list swaps the floor's tasks
+              // against the room as it was (the sidebar sends its own list)
+              const floorTasks = patch.floorType !== undefined && patch.spaceTasks === undefined
+                ? tasksAfterFloorChange(rules, sp, String(patch.floorType)) : null;
               Object.assign(sp, patch);
               if (patch.roomType !== undefined && patch.spaceTasks === undefined) {
-                sp.spaceTasks = autoTasksFor(rules, typeIdFromLabel(rules, String(patch.roomType)));
+                sp.spaceTasks = autoTasksForSpace(rules, sp);
+              } else if (floorTasks) {
+                sp.spaceTasks = floorTasks;
               }
               syncSpaceMinutes(sp, rules);
             })}
@@ -1163,6 +1169,7 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
   // this type's General Clean already covers — those can't be extras
   const req = rawSpaceTasks(rules, cur);
   const included = includedTasksFor(rules, typeId);
+  const autoTasks = autoTasksFor(rules, typeId, cur.floorType);
   const issues = spaceIncomplete(cur);
 
   return (
@@ -1192,7 +1199,7 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
           const rt = rules.roomTypes.find((x) => x.id === e.target.value);
           // changing the type refreshes its automatic tasks in the draft, so
           // the chips below update live before anything is saved
-          set({ roomType: rt?.label ?? e.target.value, spaceTasks: autoTasksFor(rules, e.target.value) });
+          set({ roomType: rt?.label ?? e.target.value, spaceTasks: autoTasksFor(rules, e.target.value, cur.floorType) });
         }}>
           {rules.roomTypes.map((rt) => <option key={rt.id} value={rt.id}>{rt.label} · {rt.frequency}</option>)}
         </select>
@@ -1200,7 +1207,14 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
       <div className="prow">
         <label className="pfield">Floor type
           <select value={cur.floorType || ""}
-            onChange={(e) => set({ floorType: e.target.value })}>
+            onChange={(e) => {
+              // swap the floor's automatic tasks, worked from the LATEST draft
+              const floorType = e.target.value;
+              setDraft((prev) => ({
+                ...prev, floorType,
+                spaceTasks: tasksAfterFloorChange(rules, { ...space, ...prev } as ClassicSpace, floorType)
+              }));
+            }}>
             <option value="">— unset: prices as hard floor —</option>
             {FLOOR_TYPES.map((f) => <option key={f}>{f}</option>)}
           </select>
@@ -1255,7 +1269,7 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
           <span className="ptask locked">General Clean</span>
           {rules.tasks.filter((t) => t.addable).map((t) => {
             const on = req.includes(t.id);
-            const auto = t.autoFor.includes(typeId);
+            const auto = autoTasks.includes(t.id);
             if (included.includes(t.id)) {
               // part of General Clean here: never an extra — flagged if listed
               return on ? (
@@ -1273,7 +1287,7 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
             );
           })}
         </div>
-        <small>• = automatic for this room type. Who does each task is decided on the Map tab — different tasks can go to different schedules.</small>
+        <small>• = automatic for this room type or floor type. Who does each task is decided on the Map tab — different tasks can go to different schedules.</small>
       </div>
 
       <button className="pbtn primary wide" disabled={!dirty} onClick={save}>
@@ -2155,6 +2169,49 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
             if (!confirm(`Delete the task "${t.label}"? It comes off every room and schedule that uses it${t.floorCare ? ", and out of Max Floor Care" : ""}. Takes effect when you hit Save.`)) return;
             set((r) => { r.tasks = r.tasks.filter((x) => x.id !== t.id); });
           }}>✕</button>
+          {/* the floor trigger (Josh, 2026-10-12): rooms with these floors get
+              this task automatically, the way room types get theirs */}
+          <div className="pfloorrule">
+            <span>Automatic on every room with</span>
+            {FLOOR_KINDS.map((f) => {
+              const on = (t.autoForFloor ?? []).includes(f.id);
+              return (
+                <button key={f.id} className={"ptask sm" + (on ? " on" : "")}
+                  onClick={() => set((r) => {
+                    const x = r.tasks.find((y) => y.id === t.id)!;
+                    x.autoForFloor = on ? (x.autoForFloor ?? []).filter((k) => k !== f.id) : [...(x.autoForFloor ?? []), f.id];
+                  })}>
+                  {f.label}
+                </button>
+              );
+            })}
+            {(t.autoForFloor ?? []).length > 0 && (<>
+              <span>except</span>
+              {(t.floorSkipTypes ?? []).map((typeId) => (
+                <span key={typeId} className="ptask sm on">
+                  {draft.roomTypes.find((rt) => rt.id === typeId)?.label ?? typeId}
+                  <button className="chipx" aria-label="Stop skipping this room type"
+                    onClick={() => set((r) => {
+                      const x = r.tasks.find((y) => y.id === t.id)!;
+                      x.floorSkipTypes = (x.floorSkipTypes ?? []).filter((k) => k !== typeId);
+                    })}>✕</button>
+                </span>
+              ))}
+              <select className="chipadd" value="" onChange={(e) => {
+                const typeId = e.target.value;
+                if (!typeId) return;
+                set((r) => {
+                  const x = r.tasks.find((y) => y.id === t.id)!;
+                  x.floorSkipTypes = [...(x.floorSkipTypes ?? []), typeId];
+                });
+              }}>
+                <option value="">＋ skip a room type…</option>
+                {draft.roomTypes.filter((rt) => !(t.floorSkipTypes ?? []).includes(rt.id))
+                  .map((rt) => <option key={rt.id} value={rt.id}>{rt.label}</option>)}
+              </select>
+            </>)}
+            {taskSourceLabel(t) && <span className="gcsrc">Rate: {taskSourceLabel(t)}</span>}
+          </div>
         </div>
       ))}
       <div className="prule add">

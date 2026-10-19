@@ -1414,6 +1414,7 @@
           var rules = F.loadRules();
           // one guardrail layer for every field, known or future
           var prepared = {};
+          var retype = null;
           for (var k in set) {
             if (PROTECTED.indexOf(k) >= 0) return { success: false, error: "The field \"" + k + "\" is protected and cannot be edited." };
             var v = set[k];
@@ -1425,7 +1426,7 @@
               var hit2 = typeLabelFor(rules, v);
               if (!hit2) return { success: false, error: "\"" + v + "\" is not a room type in Scope. Existing: " + rules.roomTypes.map(function (rt) { return rt.label; }).join(", ") + ". Create it first with set_room_type_rule." };
               prepared[k] = hit2.label;
-              prepared.spaceTasks = F.autoTasksFor(rules, hit2.id);
+              retype = hit2.id; // its automatic tasks are set per room below (they follow each room's floor)
             } else if (k === "cleanability") {
               if (CLEANABILITIES.indexOf(v) < 0) return { success: false, error: "Cleanability must be one of: " + CLEANABILITIES.join(", ") };
               prepared[k] = v;
@@ -1442,7 +1443,14 @@
             }
           }
           targets.forEach(function (t) {
-            commitSpace(cx, Object.assign({}, t, prepared), rules);
+            var u = Object.assign({}, t, prepared);
+            // a new type brings its automatic tasks, a new floor swaps the
+            // floor's (Mopping ↔ Vacuuming) — unless the tasks were set too
+            if (prepared.spaceTasks === undefined) {
+              if (retype) u.spaceTasks = F.autoTasksFor(rules, retype, u.floorType);
+              else if (prepared.floorType !== undefined) u.spaceTasks = F.tasksAfterFloorChange(rules, t, u.floorType);
+            }
+            commitSpace(cx, u, rules);
           });
           return { success: true, message: "Updated " + targets.length + " room" + (targets.length > 1 ? "s" : "") + " (" + Object.keys(set).join(", ") + "), repriced by the rules engine." };
         }
@@ -1510,15 +1518,18 @@
         var rules = F.loadRules();
         var u = Object.assign({}, t, inp);
         delete u.room_number;
+        var ft = inp.floorType !== undefined ? fusionFloor(inp.floorType) : undefined;
+        if (inp.floorType !== undefined) {
+          if (!ft) return { success: false, error: "\"" + inp.floorType + "\" is not a floor type I know. Use Carpet, Hard floor — finished (vinyl/tile/LVT), or Hard floor — unfinished (bare concrete)." };
+          u.floorType = ft;
+        }
         if (inp.roomType !== undefined) {
           var hit = typeLabelFor(rules, inp.roomType);
           u.roomType = hit ? hit.label : String(inp.roomType || "").trim();
-          u.spaceTasks = hit ? F.autoTasksFor(rules, hit.id) : [];
-        }
-        if (inp.floorType !== undefined) {
-          var ft = fusionFloor(inp.floorType);
-          if (!ft) return { success: false, error: "\"" + inp.floorType + "\" is not a floor type I know. Use Carpet, Hard floor — finished (vinyl/tile/LVT), or Hard floor — unfinished (bare concrete)." };
-          u.floorType = ft;
+          u.spaceTasks = hit ? F.autoTasksFor(rules, hit.id, u.floorType) : [];
+        } else if (ft) {
+          // a new floor swaps the floor's automatic tasks (Mopping ↔ Vacuuming)
+          u.spaceTasks = F.tasksAfterFloorChange(rules, t, ft);
         }
         u.squareFeet = Math.round(parseFloat(u.squareFeet) || 0);
         u.fixtureCount = Math.round(parseFloat(u.fixtureCount) || 0);
@@ -1539,7 +1550,7 @@
           roomNumber: String(inp.roomNumber).trim(),
           roomType: hit ? hit.label : String(inp.roomType || "").trim(),
           floorType: inp.floorType !== undefined ? fusionFloor(inp.floorType) : "",
-          spaceTasks: hit ? F.autoTasksFor(rules, hit.id) : [],
+          spaceTasks: hit ? F.autoTasksFor(rules, hit.id, inp.floorType !== undefined ? fusionFloor(inp.floorType) : "") : [],
           updatedAt: new Date().toISOString()
         });
         ns.squareFeet = Math.round(parseFloat(ns.squareFeet) || 0);
@@ -1569,7 +1580,8 @@
         }
         matched.forEach(function (s) {
           var u = Object.assign({}, s, updates);
-          if (hit) { u.roomType = hit.label; u.spaceTasks = F.autoTasksFor(rules, hit.id); }
+          if (hit) { u.roomType = hit.label; u.spaceTasks = F.autoTasksFor(rules, hit.id, ft !== undefined ? ft : s.floorType); }
+          else if (ft !== undefined) u.spaceTasks = F.tasksAfterFloorChange(rules, s, ft);
           if (ft !== undefined) u.floorType = ft;
           commitSpace(cx, u, rules);
         });

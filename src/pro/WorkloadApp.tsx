@@ -28,7 +28,7 @@ import {
 import { suggestRoomTypes } from "../bridge/roomTypeSuggest";
 import { loadApiKey } from "./classicStore";
 import type { ClassicData, ClassicSpace } from "./classicStore";
-import { syncSpaceMinutes, applyRoomType, FLOOR_TYPES } from "./classicStore";
+import { syncSpaceMinutes, applyRoomType, applyFloorType, FLOOR_TYPES } from "./classicStore";
 
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 
@@ -311,7 +311,8 @@ function ValidationTab({ spaces, rules, commit }: {
           if (srcName) { aliases.roomTypes[norm(srcName)] = bulkType; aliasesChanged = true; }
         }
         if (bulkFloor) {
-          sp.floorType = bulkFloor;
+          // the floor arrives complete too: its automatic tasks swap in
+          applyFloorType(sp, bulkFloor, rules);
           const srcFt = String(src?.floorType ?? "").trim();
           if (srcFt) { aliases.floorTypes[norm(srcFt)] = bulkFloor; aliasesChanged = true; }
         }

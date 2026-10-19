@@ -152,6 +152,10 @@ body {
 .gclabel { color: #94a3b8; font-size: 12px; min-width: 170px; }
 .ptask.incl { opacity: .55; cursor: default; border-style: dashed; }
 .ptask.warn { border-color: #f59e0b; color: #fbbf24; background: rgba(245,158,11,.12); }
+/* a space task's floor trigger: its own line under the task */
+.pfloorrule { flex-basis: 100%; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: #94a3b8; padding-left: 4px; }
+.pfloorrule .gcsrc { flex-basis: 100%; }
+.pfloorrule .chipadd { max-width: 200px; }
 .prule.add { border: 1px dashed rgba(148,163,184,.3); border-radius: 9px; margin-top: 10px; padding: 10px; }
 .prule.add input { flex: 1; min-width: 90px; }
 
