@@ -8,7 +8,7 @@
 // to the caller instead of silently vanishing.
 import { readZip, zipStore, utf8, type ZipEntry } from "./xlsxZip";
 import {
-  patchSheetXml, excelSerial, addMinutes, fmt12, hoursLabel, windowLabel, daysLabel,
+  patchSheetXml, excelSerial, addMinutes, fmt12, hoursLabel, windowText, daysLabel,
   type CellPatch, type ClientExportInput
 } from "./clientSchedule";
 import type { TemplateMap } from "./templateStore";
@@ -45,11 +45,11 @@ export function planTemplatePages(map: TemplateMap, input: ClientExportInput): {
   const breaks = input.windows.filter((w) => w.kind === "break");
   const lunch = input.windows.find((w) => w.kind === "lunch");
   if (breaks.length) {
-    put(map.breakCell, (r) => ({ ref: r, text: breaks.map((b) => windowLabel(b.start, b.minutes)).join(", ") }));
+    put(map.breakCell, (r) => ({ ref: r, text: breaks.map(windowText).join(", ") }));
     put(map.breakTimeCell, (r) => timePatch(map, r, breaks[0].start));
   }
   if (lunch) {
-    put(map.lunchCell, (r) => ({ ref: r, text: windowLabel(lunch.start, lunch.minutes) }));
+    put(map.lunchCell, (r) => ({ ref: r, text: windowText(lunch) }));
     put(map.lunchTimeCell, (r) => timePatch(map, r, lunch.start));
   }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { buildScheduleDoc, parseClock, formatClock, shiftFor } from "./scheduleDoc";
+import { buildScheduleDoc, parseClock, formatClock, shiftFor, shiftDutyPhrase, scheduleCapacity } from "./scheduleDoc";
 import { setCoverage, moveInSchedule, spacePriority, type ClassicData } from "./classicStore";
-import { defaultRules } from "./rules";
+import { defaultRules, productiveFromScope } from "./rules";
 
 /**
  * A tiny but realistic hospital floor: two patient rooms and a corridor,
@@ -296,5 +296,200 @@ describe("buildScheduleDoc", () => {
     expect(doc.rows.map((r) => r.roomNumber)).toEqual(["101", "102"]);
     expect(doc.rows[1].tasks).toEqual([]);
     expect(doc.rows[1].minutes).toBe(0);
+  });
+});
+
+/** a schedule's cart duty, the way Max Schedules stores a counted task */
+function cart(defId: "cart-setup" | "cart-teardown", name: string) {
+  return { id: "ns-" + defId, name, defId, count: 1, minutesPer: 15, hours: 0.25, scheduleId: "sched-a", roomIds: [] };
+}
+
+describe("start- and end-of-shift duties (Josh, 2026-10-12)", () => {
+  it("runs cart setup first, the rooms after it, and cart teardown as the shift ends", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    setCoverage(data, "sp-102", "sched-a", true, []);
+    data.nonSpace.push(cart("cart-teardown", "Cart Teardown"), cart("cart-setup", "Cart Setup"));
+    const rules = { ...RULES, breaks: [{ id: "b", label: "Break", minutes: 15, start: "7:20 AM" }] };
+
+    const doc = buildScheduleDoc(data, rules, data.v7.schedules![0], { date: DATE });
+    expect(doc.timeline.map((s) => s.kind)).toEqual(["duty", "room", "break", "room", "duty"]);
+    expect(doc.startDuties).toEqual([{
+      id: "ns-cart-setup", name: "Cart Setup", minutes: 15, linkedRooms: [],
+      position: "start", startTime: "7:00 AM", endTime: "7:15 AM"
+    }]);
+    // the room clock begins after setup; the break still lands by clock time
+    expect(doc.rows.map((r) => r.startTime)).toEqual(["7:15 AM", "7:41 AM"]);
+    expect(doc.breaks[0]).toMatchObject({ startTime: "7:26 AM", endTime: "7:41 AM", afterRow: 1 });
+    expect(doc.roomsEnd).toBe("7:52 AM");
+    // teardown finishes as the shift does
+    expect(doc.endDuties[0]).toMatchObject({ name: "Cart Teardown", startTime: "2:45 PM", endTime: "3:00 PM" });
+    expect(doc.dayEnd).toBe("3:00 PM");
+    // they are stops, not ongoing duties
+    expect(doc.nonSpace).toEqual([]);
+    expect(doc.nonSpaceWindow).toBeNull();
+    expect(doc.totals.shiftDutyMinutes).toBe(30);
+    expect(doc.totals.nonSpaceMinutes).toBe(30);
+    expect(doc.totals.totalMinutes).toBe(22 + 30 + 15);
+  });
+
+  it("takes a break that falls during setup before the first room", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    data.nonSpace.push(cart("cart-setup", "Cart Setup"));
+    const rules = { ...RULES, breaks: [{ id: "b", label: "Break", minutes: 15, start: "7:05 AM" }] };
+
+    const doc = buildScheduleDoc(data, rules, data.v7.schedules![0], { date: DATE });
+    expect(doc.timeline.map((s) => s.kind)).toEqual(["duty", "break", "room"]);
+    expect(doc.breaks[0]).toMatchObject({ startTime: "7:15 AM", afterRow: 0 });
+    expect(doc.rows[0].startTime).toBe("7:30 AM");
+  });
+
+  it("prints the account's breaks in their place across a full day of stops", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    data.nonSpace.push(cart("cart-setup", "Cart Setup"), cart("cart-teardown", "Cart Teardown"));
+
+    const doc = buildScheduleDoc(data, RULES_BREAKS, data.v7.schedules![0], { date: DATE });
+    expect(doc.timeline.map((s) => s.kind === "break" ? s.brk.label : s.kind)).toEqual([
+      "duty", "room", "Morning Break", "Lunch", "Afternoon Break", "duty"
+    ]);
+    expect(doc.endDuties[0].startTime).toBe("2:45 PM");
+  });
+
+  it("teardown follows the last room straight away when the rooms run long", () => {
+    const data = fixture();
+    data.v7.shifts = [{ id: "sh1", name: "1st Shift", start: "7:00 AM", end: "7:30 AM", active: true }];
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    setCoverage(data, "sp-102", "sched-a", true, []);
+    data.nonSpace.push(cart("cart-setup", "Cart Setup"), cart("cart-teardown", "Cart Teardown"));
+
+    const doc = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
+    expect(doc.endDuties[0]).toMatchObject({ startTime: "7:37 AM", endTime: "7:52 AM" });
+    expect(doc.totals.overShift).toBe(true);
+  });
+
+  it("keeps anytime duties in the ongoing block, worked in before teardown", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    data.nonSpace.push(
+      { id: "ns1", name: "Discharges", defId: "discharge", count: 2, minutesPer: 45, hours: 1.5, scheduleId: "sched-a", roomIds: [] },
+      cart("cart-teardown", "Cart Teardown")
+    );
+
+    const doc = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
+    expect(doc.nonSpace).toEqual([{ id: "ns1", name: "Discharges × 2", minutes: 90, linkedRooms: [] }]);
+    expect(doc.nonSpaceWindow).toEqual({ start: "7:11 AM", end: "2:45 PM" });
+    expect(doc.totals.shiftDutyMinutes).toBe(15);
+    expect(doc.totals.nonSpaceMinutes).toBe(105);
+  });
+
+  it("follows the position set in Scope, and finds legacy entries by name", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, []);
+    data.nonSpace.push({ id: "old", name: "Cart Setup", hours: 0.25, scheduleId: "sched-a", roomIds: [] });
+    const rules = JSON.parse(JSON.stringify(RULES)) as typeof RULES;
+    rules.nonSpaceDefs.find((d) => d.id === "discharge")!.position = "start";
+    data.nonSpace.push({ id: "d", name: "Discharges", defId: "discharge", count: 1, minutesPer: 45, hours: 0.75, scheduleId: "sched-a", roomIds: [] });
+
+    const doc = buildScheduleDoc(data, rules, data.v7.schedules![0], { date: DATE });
+    expect(doc.startDuties.map((d) => [d.name, d.startTime])).toEqual([["Cart Setup", "7:00 AM"], ["Discharges", "7:15 AM"]]);
+    expect(doc.rows[0].startTime).toBe("8:00 AM");
+  });
+
+  it("says the duties the way a supervisor would on the summary strip", () => {
+    expect(shiftDutyPhrase(["Cart Setup", "Cart Teardown"])).toBe("cart setup & teardown");
+    expect(shiftDutyPhrase(["Cart Setup"])).toBe("cart setup");
+    expect(shiftDutyPhrase(["Cart Setup", "Huddle"])).toBe("cart setup & huddle");
+    expect(shiftDutyPhrase(["Huddle", "Cart Setup", "Cart Teardown"])).toBe("huddle, cart setup & cart teardown");
+  });
+});
+
+/** the account's standard breaks with lunch unpaid, the way Josh runs it */
+function unpaidLunch() {
+  const r = JSON.parse(JSON.stringify(RULES_BREAKS)) as typeof RULES_BREAKS;
+  r.breaks.find((b) => b.id === "lunch")!.unpaid = true;
+  return r;
+}
+
+describe("unpaid breaks (Josh, 2026-10-12)", () => {
+  it("adds an unpaid lunch on to the end of the paid shift", () => {
+    const data = fixture();
+    const sched = data.v7.schedules![0];
+    expect(shiftFor(data, sched, unpaidLunch())).toMatchObject({
+      start: 420, end: 930, paidMinutes: 480, unpaidMinutes: 30
+    });
+    // paid breaks don't move the end of the day
+    expect(shiftFor(data, sched, RULES_BREAKS)).toMatchObject({ end: 900, unpaidMinutes: 0 });
+    // a schedule that skips lunch, or makes it paid, ends at 3:00 again
+    sched.breaks = [{ id: "lunch", unpaid: false }];
+    expect(shiftFor(data, sched, unpaidLunch()).end).toBe(900);
+    sched.breaks = [{ id: "lunch", off: true }];
+    expect(shiftFor(data, sched, unpaidLunch()).end).toBe(900);
+  });
+
+  it("wraps past midnight on a 3rd shift", () => {
+    const data = fixture();
+    data.v7.schedules![0].shift = "3rd Shift";
+    data.v7.shifts = [{ id: "sh3", name: "3rd Shift", start: "11:00 PM", end: "7:00 AM", active: true }];
+    const rules = { ...RULES, breaks: [{ id: "n", label: "Lunch", minutes: 30, start: "3:00 AM", unpaid: true }] };
+    expect(formatClock(shiftFor(data, data.v7.schedules![0], rules).end)).toBe("7:30 AM");
+  });
+
+  it("runs Josh's day: 8 paid hours with an unpaid lunch is 7:00 AM – 3:30 PM", () => {
+    const data = fixture();
+    const sched = data.v7.schedules![0];
+    // 420 room minutes, as a route carries them
+    Object.assign(sched, { routeOnly: true, spaceOrder: ["sp-101", "sp-102", "sp-c1"],
+      routeStopMinutes: { "sp-101": 140, "sp-102": 140, "sp-c1": 140 } });
+    data.nonSpace.push(cart("cart-setup", "Cart Setup"), cart("cart-teardown", "Cart Teardown"));
+
+    const doc = buildScheduleDoc(data, unpaidLunch(), sched, { date: DATE });
+    expect([doc.shiftStart, doc.shiftEnd]).toEqual(["7:00 AM", "3:30 PM"]);
+    expect(doc.timeline.map((s) => s.kind === "break" ? s.brk.label : s.kind)).toEqual([
+      "duty", "room", "Morning Break", "room", "room", "Lunch", "Afternoon Break", "duty"
+    ]);
+    expect(doc.breaks.find((b) => b.label === "Lunch")).toMatchObject({ unpaid: true });
+    expect(doc.endDuties[0]).toMatchObject({ startTime: "3:15 PM", endTime: "3:30 PM" });
+    expect(doc.totals).toMatchObject({
+      roomMinutes: 420, shiftDutyMinutes: 30, paidBreakMinutes: 30, unpaidBreakMinutes: 30,
+      paidMinutes: 480, paidShiftMinutes: 480, shiftMinutes: 510, totalMinutes: 510, overShift: false
+    });
+  });
+
+  it("sizes a schedule's room work as the paid shift less its paid breaks", () => {
+    const data = fixture();
+    const sched = data.v7.schedules![0];
+    expect(scheduleCapacity(data, RULES_BREAKS, sched)).toEqual({
+      paidMinutes: 480, paidBreakMinutes: 60, unpaidBreakMinutes: 0, workMinutes: 420
+    });
+    expect(scheduleCapacity(data, unpaidLunch(), sched)).toEqual({
+      paidMinutes: 480, paidBreakMinutes: 30, unpaidBreakMinutes: 30, workMinutes: 450
+    });
+  });
+
+  it("works out productive minutes from Scope: 480 − paid breaks − start/end duties", () => {
+    // cart setup 15 + teardown 15 are built in
+    expect(productiveFromScope(RULES_BREAKS)).toBe(480 - 60 - 30);
+    expect(productiveFromScope(unpaidLunch())).toBe(480 - 30 - 30);
+  });
+});
+
+describe("the cleaning procedure on the sheet", () => {
+  it("prints the packaged example, flagged as an example", () => {
+    const data = fixture();
+    const doc = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
+    expect(doc.procedure?.example).toBe(true);
+    expect(doc.procedure?.steps).toHaveLength(7);
+    expect(doc.procedure?.steps[0].title).toBe("Empty trash");
+  });
+
+  it("prints the facility's own steps unflagged, and nothing when hidden", () => {
+    const data = fixture();
+    const own = { ...RULES, procedure: { steps: [{ title: "Knock and announce" }, { title: "  " }], show: true, example: false } };
+    expect(buildScheduleDoc(data, own, data.v7.schedules![0], { date: DATE }).procedure)
+      .toEqual({ steps: [{ title: "Knock and announce" }], example: false });
+    const hidden = { ...own, procedure: { ...own.procedure, show: false } };
+    expect(buildScheduleDoc(data, hidden, data.v7.schedules![0], { date: DATE }).procedure).toBeNull();
   });
 });
