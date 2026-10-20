@@ -4,9 +4,12 @@ import {
   loadClassic, saveClassic, syncSpaceMinutes, refreshAutoTasks, coverageForSpace, uncovered, setCoverage,
   coverageMinutes, scheduleMinutes, createSchedule, deleteSchedule, scheduleColor, SCHED_COLORS,
   spaceIncomplete, FLOOR_TYPES, rectifyForDisplay, pathFrom, centroidOf, boundsOf, pointIn,
-  moveInSchedule, spacePriority, PRIORITIES, PRIORITY_WORD, nonSpaceTaskMinutes,
+  moveInSchedule, spacePriority, PRIORITIES, PRIORITY_WORD, nonSpaceTaskMinutes, stripIncludedTasks, renameRoomTypes,
   type ClassicData, type ClassicSpace, type ClassicSchedule, type NonSpaceTask
 } from "./classicStore";
+import {
+  deptColorMap, colorForDept, assignDepartment, departmentsOf, departmentOutlineRuns, DEPT_PALETTE
+} from "./departments";
 import { navVisit, navBack, hubHashFor } from "./nav";
 import {
   MapCanvas, BuildingPicker, BuildingBadge, planBuilding, planBuildings,
@@ -18,7 +21,10 @@ import {
 } from "./SpacesApp";
 import { ExportApp } from "./ExportApp";
 import { CalibrationEditorHome } from "./PlanStudio";
-import { sectionDirty, saveSection, type ScopeSection } from "./scopeDraft";
+import { sectionDirty, saveSection, roomTypeDirty, saveRoomType, type ScopeSection } from "./scopeDraft";
+import { downloadClientSchedule, type ClientExportInput } from "./clientSchedule";
+import { downloadTemplateExport } from "./templateExport";
+import { loadTemplates, b64ToBytes, type ClientTemplate } from "./templateStore";
 import { fetchAccountRole, canEditFormula, type AccountRole } from "./accountRole";
 import { cloudConfigured } from "./cloudConfig";
 import { PrintSchedule } from "./PrintSchedule";
@@ -28,7 +34,7 @@ import { WorkloadApp, ImportResult } from "./WorkloadApp";
 import { FloorCareApp, HoursBar } from "./FloorCareApp";
 import { SanitationApp } from "./SanitationApp";
 import { PolicingApp } from "./PolicingApp";
-import { buildScheduleDoc, parseClock, type SchedBreak } from "./scheduleDoc";
+import { buildScheduleDoc, parseClock, scheduleCapacity, type SchedBreak } from "./scheduleDoc";
 import { importScan } from "../bridge/fusionEntry";
 import {
   attachPlanToRooms, resolvePendingRoomTypes, loadAliases,
@@ -37,9 +43,13 @@ import {
 import { fileToSheets, isSpreadsheet } from "./sheetFile";
 import { collectWorkspace, applyWorkspace, backupFilename } from "./workspaceStore";
 import {
-  loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor,
-  typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
-  nonSpaceOccurrenceMinutes, FREQUENCIES, type Rules
+  loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor, autoTasksForSpace, tasksAfterFloorChange,
+  taskSourceLabel, FLOOR_KINDS, typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
+  nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, DEFAULT_INCLUDED_TASKS, RATE_UNITS, computeMinutes,
+  gcFormula, gcMinutes, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
+  issaSourceLabel, categoryFor, resetToIssa, typeIdFromLabelStrict, RULES_KEY, exampleProcedure,
+  type Rules, type RoomTypeRule, type GcMethod, type GcFormula, type RateUnit,
+  type DutyPosition, type ProcedureStep
 } from "./rules";
 
 const WALL_STROKE = 13;
@@ -135,6 +145,12 @@ export function MapsApp() {
 
   const [roomSel, setRoomSel] = useState<string | null>(null);
   const [schedSel, setSchedSel] = useState<string | null>(null);
+  // department tooling (Josh, 2026-09-25): select rooms in Max Space, assign
+  // a department + color; outline by department on the Schedules map
+  const [deptMode, setDeptMode] = useState(false);
+  const [deptPick, setDeptPick] = useState<Set<string>>(new Set());
+  const [deptDraft, setDeptDraft] = useState({ name: "", color: "" });
+  const [deptOutline, setDeptOutline] = useState(false);
   // the first brick of the role system: local build = the owner; cloud =
   // the signed-in profile's role (directors administer, others don't)
   const [role, setRole] = useState<AccountRole>(() => (cloudConfigured ? "staff" : "owner"));
@@ -188,12 +204,34 @@ export function MapsApp() {
       // Scope determines everything, after the fact too: re-test rooms still
       // in Needs Review, move rulebook-following rooms to the new automatic
       // task lists (hand-customized rooms keep their custom lists), and
-      // recalculate every room's minutes under the new rules
+      // recalculate every room's minutes under the new rules. A renamed room
+      // type takes its rooms with it (rooms store the type's label).
+      renameRoomTypes(d.v7.spaces ?? [], prev, next);
       resolvePendingRoomTypes((d.v7.spaces ?? []) as never, next, loadAliases());
       refreshAutoTasks(d.v7.spaces ?? [], prev, next);
       for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, next);
     });
   }, [commit]);
+
+  // Scope's flag "rooms still list a task General Clean includes" → take it off
+  const cleanIncluded = useCallback(() => {
+    commit((d) => { stripIncludedTasks(d, rules); });
+  }, [commit, rules]);
+
+  // the 2026-10-12 General Clean model re-times every room once: rules saved
+  // before it are migrated on load (persist that), and any room whose stored
+  // minutes or task list (old issa-* helper ids) disagree is brought in line
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(RULES_KEY) ?? "null");
+      if (stored && !(Number(stored.version) >= 2)) saveRules(rules);
+    } catch { /* unreadable — loadRules already fell back to defaults */ }
+    const stale = (sp: ClassicSpace) => sp.estimatedCleaningMinutes !== computeMinutes(rules, sp).total;
+    if (!(data.v7.spaces ?? []).some(stale)) return;
+    commit((d) => {
+      for (const sp of d.v7.spaces ?? []) if (stale(sp)) syncSpaceMinutes(sp, rules);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // fresh page load: rooms left unclassified by an earlier import get another
   // chance against whatever Scope holds NOW (types added since, new aliases)
@@ -215,7 +253,7 @@ export function MapsApp() {
     commit((d) => {
       for (const sp of d.v7.spaces ?? []) {
         if (!Array.isArray(sp.spaceTasks)) {
-          sp.spaceTasks = sp.fusionTasks ?? autoTasksFor(rules, typeIdFromLabel(rules, sp.roomType ?? ""));
+          sp.spaceTasks = sp.fusionTasks ?? autoTasksForSpace(rules, sp);
         }
         syncSpaceMinutes(sp, rules);
         if (sp.assignedScheduleId && coverageForSpace(d, sp.id).length === 0) {
@@ -234,6 +272,17 @@ export function MapsApp() {
     }
     return out;
   }, [spaces]);
+
+  // department borders: real geometry (grid union + contour trace), so it
+  // runs only when the data or the toggles change — never per render
+  const deptBorders = useMemo(() => {
+    const on = (tab === "map" && deptOutline) || (tab === "spaces" && deptMode);
+    if (!on || !plan) return undefined;
+    return departmentOutlineRuns(
+      spaces.map((sp) => ({ dept: String(sp.department ?? ""), pts: shapes.get(sp.id)?.pts ?? [] })),
+      plan.w, plan.h, deptColorMap(data));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, deptOutline, deptMode, plan, shapes, spaces, data]);
 
   const roomSelected = spaces.find((s) => s.id === roomSel) ?? null;
   const schedSelected = schedules.find((s) => s.id === schedSel) ?? null;
@@ -339,7 +388,15 @@ export function MapsApp() {
               opts={[["unscheduled", "Unscheduled rooms"], ["untasked", "Has unscheduled tasks"], ["complete", "Fully scheduled"]]} />
             <Sel label="Shift" v={filters.shift ?? ""} on={(v) => setFilters({ ...filters, shift: v })}
               opts={["1st Shift", "2nd Shift", "3rd Shift"].map((s) => [s, s])} />
+            <button className={"pbtn small" + (deptOutline ? " primary" : "")}
+              onClick={() => setDeptOutline(!deptOutline)}>🏛 Dept outlines</button>
           </>}
+          {tab === "spaces" && spacesView === "map" && (
+            <button className={"pbtn small" + (deptMode ? " primary" : "")}
+              onClick={() => { setDeptMode(!deptMode); setDeptPick(new Set()); setRoomSel(null); }}>
+              🏷 Departments
+            </button>
+          )}
           <Sel label="Room type" v={filters.rtype ?? ""} on={(v) => setFilters({ ...filters, rtype: v })}
             opts={rules.roomTypes.map((rt) => [rt.id, rt.label])} />
           <Sel label="Task" v={filters.task ?? ""} on={(v) => setFilters({ ...filters, task: v })}
@@ -347,11 +404,49 @@ export function MapsApp() {
               .filter((t) => tab !== "map" || !t.floorCare) // floor-care work is Max Floor Care's
               .map((t) => [t.id, t.label])} />
           {anyFilter && <button className="pbtn small" onClick={() => setFilters({})}>Clear</button>}
-          {tab === "map" && schedSelected && (
-            <span className="linkhint">
-              ✏ Editing <b style={{ color: String(schedSelected.color) }}>{schedSelected.num} {schedSelected.name}</b> —
-              click rooms to add/remove
-              <button className="pbtn small primary" onClick={() => setSchedSel(null)}>Done</button>
+          {tab === "map" && schedSelected && (() => {
+            // the SAME totaler and bar the Schedules tab uses — one truth,
+            // live while tapping (Josh, 2026-09-25). Minutes can also DROP:
+            // tapping a room already on this schedule removes it, and taking
+            // a room's base clean makes the schedule that had it shrink.
+            const liveMins = Math.round(scheduleMinutes(data, rules, schedSelected));
+            // room work fits in the paid shift less its paid breaks
+            const liveCap = scheduleCapacity(data, rules, schedSelected);
+            const liveTarget = liveCap.workMinutes;
+            return (
+              <span className="linkhint schedlive">
+                ✏ Editing <b style={{ color: String(schedSelected.color) }}>{schedSelected.num} {schedSelected.name}</b> —
+                click rooms to add/remove
+                <em className={"schedlivemins" + (liveMins > liveTarget ? " over" : "")}>{liveMins}m of {liveTarget}m</em>
+                <HoursBar minutes={liveMins + liveCap.paidBreakMinutes} />
+                <button className="pbtn small primary" onClick={() => setSchedSel(null)}>Done</button>
+              </span>
+            );
+          })()}
+          {tab === "spaces" && spacesView === "map" && deptMode && (
+            <span className="linkhint schedlive">
+              🏷 Tap rooms to select — <b>{deptPick.size}</b> picked
+              <input list="dept-assign" placeholder="department name" value={deptDraft.name}
+                style={{ minWidth: 150 }}
+                onChange={(e) => setDeptDraft({ ...deptDraft, name: e.target.value })} />
+              <datalist id="dept-assign">
+                {departmentsOf(spaces).map((d) => <option key={d} value={d} />)}
+              </datalist>
+              {DEPT_PALETTE.map((c) => (
+                <button key={c} className={"colordot" + (deptDraft.color === c ? " on" : "")}
+                  style={{ background: c }} aria-label={"Department color " + c}
+                  onClick={() => setDeptDraft({ ...deptDraft, color: deptDraft.color === c ? "" : c })} />
+              ))}
+              <button className="pbtn small primary" disabled={!deptPick.size || !deptDraft.name.trim()}
+                onClick={() => {
+                  commit((d) => {
+                    assignDepartment(d, deptPick, deptDraft.name, deptDraft.color || undefined);
+                  });
+                  setDeptPick(new Set()); // stay in the mode for the next wing
+                }}>
+                ✓ Assign{deptPick.size ? ` ${deptPick.size} room${deptPick.size === 1 ? "" : "s"}` : ""}
+              </button>
+              <button className="pbtn small" onClick={() => { setDeptMode(false); setDeptPick(new Set()); }}>Done</button>
             </span>
           )}
         </div>
@@ -371,6 +466,11 @@ export function MapsApp() {
             mode={tab === "spaces" ? "spaces" : "map"}
             fillFor={(sp) => {
               if (tab === "spaces") {
+                if (deptMode) {
+                  // the department view: rooms wear their department's color,
+                  // unassigned rooms recede
+                  return colorForDept(sp.department, deptColorMap(data)) ?? "#33404d";
+                }
                 return spaceIncomplete(sp).length ? RED : "#475569";
               }
               const active = !anyFilter || matches(sp);
@@ -388,7 +488,8 @@ export function MapsApp() {
               const secondary = cov.find((c) => !c.primary) ?? cov[1];
               const col = scheduleColor(schedules, secondary.scheduleId);
               return col === "#64748b" ? null : col;
-            } : undefined}
+            } : deptMode ? (sp) => (deptPick.has(sp.id) ? "#ffffff" : null) : undefined}
+            outlines={deptBorders}
             flagFor={tab === "map" ? (sp) => {
               // ⚠ = this room isn't fully scheduled yet: its base clean or
               // one of its tasks (floor care counts — shipped Floor Care
@@ -398,6 +499,17 @@ export function MapsApp() {
             } : undefined}
             selectedId={roomSel}
             onRoom={(sp) => {
+              // department assign mode: taps SELECT rooms, nothing else
+              if (tab === "spaces" && deptMode) {
+                if (!sp) return;
+                setDeptPick((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(sp.id)) next.delete(sp.id);
+                  else next.add(sp.id);
+                  return next;
+                });
+                return;
+              }
               if (!sp) { setRoomSel(null); return; }
               if (tab === "map" && schedSelected && (schedSelected.floorCareId || schedSelected.routeOnly)) {
                 // engine-built schedules are edited in their engine only
@@ -442,6 +554,19 @@ export function MapsApp() {
                   </span>
                 ))}
                 <span className="lgrow"><i style={{ background: GRAY }} />Unscheduled</span>
+                {deptOutline && departmentsOf(spaces).map((dp) => (
+                  <span key={"dept-" + dp}>
+                    <i style={{ background: "transparent", border: `2.5px solid ${colorForDept(dp, deptColorMap(data))}` }} />
+                    {dp}
+                  </span>
+                ))}
+              </div>
+            ) : deptMode ? (
+              <div className="pro-legend">
+                {departmentsOf(spaces).map((dp) => (
+                  <span key={dp}><i style={{ background: colorForDept(dp, deptColorMap(data)) ?? "#33404d" }} />{dp}</span>
+                ))}
+                <span><i style={{ background: "#33404d" }} />No department yet</span>
               </div>
             ) : (
               <div className="pro-legend">
@@ -494,13 +619,20 @@ export function MapsApp() {
           <SpaceSidebar
             key={roomSelected.id}
             space={roomSelected} rules={rules}
+            deptOptions={[...new Set(spaces.map((s) => String(s.department ?? "").trim()).filter(Boolean))].sort()}
             onClose={() => setRoomSel(null)}
             onOpenEditor={() => openEditor(roomSelected)}
             onChange={(patch) => commit((d) => {
               const sp = (d.v7.spaces ?? []).find((s) => s.id === roomSelected.id)!;
+              // a floor change with no task list swaps the floor's tasks
+              // against the room as it was (the sidebar sends its own list)
+              const floorTasks = patch.floorType !== undefined && patch.spaceTasks === undefined
+                ? tasksAfterFloorChange(rules, sp, String(patch.floorType)) : null;
               Object.assign(sp, patch);
               if (patch.roomType !== undefined && patch.spaceTasks === undefined) {
-                sp.spaceTasks = autoTasksFor(rules, typeIdFromLabel(rules, String(patch.roomType)));
+                sp.spaceTasks = autoTasksForSpace(rules, sp);
+              } else if (floorTasks) {
+                sp.spaceTasks = floorTasks;
               }
               syncSpaceMinutes(sp, rules);
             })}
@@ -519,7 +651,7 @@ export function MapsApp() {
         )}
 
         {tab === "scope" && (
-          <ScopeTab rules={rules} onChange={commitRules} data={data} isAdmin={canEditFormula(role)} />
+          <ScopeTab rules={rules} onChange={commitRules} onCleanIncluded={cleanIncluded} data={data} isAdmin={canEditFormula(role)} />
         )}
 
         {tab === "workload" && (
@@ -527,7 +659,7 @@ export function MapsApp() {
         )}
 
         {tab === "exporting" && (
-          <ExportApp data={data} rules={rules} />
+          <ExportApp data={data} rules={rules} commit={commit} />
         )}
 
         {tab === "floorcare" && (
@@ -698,8 +830,9 @@ function UploadHub({ commit, rules, autoPlan }: {
               <button className="pbtn ghost" onClick={() => setChooser(false)}>✕</button></div>
             <p className="pnote">Pick what you have — OpsMatrix knows what to do with each.</p>
             <button className="upltile" onClick={() => { setChooser(false); setPlanOpen(true); }}>
-              <b>🗺 Floor plan — picture or PDF</b>
-              <span>Max reads the rooms, numbers and sizes, then redraws the plan in OpsMatrix's own style.</span>
+              <b>🗺 Floor plan — picture, PDF or CAD (DXF)</b>
+              <span>Max reads the rooms, numbers and sizes, then redraws the plan in OpsMatrix's own style.
+                A CAD file with room data comes in exact — nothing guessed.</span>
             </button>
             <button className="upltile" onClick={() => { setChooser(false); rlRef.current?.click(); }}>
               <b>📊 Room list — Excel, CSV or raw data</b>
@@ -1000,86 +1133,133 @@ function AddToScheduleBlock({ space, rules, schedules, cov, req, commit, addOpen
 
 // ── Spaces tab sidebar: the room's OWN details + required tasks ─────────────
 
-function SpaceSidebar({ space, rules, onClose, onChange, onOpenEditor }: {
+function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEditor }: {
   space: ClassicSpace;
   rules: Rules;
+  /** every department the account already uses — typing a new one creates it */
+  deptOptions: string[];
   onClose: () => void;
   onChange: (patch: Partial<ClassicSpace>) => void;
   onOpenEditor: () => void;
 }) {
-  const typeId = typeIdFromLabel(rules, space.roomType ?? "");
-  const carpet = isCarpet(space.floorType);
-  const req = requiredTasks(rules, space);
-  const issues = spaceIncomplete(space);
+  // edits BUFFER locally and commit on 💾 Save (Josh, 2026-09-25: "a save
+  // button confirms it was finished"). Nothing is ever lost: switching rooms
+  // or closing the sidebar saves any pending changes automatically — the
+  // button exists for confirmation, not as a trap.
+  const [draft, setDraft] = useState<Partial<ClassicSpace>>({});
+  const cur = { ...space, ...draft } as ClassicSpace;
+  const dirty = Object.keys(draft).length > 0;
+  const set = (patch: Partial<ClassicSpace>) => setDraft((prev) => ({ ...prev, ...patch }));
+  const save = () => {
+    if (Object.keys(draft).length) onChange(draft);
+    setDraft({});
+  };
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  useEffect(() => () => {
+    // unmount = room switched or sidebar closed — save what's pending
+    if (Object.keys(draftRef.current).length) onChangeRef.current(draftRef.current);
+  }, []);
+
+  const typeId = typeIdFromLabel(rules, cur.roomType ?? "");
+  const carpet = isCarpet(cur.floorType);
+  // the stored list (an editor shows what's really there), and the tasks
+  // this type's General Clean already covers — those can't be extras
+  const req = rawSpaceTasks(rules, cur);
+  const included = includedTasksFor(rules, typeId);
+  const autoTasks = autoTasksFor(rules, typeId, cur.floorType);
+  const issues = spaceIncomplete(cur);
 
   return (
     <aside className="pro-side">
       <div className="pshead">
-        <h2>{space.roomNumber || space.roomName || "Room"}</h2>
+        <h2>{cur.roomNumber || cur.roomName || "Room"}</h2>
         <button className="pbtn ghost" onClick={onClose}>✕</button>
       </div>
       {issues.length > 0 && <p className="warntext">⚠ Missing: {issues.join(", ")}</p>}
       <p className="pnote">
-        {[space.building, space.floor, space.department].map((v) => String(v ?? "").trim()).filter(Boolean).join(" · ") || " "}
+        {[cur.building, cur.floor, cur.department].map((v) => String(v ?? "").trim()).filter(Boolean).join(" · ") || " "}
         {" "}<button className="plink" onClick={onOpenEditor}>open the full editor →</button>
       </p>
 
       <div className="prow">
         <label className="pfield">Room number
-          <input value={String(space.roomNumber ?? "")} placeholder="e.g. 4E-102"
-            onChange={(e) => onChange({ roomNumber: e.target.value })} />
+          <input value={String(cur.roomNumber ?? "")} placeholder="e.g. 4E-102"
+            onChange={(e) => set({ roomNumber: e.target.value })} />
         </label>
         <label className="pfield">Room name
-          <input value={String(space.roomName ?? "")} placeholder="e.g. Patient Room"
-            onChange={(e) => onChange({ roomName: e.target.value })} />
+          <input value={String(cur.roomName ?? "")} placeholder="e.g. Patient Room"
+            onChange={(e) => set({ roomName: e.target.value })} />
         </label>
       </div>
       <label className="pfield">Room type
         <select value={typeId} onChange={(e) => {
           const rt = rules.roomTypes.find((x) => x.id === e.target.value);
-          onChange({ roomType: rt?.label ?? e.target.value });
+          // changing the type refreshes its automatic tasks in the draft, so
+          // the chips below update live before anything is saved
+          set({ roomType: rt?.label ?? e.target.value, spaceTasks: autoTasksFor(rules, e.target.value, cur.floorType) });
         }}>
           {rules.roomTypes.map((rt) => <option key={rt.id} value={rt.id}>{rt.label} · {rt.frequency}</option>)}
         </select>
       </label>
       <div className="prow">
         <label className="pfield">Floor type
-          <select value={space.floorType || ""}
-            onChange={(e) => onChange({ floorType: e.target.value })}>
-            <option value="">— pick floor type —</option>
+          <select value={cur.floorType || ""}
+            onChange={(e) => {
+              // swap the floor's automatic tasks, worked from the LATEST draft
+              const floorType = e.target.value;
+              setDraft((prev) => ({
+                ...prev, floorType,
+                spaceTasks: tasksAfterFloorChange(rules, { ...space, ...prev } as ClassicSpace, floorType)
+              }));
+            }}>
+            <option value="">— unset: prices as hard floor —</option>
             {FLOOR_TYPES.map((f) => <option key={f}>{f}</option>)}
           </select>
         </label>
         <label className="pfield">Square feet
-          <input type="number" min={0} value={Number(space.squareFeet) || 0}
-            onChange={(e) => onChange({ squareFeet: Number(e.target.value) || 0 })} />
+          <input type="number" min={0} value={Number(cur.squareFeet) || 0}
+            onChange={(e) => set({ squareFeet: Number(e.target.value) || 0 })} />
         </label>
       </div>
       <div className="pfield"><span>Priority</span>
         <div className="prio">
           {PRIORITIES.map((p) => (
-            <button key={p} className={"priobtn " + p.toLowerCase() + (spacePriority(space) === p ? " on" : "")}
-              onClick={() => onChange({ priority: p })}>{PRIORITY_WORD[p]}</button>
+            <button key={p} className={"priobtn " + p.toLowerCase() + (spacePriority(cur) === p ? " on" : "")}
+              onClick={() => set({ priority: p })}>{PRIORITY_WORD[p]}</button>
           ))}
         </div>
         <small>Prints on every schedule this room appears on, so the worker knows what cannot wait.</small>
       </div>
 
       <label className="pfield checkline">
-        <input type="checkbox" checked={spaceCleanability(rules, space) !== "Non-cleanable"}
-          onChange={(e) => onChange({ cleanability: e.target.checked ? "Cleanable" : "Non-cleanable" })} />
+        <input type="checkbox" checked={spaceCleanability(rules, cur) !== "Non-cleanable"}
+          onChange={(e) => set({ cleanability: e.target.checked ? "Cleanable" : "Non-cleanable" })} />
         <span>Cleanable — counts toward EVS workload</span>
       </label>
 
       <div className="prow">
+        <label className="pfield">Department
+          <input list="side-depts" value={String(cur.department ?? "")}
+            placeholder="pick one, or type a new one"
+            onChange={(e) => set({ department: e.target.value })} />
+          <datalist id="side-depts">
+            {deptOptions.map((d) => <option key={d} value={d} />)}
+          </datalist>
+        </label>
+      </div>
+
+      <div className="prow">
         <label className="pfield">Fixtures
-          <input type="number" min={0} value={Number(space.fixtureCount) || 0}
-            onChange={(e) => onChange({ fixtureCount: Number(e.target.value) || 0 })} />
+          <input type="number" min={0} value={Number(cur.fixtureCount) || 0}
+            onChange={(e) => set({ fixtureCount: Number(e.target.value) || 0 })} />
         </label>
         {carpet && (
           <label className="pfield accent">Vacuum days/week
-            <input type="number" min={1} max={7} value={Number(space.vacuumDaysPerWeek) || 5}
-              onChange={(e) => onChange({ vacuumDaysPerWeek: Math.max(1, Math.min(7, Number(e.target.value) || 5)) })} />
+            <input type="number" min={1} max={7} value={Number(cur.vacuumDaysPerWeek) || 5}
+              onChange={(e) => set({ vacuumDaysPerWeek: Math.max(1, Math.min(7, Number(e.target.value) || 5)) })} />
           </label>
         )}
       </div>
@@ -1089,17 +1269,31 @@ function SpaceSidebar({ space, rules, onClose, onChange, onOpenEditor }: {
           <span className="ptask locked">General Clean</span>
           {rules.tasks.filter((t) => t.addable).map((t) => {
             const on = req.includes(t.id);
-            const auto = t.autoFor.includes(typeId);
+            const auto = autoTasks.includes(t.id);
+            if (included.includes(t.id)) {
+              // part of General Clean here: never an extra — flagged if listed
+              return on ? (
+                <button key={t.id} className="ptask warn"
+                  onClick={() => set({ spaceTasks: req.filter((x) => x !== t.id) })}>
+                  ⚠ {t.label} is in General Clean — tap to remove
+                </button>
+              ) : <span key={t.id} className="ptask incl">{t.label} ✓ in General Clean</span>;
+            }
             return (
               <button key={t.id} className={"ptask" + (on ? " on" : "") + (t.floorCare ? " fc" : "")}
-                onClick={() => onChange({ spaceTasks: on ? req.filter((x) => x !== t.id) : [...req, t.id] })}>
+                onClick={() => set({ spaceTasks: on ? req.filter((x) => x !== t.id) : [...req, t.id] })}>
                 {t.label}{auto ? " •" : ""}
               </button>
             );
           })}
         </div>
-        <small>• = automatic for this room type. Who does each task is decided on the Map tab — different tasks can go to different schedules.</small>
+        <small>• = automatic for this room type or floor type. Who does each task is decided on the Map tab — different tasks can go to different schedules.</small>
       </div>
+
+      <button className="pbtn primary wide" disabled={!dirty} onClick={save}>
+        {dirty ? "💾 Save room" : "✓ Saved"}
+      </button>
+      <small className="pnote">Changes also save automatically when you close this panel or switch rooms — nothing is lost either way.</small>
 
     </aside>
   );
@@ -1120,6 +1314,40 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
   const spaces = data.v7.spaces ?? [];
   const usedColors = schedules.map((s) => String(s.color ?? ""));
   const nextColor = SCHED_COLORS.find((c) => !usedColors.includes(c)) ?? SCHED_COLORS[0];
+
+  // Client template exports: every named template uploaded in Admin
+  // Settings → Exporting is a button here; with none saved, the bundled
+  // client template stands in (clientSchedule.ts owns the mechanics)
+  const templates = loadTemplates(data);
+  const exportInput = (s: ClassicSchedule, members: ClassicSpace[]): ClientExportInput => {
+    const bs = (rules.breakSchedules ?? []).find((b) => b.id === s.breakScheduleId);
+    const orgName = String(((data.v7.settings ?? {}) as Record<string, unknown>).orgName ?? "").trim();
+    return {
+      scheduleName: [s.num, s.name].filter(Boolean).join(" · "),
+      orgName: orgName || "OpsMatrix",
+      days: s.days,
+      hoursStart: s.hoursStart,
+      hoursEnd: s.hoursEnd,
+      windows: bs?.windows ?? [],
+      assignments: members.map((sp) =>
+        [String(sp.roomNumber ?? ""), String(sp.roomName ?? "").trim() || String(sp.roomType ?? "")]
+          .filter(Boolean).join(" — "))
+    };
+  };
+  const exportClient = (s: ClassicSchedule, members: ClassicSpace[]) => {
+    downloadClientSchedule(exportInput(s, members))
+      .catch((e) => alert("The client schedule export hit a snag: " + (e as Error).message));
+  };
+  const exportViaTemplate = (t: ClientTemplate, s: ClassicSchedule, members: ClassicSpace[]) => {
+    downloadTemplateExport(b64ToBytes(t.dataB64), t.map, exportInput(s, members), t.label)
+      .then((leftOver) => {
+        if (leftOver.length) {
+          alert(`"${t.label}" holds ${t.map.assignmentCells.length} assignment rows — these didn't fit:\n` +
+            leftOver.join("\n"));
+        }
+      })
+      .catch((e) => alert(`The "${t.label}" export hit a snag: ` + (e as Error).message));
+  };
 
   return (
     <div className="pro-list">
@@ -1149,7 +1377,9 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
 
       {schedules.map((s) => {
         const mins = Math.round(scheduleMinutes(data, rules, s));
-        const target = (Number(s.targetHours) || 8) * 60;
+        // paid shift less paid breaks; the bar shows paid hours (work + paid breaks)
+        const cap = scheduleCapacity(data, rules, s);
+        const target = cap.workMinutes;
         const members = (s.spaceOrder ?? [])
           .map((id) => spaces.find((sp) => sp.id === id))
           .filter(Boolean) as ClassicSpace[];
@@ -1160,10 +1390,21 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
               <SchedColorDot sched={s} commit={commit} />
               <b>{s.num} · {s.name}</b>
               <span>{s.shift} · {s.employee || "unassigned"}</span>
-              <em className={mins > target ? "over" : ""}>{mins}m of {target}m</em>
-              <HoursBar minutes={mins} />
+              <em className={mins > target ? "over" : ""}
+                title={`${cap.paidMinutes} paid min − ${cap.paidBreakMinutes} min paid breaks${cap.unpaidBreakMinutes ? ` (+ ${cap.unpaidBreakMinutes} min unpaid, added to the day)` : ""}`}>
+                {mins}m of {target}m
+              </em>
+              <HoursBar minutes={mins + cap.paidBreakMinutes} />
               <span className="schedacts">
                 <button className="pbtn small primary" onClick={() => onPrint(s.id)}>🖨 Print schedule</button>
+                {templates.length ? templates.map((t) => (
+                  <button key={t.id} className="pbtn small"
+                    title={`Fill the "${t.label}" template with this schedule`}
+                    onClick={() => exportViaTemplate(t, s, members)}>⬇ {t.label}</button>
+                )) : (
+                  <button className="pbtn small" title="Fill the client's Excel template with this schedule"
+                    onClick={() => exportClient(s, members)}>⬇ Client schedule export</button>
+                )}
                 {s.floorCareId ? (
                   <a className="pbtn small" href={"./maps.html#floorcare?fc=" + s.floorCareId}>Edit in Floor Care</a>
                 ) : s.sanitationId ? (
@@ -1181,6 +1422,7 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
               </span>
             </div>
             <BreakRow sched={s} rules={rules} commit={commit} />
+            <ClientRow sched={s} rules={rules} commit={commit} />
             <div className="schedrooms">
               {members.length > 1 && (
                 <p className="pnote" style={{ margin: "0 0 4px" }}>
@@ -1458,7 +1700,7 @@ function BreakRow({ sched, rules, commit }: {
 
   const taken = all.filter((b) => !overrides.find((o) => o.id === b.id)?.off);
   const summary = taken.length
-    ? taken.map((b) => `${b.label} ${overrides.find((o) => o.id === b.id)?.start ?? b.start}`).join(" · ")
+    ? taken.map((b) => { const ov = overrides.find((o) => o.id === b.id); return `${b.label} ${ov?.start ?? b.start}${(ov?.unpaid ?? b.unpaid) ? " (unpaid)" : ""}`; }).join(" · ")
     : "no breaks on this schedule";
 
   return (
@@ -1484,8 +1726,13 @@ function BreakRow({ sched, rules, commit }: {
                     onChange={(e) => setOv(b.id, { minutes: Number(e.target.value) || 0 })} />
                   min
                 </label>
-                {(ov?.start !== undefined || ov?.minutes !== undefined) && (
-                  <button className="plink" onClick={() => setOv(b.id, { start: undefined, minutes: undefined })}>
+                <label className="checkline">
+                  <input type="checkbox" checked={Boolean(ov?.unpaid ?? b.unpaid)} disabled={!on}
+                    onChange={(e) => setOv(b.id, { unpaid: e.target.checked })} />
+                  unpaid
+                </label>
+                {(ov?.start !== undefined || ov?.minutes !== undefined || ov?.unpaid !== undefined) && (
+                  <button className="plink" onClick={() => setOv(b.id, { start: undefined, minutes: undefined, unpaid: undefined })}>
                     reset to account time
                   </button>
                 )}
@@ -1502,20 +1749,265 @@ function BreakRow({ sched, rules, commit }: {
   );
 }
 
+const DAYS_UI = [
+  ["S", "Sunday"], ["M", "Monday"], ["T", "Tuesday"], ["W", "Wednesday"],
+  ["T", "Thursday"], ["F", "Friday"], ["S", "Saturday"]
+] as const;
+
+/**
+ * Day bubbles + shift hours + the Scope break schedule this crew follows —
+ * the three things the Client Schedule Export prints in the template's
+ * header (Days: / Hours: / Break: / Lunch:). Josh, 2026-09-03.
+ */
+function ClientRow({ sched, rules, commit }: {
+  sched: ClassicSchedule;
+  rules: Rules;
+  commit: (mut: (d: ClassicData) => void) => void;
+}) {
+  const patch = (mut: (t: ClassicSchedule) => void) => commit((d) => {
+    const t = (d.v7.schedules ?? []).find((x) => x.id === sched.id);
+    if (t) mut(t);
+  });
+  const days = sched.days ?? [];
+  return (
+    <div className="clientrow">
+      <span className="daypills">
+        {DAYS_UI.map(([letter, full], i) => (
+          <button key={full} className={"daypill" + (days.includes(i) ? " on" : "")}
+            aria-label={full} title={full}
+            onClick={() => patch((t) => {
+              const cur = new Set(t.days ?? []);
+              if (cur.has(i)) cur.delete(i); else cur.add(i);
+              t.days = [...cur].sort((a, b) => a - b);
+            })}>{letter}</button>
+        ))}
+      </span>
+      <label className="clienthours">hours
+        <input type="time" value={String(sched.hoursStart ?? "")}
+          onChange={(e) => patch((t) => { t.hoursStart = e.target.value || undefined; })} />
+        –
+        <input type="time" value={String(sched.hoursEnd ?? "")}
+          onChange={(e) => patch((t) => { t.hoursEnd = e.target.value || undefined; })} />
+      </label>
+      <label className="clientbreaks">break schedule
+        <select value={String(sched.breakScheduleId ?? "")}
+          onChange={(e) => patch((t) => { t.breakScheduleId = e.target.value || undefined; })}>
+          <option value="">— pick one (set up in Scope) —</option>
+          {(rules.breakSchedules ?? []).map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 // ── Scope tab: the rulebook, plain and quiet (reworked 2026-08-28) ──────────
 // Josh's rules: no explainer prose, each section saves ITSELF (a Save button
 // per section, drafts never leak between them), everything is deletable —
 // built-ins included — breaks live at the bottom, and the general cleaning
-// formula is the account administrator's alone.
+// formula is the account administrator's alone (2026-10-12: each room type's
+// General Clean formula — editing it is the admin's; names, frequency and
+// extras are anyone's).
 
-function ScopeTab({ rules, onChange, data, isAdmin }: {
+/** a number box that keeps what's typed ("0.5" survives) while the stored value follows */
+function NumBox({ value, onValue, disabled }: { value: number; onValue: (n: number) => void; disabled?: boolean }) {
+  const show = (v: number) => (v > 0 ? String(v) : "");
+  const [text, setText] = useState(show(value));
+  useEffect(() => {
+    if (Math.abs((parseFloat(text) || 0) - value) > 1e-6) setText(show(value));
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <input type="number" min={0} step="any" value={text} disabled={disabled}
+      onChange={(e) => {
+        setText(e.target.value);
+        const n = parseFloat(e.target.value);
+        onValue(Number.isFinite(n) && n > 0 ? n : 0);
+      }} />
+  );
+}
+
+const METHOD_WORDS: Record<GcMethod, string> = {
+  size: "by size",
+  fixed: "fixed minutes per room",
+  both: "fixed minutes + size"
+};
+
+/**
+ * One room type's card (Josh, 2026-10-12): its General Clean formula —
+ * "General Clean = [fixed min] + sq ft ÷ [rate] [unit]" typed exactly as a
+ * hospital gives it — a live example, Reset to ISSA, the tasks General Clean
+ * already includes, the automatic extras, and its own Save. A room that
+ * differs gets its own type: Duplicate, rename, adjust.
+ */
+function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts, dirty, nameTaken, autoFocusName,
+  onSave, onDuplicate, onDelete, onCleanIncluded }: {
+  rt: RoomTypeRule;
+  draft: Rules;
+  edit: (mut: (t: RoomTypeRule) => void) => void;
+  editAll: (mut: (r: Rules) => void) => void;
+  isAdmin: boolean;
+  sampleSqft: { sqft: number; fromRooms: boolean };
+  conflicts: number;
+  dirty: boolean;
+  nameTaken: boolean;
+  autoFocusName: boolean;
+  onSave: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  onCleanIncluded: () => void;
+}) {
+  const f = gcFormula(draft, rt);
+  const included = includedTasksFor(draft, rt.id);
+  const issa = issaSourceLabel(draft, rt);
+  const cat = categoryFor(draft, rt);
+  const times = f.rateUnit === "minPer100" || f.rateUnit === "minPer1000";
+  // every edit writes the whole formula, so an older type becomes explicit
+  const setF = (patch: Partial<GcFormula>) => edit((t) => {
+    const cur = gcFormula(draft, t);
+    const next = { ...cur, ...patch };
+    t.method = next.method; t.fixedMin = next.fixedMin; t.sqftPerHour = next.sqftPerHour; t.rateUnit = next.rateUnit;
+    delete t.qualifierMin;
+  });
+  const example = gcMinutes(f, sampleSqft.sqft);
+  const extras = draft.tasks.filter((t) => t.addable && !included.includes(t.id));
+  return (
+    <div className="gccard">
+      <div className="gchead">
+        <input type="text" className="gcname" value={rt.label} autoFocus={autoFocusName}
+          onChange={(e) => edit((t) => { t.label = e.target.value; })} />
+        <select value={rt.frequency} onChange={(e) => edit((t) => { t.frequency = e.target.value; })}>
+          {FREQUENCIES.map((x) => <option key={x}>{x}</option>)}
+        </select>
+        <span className="gcsrc">{issa ?? "your formula"}</span>
+        <span className="gcgrow" />
+        <button className="pbtn small" onClick={onDuplicate}>Duplicate type</button>
+        <button className="pbtn small danger" onClick={onDelete}>✕</button>
+      </div>
+
+      <div className="gcformula">
+        <select value={f.method} disabled={!isAdmin}
+          onChange={(e) => {
+            const method = e.target.value as GcMethod;
+            setF({
+              method,
+              fixedMin: method !== "size" && !(f.fixedMin > 0) ? 10 : f.fixedMin,
+              sqftPerHour: method !== "fixed" && !(f.sqftPerHour > 0) ? (cat?.sqftPerHour ?? 2150) : f.sqftPerHour
+            });
+          }}>
+          {(Object.keys(METHOD_WORDS) as GcMethod[]).map((m) => <option key={m} value={m}>Timed {METHOD_WORDS[m]}</option>)}
+        </select>
+        <span className="gceq">
+          <b>General Clean =</b>
+          {f.method !== "size" && (<>
+            <NumBox value={f.fixedMin} disabled={!isAdmin} onValue={(n) => setF({ fixedMin: n })} /> min per room
+          </>)}
+          {f.method === "both" && <b>+</b>}
+          {f.method !== "fixed" && (<>
+            sq ft {times ? "×" : "÷"}
+            <NumBox value={rateInUnit(f.sqftPerHour, f.rateUnit)} disabled={!isAdmin}
+              onValue={(n) => setF({ sqftPerHour: rateFromUnit(n, f.rateUnit) })} />
+            <select value={f.rateUnit} disabled={!isAdmin} onChange={(e) => setF({ rateUnit: e.target.value as RateUnit })}>
+              {RATE_UNITS.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}
+            </select>
+          </>)}
+        </span>
+      </div>
+
+      <div className="gcexample">
+        {sampleSqft.fromRooms ? "Your typical " : "A "}{Math.round(sampleSqft.sqft).toLocaleString()} sq ft {rt.label || "room"}
+        {" = "}<b>{(Math.round(example * 10) / 10).toLocaleString()} min</b>
+        {isAdmin && (
+          <span className="gcissa">
+            ISSA match
+            <select value={cat?.id ?? ""} onChange={(e) => edit((t) => resetToIssa(draft, t, e.target.value))}>
+              {!cat && <option value="">—</option>}
+              {ISSA_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label} — {c.sqftPerHour.toLocaleString()} sq ft/hr</option>)}
+            </select>
+            <button className="pbtn small" disabled={Boolean(issa)} onClick={() => edit((t) => resetToIssa(draft, t))}>Reset to ISSA</button>
+          </span>
+        )}
+      </div>
+
+      <div className="gcrow">
+        <span className="gclabel">Included in General Clean</span>
+        <span className="ptasks inline">
+          {draft.tasks.filter((t) => t.addable && !t.floorCare).map((t) => {
+            const on = included.includes(t.id);
+            return (
+              <button key={t.id} className={"ptask sm" + (on ? " on" : "")} disabled={!isAdmin}
+                onClick={() => editAll((r) => {
+                  const type = r.roomTypes.find((x) => x.id === rt.id)!;
+                  const list = includedTasksFor(r, rt.id);
+                  type.includedTasks = on ? list.filter((x) => x !== t.id) : [...list, t.id];
+                  // included work can't also be an automatic extra here
+                  if (!on) {
+                    const task = r.tasks.find((x) => x.id === t.id)!;
+                    task.autoFor = task.autoFor.filter((x) => x !== rt.id);
+                  }
+                })}>
+                {on ? "✓ " : ""}{t.label}
+              </button>
+            );
+          })}
+        </span>
+      </div>
+
+      <div className="gcrow">
+        <span className="gclabel">Extras every {rt.label || "room"} gets</span>
+        <span className="ptasks inline">
+          {extras.filter((t) => (t.autoFor ?? []).includes(rt.id)).map((t) => (
+            <span key={t.id} className={"ptask sm on" + (t.floorCare ? " fc" : "")}>
+              {t.label}
+              <button className="chipx" onClick={() => editAll((r) => {
+                const task = r.tasks.find((x) => x.id === t.id)!;
+                task.autoFor = task.autoFor.filter((x) => x !== rt.id);
+              })}>✕</button>
+            </span>
+          ))}
+          {extras.some((t) => !(t.autoFor ?? []).includes(rt.id)) && (
+            <select className="chipadd" value="" onChange={(e) => {
+              const id = e.target.value;
+              if (!id) return;
+              editAll((r) => {
+                const task = r.tasks.find((x) => x.id === id)!;
+                if (!task.autoFor.includes(rt.id)) task.autoFor = [...task.autoFor, rt.id];
+              });
+            }}>
+              <option value="">＋ extra…</option>
+              {extras.filter((t) => !(t.autoFor ?? []).includes(rt.id))
+                .map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </select>
+          )}
+        </span>
+      </div>
+
+      {conflicts > 0 && (
+        <p className="warntext">
+          ⚠ {conflicts} {conflicts === 1 ? "room still lists" : "rooms still list"} a task this General Clean includes — it adds no time there.{" "}
+          <button className="plink" onClick={onCleanIncluded}>Take it off {conflicts === 1 ? "that room" : "those rooms"}</button>
+        </p>
+      )}
+      {nameTaken && <p className="warntext">⚠ Another room type already has this name.</p>}
+      {dirty && (
+        <div className="scopesave">
+          <button className="pbtn primary" disabled={!rt.label.trim() || nameTaken} onClick={onSave}>
+            Save {rt.label.trim() || "room type"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
   rules: Rules;
   onChange: (r: Rules) => void;
+  onCleanIncluded: () => void;
   data: ClassicData;
   isAdmin: boolean;
 }) {
   const [draft, setDraft] = useState<Rules>(() => JSON.parse(JSON.stringify(rules)));
-  const [newType, setNewType] = useState({ label: "", freq: "7x / week", qual: "" });
+  const [newType, setNewType] = useState({ label: "", freq: "7x / week", cat: "office" });
+  const [focusType, setFocusType] = useState<string | null>(null);
   const [newTask, setNewTask] = useState({ label: "", per: "", flat: "", floorCare: false });
   const [newNS, setNewNS] = useState({ label: "", hours: "30" });
   const [newQual, setNewQual] = useState({ label: "", minutes: "5" });
@@ -1525,6 +2017,25 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
     mut(n);
     return n;
   });
+
+  // the live example on each card: the median size of that type's rooms
+  const byType = useMemo(() => {
+    const sizes = new Map<string, number[]>();
+    const conflicts = new Map<string, number>();
+    for (const sp of data.v7.spaces ?? []) {
+      const tid = typeIdFromLabelStrict(rules, String(sp.roomType ?? ""));
+      if (!tid) continue;
+      if (Number(sp.squareFeet) > 0) sizes.set(tid, [...(sizes.get(tid) ?? []), Number(sp.squareFeet)]);
+      if (includedConflicts(rules, sp).length) conflicts.set(tid, (conflicts.get(tid) ?? 0) + 1);
+    }
+    const median = new Map<string, number>();
+    for (const [tid, list] of sizes) {
+      const s = [...list].sort((a, b) => a - b);
+      const m = s.length >> 1;
+      median.set(tid, s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2);
+    }
+    return { median, conflicts };
+  }, [data, rules]);
 
   const SectionSave = ({ sec }: { sec: ScopeSection }) => {
     const dirty = sectionDirty(rules, draft, sec);
@@ -1540,105 +2051,81 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
 
   return (
     <div className="pro-list">
-      {isAdmin && !rules.general.formulaOff && (<>
-        <h3>General cleaning formula</h3>
-        <div className="pformula">
-          1 minute per <input type="number" value={draft.general.hardSqftPerMin}
-            onChange={(e) => set((r) => { r.general.hardSqftPerMin = Number(e.target.value) || 1; })} />
-          sq ft on <b>hard floor</b> · 1 minute per <input type="number" value={draft.general.carpetSqftPerMin}
-            onChange={(e) => set((r) => { r.general.carpetSqftPerMin = Number(e.target.value) || 1; })} />
-          sq ft on <b>carpet</b>
-        </div>
-        <div className="prow">
-          <label className="checkline">
-            <input type="checkbox" checked={draft.general.mopIncluded !== false}
-              onChange={(e) => set((r) => { r.general.mopIncluded = e.target.checked; })} />
-            <span>Hard-floor rate includes mopping</span>
-          </label>
-          <label className="checkline">
-            <input type="checkbox" checked={draft.general.vacuumIncluded !== false}
-              onChange={(e) => set((r) => { r.general.vacuumIncluded = e.target.checked; })} />
-            <span>Carpet rate includes vacuuming</span>
-          </label>
-        </div>
-        {(draft.general.mopIncluded === false || draft.general.vacuumIncluded === false) && (
-          <p className="pnote">Turned off? Add <b>Mopping</b> / <b>Vacuuming</b> to rooms as space tasks below, so the work is still priced.</p>
-        )}
-        <SectionSave sec="general" />
-      </>)}
       {rules.general.formulaOff && (
         <p className="warntext">
-          ⚠ The General Clean formula was deleted — room times only count their added tasks and
-          type minutes now. {isAdmin && (
+          ⚠ General Clean was deleted — room times only count their extra tasks now. {isAdmin && (
             <button className="plink" onClick={() => {
               const next: Rules = JSON.parse(JSON.stringify(rules));
               next.general.formulaOff = false;
               setDraft((prev) => { const d: Rules = JSON.parse(JSON.stringify(prev)); d.general.formulaOff = false; return d; });
               onChange(next);
-            }}>Restore the formula</button>
+            }}>Restore General Clean</button>
           )}
         </p>
       )}
 
       <h3>Room types</h3>
-      {draft.roomTypes.map((rt) => (
-        <div key={rt.id} className="prule">
-          <b>{rt.label}</b>
-          <select value={rt.frequency}
-            onChange={(e) => set((r) => { r.roomTypes.find((x) => x.id === rt.id)!.frequency = e.target.value; })}>
-            {FREQUENCIES.map((f) => <option key={f}>{f}</option>)}
-          </select>
-          <span title="Flat extra minutes added once per clean — not per square foot">
-            +<input type="number" value={rt.qualifierMin}
-              onChange={(e) => set((r) => { r.roomTypes.find((x) => x.id === rt.id)!.qualifierMin = Number(e.target.value) || 0; })} /> min per clean</span>
-          <span className="ptasks inline">
-            <span className="ptask locked sm">General</span>
-            {draft.tasks.filter((t) => t.addable && (t.autoFor ?? []).includes(rt.id)).map((t) => (
-              <span key={t.id} className={"ptask sm on" + (t.floorCare ? " fc" : "")}>
-                {t.label}
-                <button className="chipx" title={"Take " + t.label + " off every " + rt.label}
-                  onClick={() => set((r) => {
-                    const task = r.tasks.find((x) => x.id === t.id)!;
-                    task.autoFor = task.autoFor.filter((x) => x !== rt.id);
-                  })}>✕</button>
-              </span>
-            ))}
-            {draft.tasks.some((t) => t.addable && !(t.autoFor ?? []).includes(rt.id)) && (
-              <select className="chipadd" value="" onChange={(e) => {
-                const id = e.target.value;
-                if (!id) return;
-                set((r) => {
-                  const task = r.tasks.find((x) => x.id === id)!;
-                  if (!task.autoFor.includes(rt.id)) task.autoFor = [...task.autoFor, rt.id];
-                });
-              }}>
-                <option value="">＋ task…</option>
-                {draft.tasks.filter((t) => t.addable && !(t.autoFor ?? []).includes(rt.id))
-                  .map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-              </select>
-            )}
-          </span>
-          <button className="pbtn small danger" onClick={() => {
-            if (!confirm(`Delete room type "${rt.label}"? Rooms of this type keep their label but show as Needs review until you pick a new type. Takes effect when you hit Save.`)) return;
-            set((r) => { r.roomTypes = r.roomTypes.filter((x) => x.id !== rt.id); });
-          }}>✕</button>
-        </div>
-      ))}
+      {draft.roomTypes.map((rt) => {
+        const norm = (s: string) => s.trim().toLowerCase();
+        const nameTaken = draft.roomTypes.some((x) => x.id !== rt.id && norm(x.label) === norm(rt.label));
+        const median = byType.median.get(rt.id);
+        return (
+          <RoomTypeCard key={rt.id} rt={rt} draft={draft} isAdmin={isAdmin}
+            edit={(mut) => set((r) => mut(r.roomTypes.find((x) => x.id === rt.id)!))}
+            editAll={set}
+            sampleSqft={median ? { sqft: median, fromRooms: true } : { sqft: 150, fromRooms: false }}
+            conflicts={byType.conflicts.get(rt.id) ?? 0}
+            dirty={roomTypeDirty(rules, draft, rt.id)}
+            nameTaken={nameTaken}
+            autoFocusName={focusType === rt.id}
+            onSave={() => onChange(saveRoomType(rules, draft, rt.id))}
+            onCleanIncluded={onCleanIncluded}
+            onDuplicate={() => {
+              const id = uid("rt");
+              set((r) => {
+                const at = r.roomTypes.findIndex((x) => x.id === rt.id);
+                const src = r.roomTypes[at];
+                const f = gcFormula(r, src);
+                const copy: RoomTypeRule = {
+                  ...JSON.parse(JSON.stringify(src)), id, label: `${src.label} (copy)`,
+                  method: f.method, fixedMin: f.fixedMin, sqftPerHour: f.sqftPerHour, rateUnit: f.rateUnit,
+                  includedTasks: [...includedTasksFor(r, src.id)]
+                };
+                delete copy.builtIn;
+                delete copy.qualifierMin;
+                r.roomTypes.splice(at + 1, 0, copy);
+                for (const t of r.tasks) if ((t.autoFor ?? []).includes(src.id)) t.autoFor = [...t.autoFor, id];
+              });
+              setFocusType(id);
+            }}
+            onDelete={() => {
+              if (!confirm(`Delete room type "${rt.label}"? Rooms of this type keep their label but show as Needs review until you pick a new type. Takes effect when you hit Save changes below.`)) return;
+              set((r) => { r.roomTypes = r.roomTypes.filter((x) => x.id !== rt.id); });
+            }} />
+        );
+      })}
       <div className="prule add">
         <input placeholder="New room type name" value={newType.label}
           onChange={(e) => setNewType({ ...newType, label: e.target.value })} />
         <select value={newType.freq} onChange={(e) => setNewType({ ...newType, freq: e.target.value })}>
           {FREQUENCIES.map((f) => <option key={f}>{f}</option>)}
         </select>
-        <input type="number" placeholder="+min" value={newType.qual} style={{ width: 70 }}
-          onChange={(e) => setNewType({ ...newType, qual: e.target.value })} />
+        <select value={newType.cat} onChange={(e) => setNewType({ ...newType, cat: e.target.value })}>
+          {ISSA_CATEGORIES.map((c) => (
+            <option key={c.id} value={c.id}>ISSA {c.label} — {c.sqftPerHour.toLocaleString()} sq ft/hr</option>
+          ))}
+        </select>
         <button className="pbtn small primary" onClick={() => {
           if (!newType.label.trim()) return;
-          set((r) => r.roomTypes.push({
-            id: uid("rt"), label: newType.label.trim(), frequency: newType.freq,
-            qualifierMin: Number(newType.qual) || 0
-          }));
-          setNewType({ label: "", freq: "7x / week", qual: "" });
+          set((r) => {
+            const t: RoomTypeRule = {
+              id: uid("rt"), label: newType.label.trim(), frequency: newType.freq,
+              includedTasks: [...DEFAULT_INCLUDED_TASKS]
+            };
+            resetToIssa(r, t, newType.cat);
+            r.roomTypes.push(t);
+          });
+          setNewType({ label: "", freq: "7x / week", cat: "office" });
         }}>Add room type</button>
       </div>
       <SectionSave sec="roomTypes" />
@@ -1650,7 +2137,7 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
       {!rules.general.formulaOff && (
         <div className="prule">
           <b className="tname clean">General Clean</b>
-          <span>the account formula — 1 min per {rules.general.hardSqftPerMin} sq ft hard floor / {rules.general.carpetSqftPerMin} sq ft carpet, on every room automatically</span>
+          <span>on every room automatically — timed by its room type's formula (Room types, above)</span>
           {isAdmin && (
             <button className="pbtn small danger" onClick={() => {
               if (!confirm("Delete General Clean? This is the general cleaning formula — without it, room times stop counting the base clean entirely and only count added tasks and type minutes. Nothing will calculate correctly unless you restore it or build a replacement per-square-foot task. Are you sure?")) return;
@@ -1682,6 +2169,49 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
             if (!confirm(`Delete the task "${t.label}"? It comes off every room and schedule that uses it${t.floorCare ? ", and out of Max Floor Care" : ""}. Takes effect when you hit Save.`)) return;
             set((r) => { r.tasks = r.tasks.filter((x) => x.id !== t.id); });
           }}>✕</button>
+          {/* the floor trigger (Josh, 2026-10-12): rooms with these floors get
+              this task automatically, the way room types get theirs */}
+          <div className="pfloorrule">
+            <span>Automatic on every room with</span>
+            {FLOOR_KINDS.map((f) => {
+              const on = (t.autoForFloor ?? []).includes(f.id);
+              return (
+                <button key={f.id} className={"ptask sm" + (on ? " on" : "")}
+                  onClick={() => set((r) => {
+                    const x = r.tasks.find((y) => y.id === t.id)!;
+                    x.autoForFloor = on ? (x.autoForFloor ?? []).filter((k) => k !== f.id) : [...(x.autoForFloor ?? []), f.id];
+                  })}>
+                  {f.label}
+                </button>
+              );
+            })}
+            {(t.autoForFloor ?? []).length > 0 && (<>
+              <span>except</span>
+              {(t.floorSkipTypes ?? []).map((typeId) => (
+                <span key={typeId} className="ptask sm on">
+                  {draft.roomTypes.find((rt) => rt.id === typeId)?.label ?? typeId}
+                  <button className="chipx" aria-label="Stop skipping this room type"
+                    onClick={() => set((r) => {
+                      const x = r.tasks.find((y) => y.id === t.id)!;
+                      x.floorSkipTypes = (x.floorSkipTypes ?? []).filter((k) => k !== typeId);
+                    })}>✕</button>
+                </span>
+              ))}
+              <select className="chipadd" value="" onChange={(e) => {
+                const typeId = e.target.value;
+                if (!typeId) return;
+                set((r) => {
+                  const x = r.tasks.find((y) => y.id === t.id)!;
+                  x.floorSkipTypes = [...(x.floorSkipTypes ?? []), typeId];
+                });
+              }}>
+                <option value="">＋ skip a room type…</option>
+                {draft.roomTypes.filter((rt) => !(t.floorSkipTypes ?? []).includes(rt.id))
+                  .map((rt) => <option key={rt.id} value={rt.id}>{rt.label}</option>)}
+              </select>
+            </>)}
+            {taskSourceLabel(t) && <span className="gcsrc">Rate: {taskSourceLabel(t)}</span>}
+          </div>
         </div>
       ))}
       <div className="prule add">
@@ -1753,6 +2283,13 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
                 </select>
               )}
             </span>
+            {/* when in the shift: start/end duties print as the first/last stops */}
+            <select value={ns.position ?? "anytime"} title="When in the shift this happens"
+              onChange={(e) => set((r) => { r.nonSpaceDefs.find((x) => x.id === ns.id)!.position = e.target.value as DutyPosition; })}>
+              <option value="anytime">Any time (ongoing duty)</option>
+              <option value="start">Start of shift (first stop)</option>
+              <option value="end">End of shift (last stop)</option>
+            </select>
             <em>{active.length ? `on ${active.length} schedule(s)` : "not on a schedule yet"}</em>
             <button className="pbtn small danger" onClick={() => {
               if (!confirm(`Delete "${ns.label}"? Takes effect when you hit Save.`)) return;
@@ -1811,6 +2348,54 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
       </div>
       <SectionSave sec="nonSpace" />
 
+      <h3>Cleaning procedure</h3>
+      <p className="pnote">
+        The steps every room is cleaned in, printed above the room list on each schedule.
+        {draft.procedure.example && " These are an EXAMPLE and print labeled as one — edit them into your facility's own steps."}
+      </p>
+      <label className="checkline">
+        <input type="checkbox" checked={draft.procedure.show}
+          onChange={(e) => set((r) => { r.procedure.show = e.target.checked; })} />
+        <span>Print the procedure on schedules</span>
+      </label>
+      {draft.procedure.steps.map((s, i) => {
+        const edit = (mut: (st: ProcedureStep) => void) => set((r) => { mut(r.procedure.steps[i]); r.procedure.example = false; });
+        const move = (d: number) => set((r) => {
+          const st = r.procedure.steps;
+          if (i + d < 0 || i + d >= st.length) return;
+          [st[i], st[i + d]] = [st[i + d], st[i]];
+          r.procedure.example = false;
+        });
+        return (
+          <div key={i} className="prule">
+            <b>{i + 1}.</b>
+            <input value={s.title} placeholder="Step" style={{ width: 170 }}
+              onChange={(e) => edit((st) => { st.title = e.target.value; })} />
+            <input value={s.detail ?? ""} placeholder="How (optional)" style={{ flex: 1, minWidth: 220 }}
+              onChange={(e) => edit((st) => { st.detail = e.target.value; })} />
+            <button className="pbtn small" disabled={i === 0} title="Move up" onClick={() => move(-1)}>↑</button>
+            <button className="pbtn small" disabled={i === draft.procedure.steps.length - 1} title="Move down" onClick={() => move(1)}>↓</button>
+            <button className="pbtn small danger" onClick={() => set((r) => {
+              r.procedure.steps.splice(i, 1);
+              r.procedure.example = false;
+            })}>✕</button>
+          </div>
+        );
+      })}
+      <div className="prule add">
+        <button className="pbtn small primary" onClick={() => set((r) => {
+          r.procedure.steps.push({ title: "", detail: "" });
+          r.procedure.example = false;
+        })}>Add step</button>
+        {!draft.procedure.example && (
+          <button className="pbtn small" onClick={() => {
+            if (!confirm("Replace these steps with the example procedure? Takes effect when you hit Save.")) return;
+            set((r) => { r.procedure = { ...exampleProcedure(), show: r.procedure.show }; });
+          }}>Use the example steps</button>
+        )}
+      </div>
+      <SectionSave sec="procedure" />
+
       <h3>Break and lunch times</h3>
       {(draft.breaks ?? []).map((b) => (
         <div key={b.id} className="prule">
@@ -1819,6 +2404,12 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
             onChange={(e) => set((r) => { r.breaks.find((x) => x.id === b.id)!.start = e.target.value; })} /></span>
           <span>for <input type="number" min={0} value={b.minutes} style={{ width: 64 }}
             onChange={(e) => set((r) => { r.breaks.find((x) => x.id === b.id)!.minutes = Number(e.target.value) || 0; })} /> min</span>
+          {/* unpaid breaks lengthen the day instead of coming out of the paid shift */}
+          <label className="checkline" title="Unpaid: added on to the shift (8 paid hours + an unpaid 30-min lunch = 7:00 AM – 3:30 PM)">
+            <input type="checkbox" checked={Boolean(b.unpaid)}
+              onChange={(e) => set((r) => { r.breaks.find((x) => x.id === b.id)!.unpaid = e.target.checked; })} />
+            <span>Unpaid</span>
+          </label>
           {parseClock(b.start) === null && <em>⚠ write the time like 12:30 PM</em>}
           <button className="pbtn small danger" onClick={() => set((r) => { r.breaks = r.breaks.filter((x) => x.id !== b.id); })}>✕</button>
         </div>
@@ -1838,6 +2429,56 @@ function ScopeTab({ rules, onChange, data, isAdmin }: {
           }));
           setNewBreak({ label: "", start: "", minutes: "15" });
         }}>Add break</button>
+      </div>
+
+      <h3>Break schedules</h3>
+      {(draft.breakSchedules ?? []).map((bs) => (
+        <div key={bs.id} className="prule bsched">
+          <input className="bsname" value={bs.label}
+            onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.label = e.target.value; })} />
+          {bs.windows.map((w, wi) => (
+            <span key={wi} className="bswin">
+              <select value={w.kind}
+                onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.windows[wi].kind = e.target.value as "break" | "lunch"; })}>
+                <option value="break">Break</option><option value="lunch">Lunch</option>
+              </select>
+              <input type="time" value={w.start}
+                onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.windows[wi].start = e.target.value; })} />
+              <input type="number" min={5} value={w.minutes} style={{ width: 60 }}
+                onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.windows[wi].minutes = Number(e.target.value) || 0; })} /> min
+              <label className="checkline" title="Unpaid — the export marks it (unpaid)">
+                <input type="checkbox" checked={Boolean(w.unpaid)}
+                  onChange={(e) => set((r) => { r.breakSchedules.find((x) => x.id === bs.id)!.windows[wi].unpaid = e.target.checked; })} />
+                <span>unpaid</span>
+              </label>
+              <button className="plink" onClick={() => set((r) => {
+                const t = r.breakSchedules.find((x) => x.id === bs.id)!;
+                t.windows = t.windows.filter((_, j) => j !== wi);
+              })}>✕</button>
+            </span>
+          ))}
+          <button className="pbtn small" onClick={() => set((r) => {
+            r.breakSchedules.find((x) => x.id === bs.id)!.windows.push({ kind: "break", start: "14:00", minutes: 15 });
+          })}>+ Break</button>
+          <button className="pbtn small" onClick={() => set((r) => {
+            r.breakSchedules.find((x) => x.id === bs.id)!.windows.push({ kind: "lunch", start: "12:00", minutes: 30 });
+          })}>+ Lunch</button>
+          <button className="pbtn small danger" onClick={() => set((r) => {
+            r.breakSchedules = r.breakSchedules.filter((x) => x.id !== bs.id);
+          })}>✕</button>
+        </div>
+      ))}
+      <div className="prule add">
+        <button className="pbtn small primary" onClick={() => set((r) => {
+          const letter = String.fromCharCode(65 + ((r.breakSchedules ?? []).length % 26));
+          r.breakSchedules = [...(r.breakSchedules ?? []), {
+            id: uid("bs"), label: `Break Schedule ${letter}`,
+            windows: [
+              { kind: "break", start: "09:00", minutes: 15 },
+              { kind: "lunch", start: "11:15", minutes: 45 }
+            ]
+          }];
+        })}>Add break schedule</button>
       </div>
       <SectionSave sec="breaks" />
 

@@ -13,7 +13,8 @@
 //   • space.assignedScheduleId mirrors the PRIMARY schedule for Classic.
 import {
   computeMinutes, requiredTasks, toClassicRoomTasks, fromClassicRoomTasks,
-  loadRules, autoTasksFor, typeIdFromLabel, type Rules
+  loadRules, autoTasksFor, tasksAfterFloorChange, typeIdFromLabel, typeIdFromLabelStrict, includedConflicts,
+  ISSA_HELPER_TASK, type Rules
 } from "./rules";
 import { resolvePendingRoomTypes, loadAliases } from "./roomListImport";
 
@@ -67,6 +68,14 @@ export interface ClassicSchedule {
   spaceOrder?: string[];
   roomTasks?: Record<string, string[]>;
   projectNoteId?: string;
+  // the Client Schedule Export's header lines (Josh, 2026-09-03)
+  /** day-of-week bubbles, 0=Sunday … 6=Saturday */
+  days?: number[];
+  /** shift hours, 24h "HH:MM" */
+  hoursStart?: string;
+  hoursEnd?: string;
+  /** which Scope break schedule (rules.breakSchedules) this schedule follows */
+  breakScheduleId?: string;
   [k: string]: unknown;
 }
 
@@ -136,7 +145,11 @@ export function loadClassic(): ClassicData {
     }
     sp.floorType = fusionFloorLabel(sp.floorType);
   }
-  return { v7, plans, nonSpace };
+  const data = { v7, plans, nonSpace };
+  // the 2026-10-12 operator workaround's helper tasks are gone from the
+  // rulebook (migrateRules) — their ids go from rooms and schedules too
+  stripIssaHelperTasks(data);
+  return data;
 }
 
 /**
@@ -225,7 +238,20 @@ export function applyRoomType(space: ClassicSpace, typeId: string, rules: Rules)
   const rt = rules.roomTypes.find((x) => x.id === typeId);
   if (!rt) return;
   space.roomType = rt.label;
-  space.spaceTasks = autoTasksFor(rules, typeId);
+  space.spaceTasks = autoTasksFor(rules, typeId, space.floorType);
+  syncSpaceMinutes(space, rules);
+}
+
+/**
+ * Give a space a (new) floor type the whole way: the old floor's automatic
+ * tasks come off, the new floor's go on (tasksAfterFloorChange — manual
+ * edits the change doesn't touch stay), and the minutes recalculate. Every
+ * screen that changes a room's floor type comes through here.
+ */
+export function applyFloorType(space: ClassicSpace, floorType: string, rules: Rules) {
+  const next = fusionFloorLabel(floorType);
+  space.spaceTasks = tasksAfterFloorChange(rules, space, next);
+  space.floorType = next;
   syncSpaceMinutes(space, rules);
 }
 
@@ -249,6 +275,7 @@ export function retuneAllSpaces(spaces: ClassicSpace[], next: Rules, prev?: Rule
   const snap = (sp: ClassicSpace) =>
     JSON.stringify([sp.roomType, sp.spaceTasks, sp.estimatedCleaningMinutes, sp.floorType]);
   const before = spaces.map(snap);
+  if (prev) renameRoomTypes(spaces, prev, next);
   resolvePendingRoomTypes(spaces as never, next, loadAliases());
   refreshAutoTasks(spaces, prev ?? next, next);
   for (const sp of spaces) {
@@ -269,15 +296,74 @@ export function refreshAutoTasks(spaces: ClassicSpace[], prev: Rules, next: Rule
     if (!Array.isArray(sp.spaceTasks)) continue; // legacy rooms follow autoFor live already
     const label = String(sp.roomType ?? "");
     if (!label.trim()) continue;
-    const prevAuto = autoTasksFor(prev, typeIdFromLabel(prev, label));
+    const prevAuto = autoTasksFor(prev, typeIdFromLabel(prev, label), sp.floorType);
     if (!sameSet(sp.spaceTasks, prevAuto)) continue; // hand-customized — keep it
-    const nextAuto = autoTasksFor(next, typeIdFromLabel(next, label));
+    const nextAuto = autoTasksFor(next, typeIdFromLabel(next, label), sp.floorType);
     if (!sameSet(sp.spaceTasks, nextAuto)) {
       sp.spaceTasks = nextAuto;
       changed++;
     }
   }
   return changed;
+}
+
+/**
+ * The data half of applyIssaStandards: drop the operator workaround's
+ * "issa-*" helper task ids from hand-customized rooms and from schedule
+ * coverage (rulebook-following rooms already lose them through
+ * refreshAutoTasks). Run AFTER the rules change. Returns rooms + schedule
+ * stops touched.
+ */
+export function stripIssaHelperTasks(data: ClassicData): number {
+  let n = 0;
+  for (const sp of data.v7.spaces ?? []) {
+    if (!Array.isArray(sp.spaceTasks) || !sp.spaceTasks.some((t) => ISSA_HELPER_TASK.test(t))) continue;
+    sp.spaceTasks = sp.spaceTasks.filter((t) => !ISSA_HELPER_TASK.test(t));
+    n++;
+  }
+  for (const sched of data.v7.schedules ?? []) {
+    for (const [spaceId, ids] of Object.entries(sched.roomTasks ?? {})) {
+      if (!ids.some((t) => ISSA_HELPER_TASK.test(t))) continue;
+      sched.roomTasks![spaceId] = ids.filter((t) => !ISSA_HELPER_TASK.test(t));
+      n++;
+    }
+  }
+  return n;
+}
+
+/**
+ * A room type renamed in Scope takes its rooms with it (rooms store the
+ * type's LABEL) — e.g. a duplicated "Exam Room (copy)" renamed to "Exam
+ * Room – Bariatric". Returns how many rooms moved to the new name.
+ */
+export function renameRoomTypes(spaces: ClassicSpace[], prev: Rules, next: Rules): number {
+  let n = 0;
+  for (const rt of next.roomTypes) {
+    const old = prev.roomTypes.find((x) => x.id === rt.id);
+    if (!old || old.label === rt.label) continue;
+    for (const sp of spaces) {
+      if (typeIdFromLabelStrict(prev, String(sp.roomType ?? "")) !== rt.id) continue;
+      sp.roomType = rt.label;
+      n++;
+    }
+  }
+  return n;
+}
+
+/**
+ * Take tasks a room's type now INCLUDES in General Clean off that room's
+ * list (they add no time and can't be scheduled as extras) — Scope's
+ * "remove them" button behind the flag. Returns rooms changed.
+ */
+export function stripIncludedTasks(data: ClassicData, rules: Rules): number {
+  let n = 0;
+  for (const sp of data.v7.spaces ?? []) {
+    const extra = includedConflicts(rules, sp);
+    if (!extra.length || !Array.isArray(sp.spaceTasks)) continue;
+    sp.spaceTasks = sp.spaceTasks.filter((t) => !extra.includes(t));
+    n++;
+  }
+  return n;
 }
 
 // ── coverage: which schedules cover which tasks in which rooms ──────────────
@@ -485,6 +571,57 @@ export function deleteSpace(data: ClassicData, spaceId: string) {
 }
 
 /**
+ * What deleting a building would take with it — shown in the are-you-sure
+ * prompt BEFORE anything happens. A building owns its floor plans (matched
+ * by name) and every room filed under the name OR drawn on one of those
+ * plans.
+ */
+export function buildingFootprint(data: ClassicData, building: string): { plans: number; rooms: number } {
+  const match = (v: unknown) => String(v ?? "").trim() === building;
+  const planIds = new Set((data.plans ?? []).filter((p) => match(p.building)).map((p) => String(p.id)));
+  const rooms = (data.v7.spaces ?? [])
+    .filter((sp) => match(sp.building) || planIds.has(String(sp.visualPlanId ?? ""))).length;
+  return { plans: planIds.size, rooms };
+}
+
+/**
+ * Delete a WHOLE building (Josh, 2026-09-03: the ✕ on Explorer's building
+ * tiles): its floor plans, every room on them or filed under the name, and
+ * every reference — schedules must never point at ghost rooms, so
+ * spaceOrder, roomTasks, route stop minutes and non-space room links are
+ * all scrubbed. The building's saved picture goes too.
+ */
+export function deleteBuilding(data: ClassicData, building: string) {
+  const match = (v: unknown) => String(v ?? "").trim() === building;
+  const planIds = new Set((data.plans ?? []).filter((p) => match(p.building)).map((p) => String(p.id)));
+  const gone = new Set((data.v7.spaces ?? [])
+    .filter((sp) => match(sp.building) || planIds.has(String(sp.visualPlanId ?? "")))
+    .map((sp) => sp.id));
+  data.v7.spaces = (data.v7.spaces ?? []).filter((sp) => !gone.has(sp.id));
+  data.plans = (data.plans ?? []).filter((p) => !planIds.has(String(p.id)));
+  for (const sched of data.v7.schedules ?? []) {
+    if (sched.spaceOrder) sched.spaceOrder = sched.spaceOrder.filter((id) => !gone.has(id));
+    if (sched.roomTasks) {
+      for (const id of Object.keys(sched.roomTasks)) if (gone.has(id)) delete sched.roomTasks[id];
+    }
+    const stops = sched.routeStopMinutes as Record<string, number> | undefined;
+    if (stops && typeof stops === "object") {
+      for (const id of Object.keys(stops)) if (gone.has(id)) delete stops[id];
+    }
+  }
+  for (const t of data.nonSpace) {
+    t.roomIds = (t.roomIds ?? []).filter((id) => !gone.has(id));
+  }
+  const settings = (data.v7.settings ?? {}) as { buildingArt?: Record<string, string> };
+  if (settings.buildingArt && building in settings.buildingArt) {
+    const map = { ...settings.buildingArt };
+    delete map[building];
+    settings.buildingArt = map;
+    data.v7.settings = settings;
+  }
+}
+
+/**
  * Copy a room's DATA — number gets a "-copy" suffix so it is findable and
  * obviously needs renaming. The copy never inherits geometry (two rooms on
  * the same outline would be un-clickable) or any schedule assignment.
@@ -531,19 +668,29 @@ type XY = { x: number; y: number };
 /** snap near-axis edges straight (display only — data stays untouched) */
 export function rectifyForDisplay(pts: XY[]): XY[] {
   const out = pts.map((p) => ({ x: p.x, y: p.y }));
+  // tolerances are PROPORTIONAL to the polygon (capped at the old absolute
+  // values). Fixed pixel tolerances mangled small shapes: a whole hospital
+  // floor shipped at 1400px stores rooms 3–26px wide, and eating a 2.3px
+  // wall jog welded two straight walls into one diagonal — Josh's "crooked
+  // rooms" on the FV-01 CAD import (2026-09-12). A small shape's real
+  // geometry always outranks cosmetic straightening.
+  const b0 = boundsOf(out);
+  const short = Math.max(1, Math.min(b0.maxX - b0.minX, b0.maxY - b0.minY));
+  const mergeTol = Math.min(2.5, short * 0.08);
+  const riseCap = short * 0.25; // never flatten a jog a quarter of the room deep
   for (let pass = 0; pass < 3; pass++) {
     for (let a = 0; a < out.length; a++) {
       const b = (a + 1) % out.length;
       const adx = Math.abs(out[b].x - out[a].x);
       const ady = Math.abs(out[b].y - out[a].y);
-      if (ady <= adx * 0.22) { const my = (out[a].y + out[b].y) / 2; out[a].y = my; out[b].y = my; }
-      else if (adx <= ady * 0.22) { const mx = (out[a].x + out[b].x) / 2; out[a].x = mx; out[b].x = mx; }
+      if (ady <= adx * 0.22 && ady <= riseCap) { const my = (out[a].y + out[b].y) / 2; out[a].y = my; out[b].y = my; }
+      else if (adx <= ady * 0.22 && adx <= riseCap) { const mx = (out[a].x + out[b].x) / 2; out[a].x = mx; out[b].x = mx; }
     }
   }
   const simplified: XY[] = [];
   for (let i = 0; i < out.length; i++) {
     const prev = simplified[simplified.length - 1];
-    if (!prev || Math.hypot(out[i].x - prev.x, out[i].y - prev.y) > 2.5) simplified.push(out[i]);
+    if (!prev || Math.hypot(out[i].x - prev.x, out[i].y - prev.y) > mergeTol) simplified.push(out[i]);
   }
   return simplified.length >= 3 ? simplified : out;
 }

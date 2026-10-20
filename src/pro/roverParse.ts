@@ -17,6 +17,8 @@ export interface RoverDraft {
   roomType?: string;      // a Scope label
   floorType?: string;     // one of FLOOR_TYPES
   fixtureCount?: number;
+  /** free text — departments are whatever the account calls them */
+  department?: string;
 }
 
 /** spoken commands that drive the flow instead of filling fields */
@@ -84,7 +86,7 @@ function typeVocabulary(rules: Rules): [string, string][] {
 }
 
 const FILLERS = new Set([
-  "room", "name", "number", "type", "floor", "the", "is", "a", "an", "it",
+  "room", "name", "number", "type", "floor", "department", "the", "is", "a", "an", "it",
   "its", "it's", "this", "that", "with", "and", "uh", "um", "of", "for", "has"
 ]);
 
@@ -103,6 +105,20 @@ export function parseRoverUtterance(text: string, rules: Rules): RoverParse {
   if (cmd.test(t)) { command = "confirm"; t = t.replace(cmd, " "); }
   else if (/^\s*(clear|start over|reset)\s*$/.test(t)) return { draft, command: "clear" };
   else if (/^\s*(cancel|never mind|nevermind|close)\s*$/.test(t)) return { draft, command: "cancel" };
+
+  // 0 · department — labeled, BEFORE the room-number step: departments carry
+  // digits ("4 east", "med surg 2") and must not donate them to the number.
+  // Capture runs to the next labeled section or the end of the utterance.
+  const labeledDept = /\bdepartment (?:is )?(.+?)(?= \broom (?:number|name|type)\b| \bfloor type\b| \bnumber\b| \bfixtures?\b|$)/;
+  const mDept = labeledDept.exec(t);
+  if (mDept) {
+    const words = mDept[1].trim().replace(/\s+/g, " ");
+    if (words) {
+      draft.department = words.split(" ")
+        .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
+    }
+    t = t.replace(labeledDept, " ");
+  }
 
   // 1 · fixtures — "<n> fixtures", "fixtures <n>", "no fixtures"
   t = t.replace(/\b(no|\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty) (fixtures?|sinks?)\b/,
@@ -219,5 +235,6 @@ export function mergeDraft(base: RoverDraft, add: RoverDraft): RoverDraft {
   if (add.roomType !== undefined) out.roomType = add.roomType;
   if (add.floorType !== undefined) out.floorType = add.floorType;
   if (add.fixtureCount !== undefined) out.fixtureCount = add.fixtureCount;
+  if (add.department !== undefined) out.department = add.department;
   return out;
 }

@@ -116,6 +116,29 @@ export function segmentBounds(segs: Seg[]) {
   return { minX, minY, maxX, maxY };
 }
 
+/** the one drawing→picture mapping, shared by the raster AND the structured
+ *  CAD importer — room polygons must land exactly on the drawn walls, so
+ *  both sides use THIS and never re-derive it */
+export function dxfTransform(segs: Seg[], targetLongEdge = 2000): {
+  toPx: (x: number, y: number) => { x: number; y: number };
+  /** picture px per drawing unit */
+  scale: number;
+  w: number; h: number;
+} {
+  const b = segmentBounds(segs);
+  const bw = b.maxX - b.minX, bh = b.maxY - b.minY;
+  if (!(bw > 0) || !(bh > 0)) throw new Error("That CAD file's drawing has no size.");
+  const pad = 0.03 * Math.max(bw, bh);
+  const scale = targetLongEdge / (Math.max(bw, bh) + pad * 2);
+  const w = Math.max(1, Math.round((bw + pad * 2) * scale));
+  const h = Math.max(1, Math.round((bh + pad * 2) * scale));
+  return {
+    // DXF y grows UP; pictures grow down — flip
+    toPx: (x, y) => ({ x: (x - b.minX + pad) * scale, y: h - (y - b.minY + pad) * scale }),
+    scale, w, h
+  };
+}
+
 /** DXF text → the same PlanPicture shape every other upload produces (browser) */
 export function dxfToPicture(text: string, targetLongEdge = 2000): {
   dataUrl: string; width: number; height: number; aspect: number;
@@ -124,13 +147,7 @@ export function dxfToPicture(text: string, targetLongEdge = 2000): {
   if (segs.length < 3) {
     throw new Error("No drawable lines were found in that CAD file. Export it as DXF (ASCII) or as a PDF and try again.");
   }
-  const b = segmentBounds(segs);
-  const bw = b.maxX - b.minX, bh = b.maxY - b.minY;
-  if (!(bw > 0) || !(bh > 0)) throw new Error("That CAD file's drawing has no size.");
-  const pad = 0.03 * Math.max(bw, bh);
-  const scale = targetLongEdge / (Math.max(bw, bh) + pad * 2);
-  const w = Math.max(1, Math.round((bw + pad * 2) * scale));
-  const h = Math.max(1, Math.round((bh + pad * 2) * scale));
+  const { toPx, w, h } = dxfTransform(segs, targetLongEdge);
   const cv = document.createElement("canvas");
   cv.width = w; cv.height = h;
   const ctx = cv.getContext("2d")!;
@@ -141,9 +158,9 @@ export function dxfToPicture(text: string, targetLongEdge = 2000): {
   ctx.lineCap = "round";
   ctx.beginPath();
   for (const s of segs) {
-    // DXF y grows UP; pictures grow down — flip
-    ctx.moveTo((s.x1 - b.minX + pad) * scale, h - (s.y1 - b.minY + pad) * scale);
-    ctx.lineTo((s.x2 - b.minX + pad) * scale, h - (s.y2 - b.minY + pad) * scale);
+    const a = toPx(s.x1, s.y1), c = toPx(s.x2, s.y2);
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(c.x, c.y);
   }
   ctx.stroke();
   return { dataUrl: cv.toDataURL("image/png"), width: w, height: h, aspect: w / h };

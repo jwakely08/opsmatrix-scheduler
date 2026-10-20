@@ -10,10 +10,14 @@
 //   3. Either way the plan is rebuilt matrix-style; the upload is never
 //      shown back.
 import React, { useEffect, useRef, useState } from "react";
-import { readPlanWithAI, locateDrawing, padBox, AiPlanError } from "../bridge/aiPlanImport";
+import { readPlanWithAI, readPlanTiled, locateDrawing, padBox, AiPlanError } from "../bridge/aiPlanImport";
+import { tilesForPicture, mergeTileRooms, TILE_RENDER_EDGE } from "./planTiles";
 import { createPortal } from "react-dom";
 import { planFileToImage, isPdf } from "./planFile";
-import { dxfToPicture, isDxf, isDwg } from "./dxfRaster";
+import { dxfToPicture, dxfSegments, dxfTransform, segmentBounds, isDxf, isDwg } from "./dxfRaster";
+import { parseCad, buildCadRooms, cadLooksStructured } from "./cadImport";
+import { scopeLabelFor } from "./studioIngest";
+import type { StudioShapeData } from "./studioSets";
 import { loadApiKey, saveApiKey } from "./classicStore";
 import { aiProxy } from "./aiTransport";
 import { PlanStudio, type StudioPicture, type AiRoomSeed } from "./PlanStudio";
@@ -39,6 +43,8 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
   const [studioSeeds, setStudioSeeds] = useState<AiRoomSeed[]>([]);
   const [studioNotice, setStudioNotice] = useState("");
   const [studioSized, setStudioSized] = useState(false);
+  // structured CAD import: exact shapes transcribed from the file's own data
+  const [studioExact, setStudioExact] = useState<Omit<StudioShapeData, "id">[] | null>(null);
   // the hierarchy is entered UP FRONT (Josh: account → building → floor,
   // departments are chosen per room later): account prefills from what the
   // device already knows
@@ -69,6 +75,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
     setStep(defaultMode ? "form" : "choice");
     setMode(defaultMode ?? "read");
     setStudioPic(null);
+    setStudioExact(null);
     setError(""); setStatus(""); setResult(null);
     onClose();
   };
@@ -81,7 +88,9 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
   async function fileToPicture(file: File) {
     if (isDwg(file)) {
       throw new AiPlanError(
-        "DWG is a closed format this browser can't open. Export the drawing as DXF or as a PDF and upload that instead."
+        "DWG is a closed format this browser can't open — but the SAME file saved as DXF often carries " +
+        "every room's number, name and exact size as data OpsMatrix reads perfectly. In any CAD program " +
+        "(or the free ODA File Converter): File → Save As → DXF (ASCII), then upload that."
       );
     }
     if (isDxf(file)) {
@@ -96,6 +105,65 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
     setPhase("working");
     setError("");
     try {
+      // ── the structured CAD path (Josh, 2026-09-12): a facilities-managed
+      // DXF carries room boundaries and tags as DATA. When that structure is
+      // there we TRANSCRIBE it — exact shapes, numbers, names and square
+      // footage, no AI read at all. Anything less structured falls through
+      // to the normal picture → Max pipeline below.
+      if (isDxf(file)) {
+        const text = await file.text();
+        setStatus("Reading the CAD data…");
+        const built = buildCadRooms(parseCad(text));
+        if (cadLooksStructured(built)) {
+          setStatus("Drawing the CAD file…");
+          // a whole hospital floor at the default 2000px is ~2px/ft — mush
+          // when zoomed. CAD knows its real size, so draw at ~4px/ft
+          // (capped: a 4800px PNG of thin lines still compresses small)
+          const segs = dxfSegments(text);
+          const sb = segmentBounds(segs);
+          const longFt = Math.max(sb.maxX - sb.minX, sb.maxY - sb.minY) * built.ftPerUnit;
+          const edge = Math.min(4800, Math.max(2000, Math.round(longFt * 4)));
+          const pic = dxfToPicture(text, edge);
+          const tr = dxfTransform(segs, edge);
+          const exact: Omit<StudioShapeData, "id">[] = built.rooms.map((r) => ({
+            pts: r.pts.map((p) => tr.toPx(p.x, p.y)),
+            roomNumber: r.roomNumber,
+            roomName: r.roomName,
+            // the file's usage words map into the account's own Scope
+            // vocabulary; anything unknown stays blank = Needs review
+            roomType: scopeLabelFor(rules, r.roomType),
+            floorType: "", fixtureCount: 0, department: "",
+            knownSqFt: r.sqFt > 0 ? r.sqFt : null,
+            source: "ai"
+          }));
+          const named = exact.filter((s) => s.roomNumber).length;
+          // the usages Scope doesn't know yet — named so the manager can add
+          // them as room types (or pick per room); they ship as Needs review,
+          // never as a silently wrong price
+          const unknown: Record<string, number> = {};
+          for (const s of exact) {
+            if (s.roomName && !s.roomType) unknown[s.roomName] = (unknown[s.roomName] ?? 0) + 1;
+          }
+          const unkTop = Object.entries(unknown).sort((a, b) => b[1] - a[1]);
+          const unkNote = unkTop.length
+            ? ` ${unkTop.reduce((n, [, c]) => n + c, 0)} rooms use words Scope doesn't know yet (` +
+            unkTop.slice(0, 5).map(([u, c]) => (c > 1 ? `${u} ×${c}` : u)).join(", ") +
+            (unkTop.length > 5 ? ", …" : "") +
+            ") — they'll show as Needs review; add them as room types in Scope, or pick a type per room."
+            : "";
+          setPhase("form");
+          setStudioSeeds([]);
+          setStudioExact(exact);
+          setStudioSized(true);
+          setStudioNotice(
+            `✓ Read ${exact.length} rooms straight from the CAD data — ` +
+            `${named} numbered, square footage exact from the drawing` +
+            (built.unlabeled > 0 ? ` (${built.unlabeled} unlabeled space${built.unlabeled === 1 ? "" : "s"} need names)` : "") +
+            ". Nothing was guessed: check the drawing, then 🚀 Ship to Max Space." + unkNote);
+          setStudioPic({ dataUrl: pic.dataUrl, width: pic.width, height: pic.height, aspect: pic.aspect });
+          return;
+        }
+      }
       const picture = await fileToPicture(file);
 
       // BOTH modes go through the Calibration Editor now (Josh, 2026-08-31:
@@ -110,12 +178,13 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
       let seeds: AiRoomSeed[] = [];
       let noticeMsg = "";
       let read = false;
-      // read mode (Josh, 2026-09-01): the sheet often carries legends, title
-      // blocks and notes — Max first LOCATES the floor plan itself and the
-      // rest of the page is cropped away, so only the interior rooms are
-      // read and only the drawing shows in the editor
+      // BOTH modes (Josh, 2026-09-01 / benchmark 2026-09-03): the sheet often
+      // carries legends, title blocks and notes — Max first LOCATES the floor
+      // plan itself and the rest of the page is cropped away, so only the
+      // interior rooms are read, the tiles subdivide the DRAWING rather than
+      // the page, and only the drawing shows in the editor
       let pic = picture;
-      if (mode === "read" && (key || proxy)) {
+      if (key || proxy) {
         try {
           setStatus("Max is finding the floor plan on the page…");
           const box = await locateDrawing({ apiKey: key, proxy, imageDataUrl: picture.dataUrl });
@@ -126,12 +195,27 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
       if (key || proxy) {
         try {
           setStatus(mode === "read" ? "Max is reading the floor plan…" : "Max is drawing the floor plan…");
-          const reading = await readPlanWithAI({
-            apiKey: key, proxy,
-            imageDataUrl: pic.dataUrl,
-            imageWidth: pic.width, imageHeight: pic.height,
-            building, floor, onProgress: setStatus
-          });
+          // dense sheets (hundreds of rooms on one page) are read in TILES —
+          // each re-rendered at full resolution and merged back together. The
+          // sheet's own printed-label size decides; a normal plan stays one shot.
+          const rr2 = (pic as { renderRegion?: (b: ReturnType<typeof padBox>, t: number) => Promise<typeof pic> }).renderRegion;
+          const { tiles } = rr2
+            ? await tilesForPicture(pic.dataUrl, pic.width, pic.height)
+            : { tiles: [{ x0: 0, y0: 0, x1: 1, y1: 1 }] };
+          const reading = tiles.length > 1 && rr2
+            ? await readPlanTiled({
+              apiKey: key, proxy,
+              imageDataUrl: pic.dataUrl,
+              imageWidth: pic.width, imageHeight: pic.height,
+              building, floor, onProgress: setStatus,
+              tiles, renderRegion: rr2, tileEdge: TILE_RENDER_EDGE, merge: mergeTileRooms
+            })
+            : await readPlanWithAI({
+              apiKey: key, proxy,
+              imageDataUrl: pic.dataUrl,
+              imageWidth: pic.width, imageHeight: pic.height,
+              building, floor, onProgress: setStatus
+            });
           seeds = reading.rooms.map((r) => ({
             name: r.name, roomNumber: r.roomNumber, roomType: r.roomType, polygon: r.polygon,
             // read mode keeps the sizes stated on the plan; calibrate mode
@@ -157,7 +241,10 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
       setStudioSized(read);
       setStudioPic({
         dataUrl: pic.dataUrl, width: pic.width,
-        height: pic.height, aspect: pic.aspect
+        height: pic.height, aspect: pic.aspect,
+        // keep the source re-render hook so "✨ Max draws the rooms" inside
+        // the editor can read dense sheets in tiles too
+        renderRegion: (pic as StudioPicture).renderRegion
       });
     } catch (e) {
       setError(e instanceof AiPlanError ? e.message : String((e as Error)?.message || e));
@@ -172,10 +259,12 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
   if (studioPic) {
     return (
       <PlanStudio picture={studioPic} account={account} building={building} floor={floor}
-        rules={rules} initialAiRooms={studioSeeds} initialNotice={studioNotice}
+        rules={rules} initialAiRooms={studioSeeds} initialExactShapes={studioExact ?? undefined}
+        initialNotice={studioNotice}
         sizesFromFile={studioSized}
         onShipped={(rooms, setSaved) => {
           setStudioPic(null);
+          setStudioExact(null);
           setResult({ rooms, printed: rooms, scaled: true, calibrated: true });
           if (!setSaved) setStatus("Note: the editable calibration set could not be saved (storage full) — the floor plan itself is in.");
           setPhase("done");

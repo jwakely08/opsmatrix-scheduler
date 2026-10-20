@@ -5,8 +5,19 @@
 import React, { useEffect, useRef, useState } from "react";
 import { boundsOf, pointIn, type ClassicData, type ClassicPlan, type ClassicSpace } from "./classicStore";
 import { buildingArtUrl } from "./buildingArt";
+import { neonPlanUrl } from "./neonMap";
+import { Map3D, type Map3DApi } from "./Map3D";
 
 const WALL_STROKE = 13;
+
+/** the 3D showcase toggle sticks for the session, across every map page */
+export const MAP_3D_KEY = "om_map_3d";
+function load3d(): boolean {
+  try { return sessionStorage.getItem(MAP_3D_KEY) === "1"; } catch { return false; }
+}
+function save3d(on: boolean) {
+  try { sessionStorage.setItem(MAP_3D_KEY, on ? "1" : "0"); } catch { /* storage off */ }
+}
 
 // ── building-first hierarchy (Josh, 2026-08-31): every map view selects the
 // BUILDING first, then that building's floor plans — and the chosen building
@@ -82,7 +93,7 @@ export function BuildingBadge({ building, onChange }: {
 
 // ── the map canvas (shared by Map + Spaces tabs, and Floor Care's builder) ──
 
-export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker }: {
+export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlines, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker }: {
   plan: NonNullable<ClassicData["plans"][0]>;
   plans: ClassicData["plans"];
   onPlan: (id: string) => void;
@@ -95,6 +106,10 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
   marker?: { x: number; y: number; label: string } | null;
   shapes: Map<string, { pts: { x: number; y: number }[]; path: string; c: { x: number; y: number } }>;
   fillFor: (sp: ClassicSpace) => string;
+  /** department borders in plan pixels, rendered above the plan, under the
+   *  labels: solid runs on the rooms' own walls; a run carrying TWO colors
+   *  is a wall two departments share, drawn hatched between them */
+  outlines?: { pts: { x: number; y: number }[]; color: string; color2?: string; closed?: boolean }[];
   /** second schedule's color → the room renders two-tone striped */
   overlayFor?: (sp: ClassicSpace) => string | null;
   /** a small marker on the room (e.g. ⚠ when its tasks aren't all scheduled) */
@@ -106,6 +121,22 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
+  // the 3D showcase view (Josh, 2026-09-04): same data, same colors, same
+  // taps — the rooms just stand up
+  const [view3d, setView3d] = useState(load3d);
+  const map3dApi = useRef<Map3DApi | null>(null);
+  // the matrix image is BAKED (neonMap.ts) — live CSS filter+blend washed out
+  // on iOS Safari; until the bake lands we show the plain plan, not a broken one
+  const [neon, setNeon] = useState<string | null>(null);
+  // canvas width drives how small a room can be and still carry its label —
+  // a phone fitting the whole floor deserves labels too, just sooner-smaller
+  const [mapW, setMapW] = useState(1000);
+  useEffect(() => {
+    let live = true;
+    setNeon(null);
+    neonPlanUrl(plan.img).then((u) => { if (live) setNeon(u); }).catch(() => { /* plain plan stands */ });
+    return () => { live = false; };
+  }, [plan.img]);
   // once the user pans/zooms, resizes must never yank the view back —
   // iOS Safari fires a resize when its URL bar collapses mid-gesture
   const userDrove = useRef(false);
@@ -142,10 +173,19 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
     };
     userDrove.current = false; // a new plan starts fitted
     fit();
-    const ro = new ResizeObserver(() => { if (!userDrove.current) fit(); });
+    setMapW(svg.clientWidth || 1000);
+    const ro = new ResizeObserver(() => {
+      setMapW(svg.clientWidth || 1000);
+      if (!userDrove.current) fit();
+    });
     ro.observe(svg);
     return () => ro.disconnect();
-  }, [plan]);
+    // identity, not object: `plan` is rebuilt on EVERY commit, and refitting
+    // then yanked the zoom out after each room tap while assigning a
+    // schedule (Josh, production, 2026-09-25). Refit only when the floor
+    // actually changes (or a remodel re-ships new dimensions on the same id).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan.id, plan.w, plan.h]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -189,6 +229,12 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
 
   return (
     <div className="pro-mapwrap">
+      {view3d ? (
+        <Map3D plan={plan} spaces={spaces} shapes={shapes} fillFor={fillFor}
+          overlayFor={overlayFor} flagFor={flagFor} selectedId={selectedId}
+          onRoom={onRoom} onCanvas={onCanvas} marker={marker}
+          groundSrc={neon ?? plan.img} api={map3dApi} />
+      ) : (
       <svg ref={svgRef} className="pro-map"
         onPointerDown={(e) => {
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -272,8 +318,27 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
           {/* the matrix, rendered as the mockups envision it: the stored
               drawing stays a light blueprint (prints clean on paper), and
               the MAP inverts + colorizes it into glowing neon linework */}
-          <image href={plan.img} width={plan.w} height={plan.h}
-            className="planimg" style={{ pointerEvents: "none" }} />
+          <image href={neon ?? plan.img} width={plan.w} height={plan.h}
+            className={neon ? "planneon" : "planimg"} style={{ pointerEvents: "none" }} />
+          {/* department borders: on the rooms' own walls; a wall two
+              departments share draws ONCE, hatched between their colors */}
+          {outlines?.map((o, i) => {
+            const d = o.pts.map((p, k) => `${k === 0 ? "M" : "L"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ") + (o.closed ? " Z" : "");
+            return o.color2 ? (
+              <g key={"dept-border-" + i} className="deptborder">
+                <path d={d} fill="none" stroke={o.color} strokeWidth={5}
+                  strokeLinejoin="round" strokeLinecap="butt" strokeDasharray="10 10"
+                  vectorEffect="non-scaling-stroke" />
+                <path d={d} fill="none" stroke={o.color2} strokeWidth={5}
+                  strokeLinejoin="round" strokeLinecap="butt" strokeDasharray="10 10"
+                  strokeDashoffset={10} vectorEffect="non-scaling-stroke" />
+              </g>
+            ) : (
+              <path key={"dept-border-" + i} className="deptborder" d={d}
+                fill="none" stroke={o.color} strokeWidth={5}
+                strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+            );
+          })}
           {marker && (
             <g className="mapmarker" transform={`translate(${marker.x} ${marker.y}) scale(${1 / Math.max(0.4, view.k)})`}>
               <circle r={13} />
@@ -285,7 +350,9 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
             const sh = shapes.get(sp.id);
             if (!sh) return null;
             const b = boundsOf(sh.pts);
-            if ((b.maxX - b.minX) * view.k < 44) return null;
+            // a phone fitting the whole floor renders every room small — on a
+            // narrow canvas, labels appear sooner so the map reads like desktop
+            if ((b.maxX - b.minX) * view.k < (mapW < 700 ? 24 : 44)) return null;
             const mins = Number(sp.estimatedCleaningMinutes) || 0;
             return (
               <g key={"l" + sp.id} className="prolabel" transform={`translate(${sh.c.x} ${sh.c.y}) scale(${1 / Math.max(0.34, view.k)})`}>
@@ -297,6 +364,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
           })}
         </g>
       </svg>
+      )}
       {plans.length > 1 && (
         <div className="floorstack">
           {[...plans].reverse().map((p) => (
@@ -311,9 +379,12 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
       {legend}
       {/* touch-friendly zoom controls — pinch works too, but thumbs deserve buttons */}
       <div className="pro-zoomctl">
-        <button aria-label="Zoom in" onClick={() => zoomCenter(1.35)}>＋</button>
-        <button aria-label="Zoom out" onClick={() => zoomCenter(1 / 1.35)}>－</button>
+        <button aria-label="Zoom in"
+          onClick={() => view3d ? map3dApi.current?.zoom(1.35) : zoomCenter(1.35)}>＋</button>
+        <button aria-label="Zoom out"
+          onClick={() => view3d ? map3dApi.current?.zoom(1 / 1.35) : zoomCenter(1 / 1.35)}>－</button>
         <button aria-label="Fit plan" onClick={() => {
+          if (view3d) { map3dApi.current?.fit(); return; }
           const svg = svgRef.current;
           if (!svg) return;
           userDrove.current = false;
@@ -321,6 +392,11 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, overla
           const k = Math.min(w / plan.w, h / plan.h) * 0.94;
           setView({ k, tx: (w - plan.w * k) / 2, ty: (h - plan.h * k) / 2 });
         }}>⤢</button>
+        <button aria-label={view3d ? "Flat view" : "3D view"}
+          className={"map3dbtn" + (view3d ? " on" : "")}
+          onClick={() => setView3d((v) => { save3d(!v); return !v; })}>
+          {view3d ? "2D" : "3D"}
+        </button>
       </div>
     </div>
   );

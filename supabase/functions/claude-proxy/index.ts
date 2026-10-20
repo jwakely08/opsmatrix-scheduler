@@ -79,7 +79,7 @@ Deno.serve(async (req) => {
   if (req.method === "GET") {
     const rawKey = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
     const key = sanitizeSecret(rawKey);
-    const model = (Deno.env.get("FORCE_MODEL") ?? "claude-fable-5").trim() || "claude-fable-5";
+    const model = (Deno.env.get("FORCE_MODEL") ?? "claude-fable-5-1").trim() || "claude-fable-5";
     const out: Record<string, unknown> = {
       ok: true,
       has_anthropic_key: key.length > 0,
@@ -148,7 +148,7 @@ Deno.serve(async (req) => {
   // choose. FORCE_MODEL secret overrides the default; set it to "" to allow
   // client-selected models (not recommended).
   const feature = (req.headers.get("x-opsmatrix-feature") ?? "messages").slice(0, 40);
-  const forceModel = (Deno.env.get("FORCE_MODEL") ?? "claude-fable-5").trim();
+  const forceModel = (Deno.env.get("FORCE_MODEL") ?? "claude-fable-5-1").trim();
   let body = await req.text();
   if (forceModel) {
     try {

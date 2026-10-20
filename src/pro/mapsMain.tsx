@@ -6,6 +6,7 @@ import { buildClassicDemo, demoStamp } from "../bridge/fusionEntry";
 import { healApiKey, loadApiKey } from "./classicStore";
 import { initMonitoring } from "../lib/logger";
 import "./pro.css";
+import "../motion.css"; // the motion system — must load after pro.css to win the cascade
 import "./print.css";
 
 // error tracking — a no-op unless the build carries VITE_SENTRY_DSN

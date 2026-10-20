@@ -71,7 +71,9 @@ describe("applyStudioShip", () => {
     expect(a.floorType).toBe("Carpet");
     expect(a.fixtureCount).toBe(2);
     expect(Number(a.squareFeet)).toBe(600);
-    expect(Number(a.estimatedCleaningMinutes)).toBeGreaterThan(0); // Scope-priced
+    // Scope-priced: 600 sq ft at the Exam Room's ISSA medical / clinical rate
+    // (2,150 sq ft/hr) = 16.7 → 17 min; carpet doesn't change an ISSA rate
+    expect(Number(a.estimatedCleaningMinutes)).toBe(17);
     expect(data.plans.length).toBe(1);
     expect((data.plans[0].rooms ?? []).map((r) => r.spaceId).sort())
       .toEqual(Object.values(map).sort());

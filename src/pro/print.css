@@ -58,6 +58,13 @@
 .psection.duties { background: #c8940e; }
 .psection em { font-style: normal; font-weight: 600; letter-spacing: .04em; }
 
+/* ── the cleaning procedure, set in Scope ── */
+.pproc {
+  margin: 0; padding: 7px 14px 8px 32px; columns: 2; column-gap: 28px;
+  font-size: 8.4pt; line-height: 1.35;
+}
+.pproc li { break-inside: avoid; margin: 0 0 3px; }
+
 /* ── the room table ── */
 .prooms { width: 100%; border-collapse: collapse; }
 .prooms thead th {
@@ -85,6 +92,8 @@
   display: inline-block; background: #e4f4f4; border: 1px solid #a8d5d5; color: #12656a;
   border-radius: 9px; padding: 1px 7px; margin: 1px 3px 1px 0; font-size: 8.2pt; font-weight: 600;
 }
+/* one task per line, names only (2026-10-12): "General Clean", then extras */
+.c-task .tchip { display: table; }
 .tnone { color: #c0392b; font-size: 8.4pt; font-weight: 600; }
 
 .pri {
@@ -99,6 +108,13 @@
   background: #fff5dc !important; border-top: 1.5px solid #c8940e; border-bottom: 1.5px solid #c8940e;
   text-align: center; font-weight: 700; letter-spacing: .09em; font-size: 8.6pt; color: #7a5c07; padding: 6px;
 }
+/* start / end-of-shift duties (cart setup, teardown): real stops, highlighted */
+.prooms tr.pdutyrow td {
+  background: #fff4dc !important; border-bottom: 1px solid #e3cf9a; font-weight: 600;
+}
+.pdutyrow .c-ord { color: #8a6508; font-size: 9pt; }
+.pdutyrow .c-type { color: #7a5c07; }
+
 .pempty { text-align: center; color: #7b8794; padding: 18px !important; font-style: italic; }
 
 /* ── ongoing duties: the other kind of work, deliberately a different shape ── */
@@ -136,15 +152,10 @@
   background: #1a7a7a; color: #fff; font-size: 7.6pt; letter-spacing: .1em;
   padding: 3px 10px; font-weight: 700;
 }
-.pmap { display: block; width: 100%; height: 5.5in; background: #edf4fa; }
+.pmap { display: block; width: 100%; height: 6.4in; background: #edf4fa; }
 .pmapnum {
   fill: #fff; font-weight: 700; text-anchor: middle; dominant-baseline: central;
   font-family: "Segoe UI", Arial, sans-serif;
-}
-.pmaplbl {
-  fill: #33484f; font-weight: 600; text-anchor: middle;
-  font-family: "Segoe UI", Arial, sans-serif;
-  paint-order: stroke; stroke: rgba(255, 255, 255, .85); stroke-width: 2.5px;
 }
 
 .pmaplegend {
@@ -155,17 +166,6 @@
 .pmaplegend i.num {
   border-radius: 50%; color: #fff; font-size: 7.6pt; font-weight: 700; font-style: normal;
   display: inline-flex; align-items: center; justify-content: center;
-}
-
-.porder {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px;
-  margin: 0 12px; padding: 9px 12px; border: 1px solid #c2ced9; background: #f7fafc; font-size: 9pt;
-}
-.porder > b { font-size: 8pt; letter-spacing: .09em; color: #1a7a7a; }
-.porder span { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
-.porder i {
-  width: 16px; height: 16px; border-radius: 50%; color: #fff; font-style: normal;
-  font-size: 7.8pt; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
 }
 
 /* ── printing: only the document, nothing of the app ── */
@@ -179,5 +179,5 @@
     width: 100%; min-height: 0; box-shadow: none; break-after: page; page-break-after: always;
   }
   .printpage:last-child { break-after: auto; page-break-after: auto; }
-  .prooms tr, .plunch, .porder, .pmapbox { break-inside: avoid; page-break-inside: avoid; }
+  .prooms tr, .plunch, .pproc, .pmapbox { break-inside: avoid; page-break-inside: avoid; }
 }

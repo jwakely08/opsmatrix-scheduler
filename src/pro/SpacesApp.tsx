@@ -8,14 +8,16 @@
 import React, { useMemo, useRef, useState } from "react";
 import {
   syncSpaceMinutes, spaceIncomplete, spacePriority, deleteSpace, duplicateSpace,
+  deleteBuilding, buildingFootprint,
   FLOOR_TYPES, PRIORITIES, PRIORITY_NUM, PRIORITY_WORD,
   type ClassicData, type ClassicSpace, type Priority
 } from "./classicStore";
+import { loadRoutes, saveRoutes } from "./routes";
 import {
   BUILDING_PRESETS, buildingArtMap, buildingArtUrl, setBuildingArt, fileToBuildingArt
 } from "./buildingArt";
 import {
-  autoTasksFor, typeIdFromLabel, isCarpet, spaceCleanability, type Rules
+  autoTasksFor, tasksAfterFloorChange, typeIdFromLabel, isCarpet, spaceCleanability, includedTasksFor, type Rules
 } from "./rules";
 
 const fmt = (n: number) => Math.round(n).toLocaleString();
@@ -84,13 +86,23 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
   const typeId = typeIdFromLabel(rules, draft.roomType ?? "");
   const clean = spaceCleanability(rules, draft);
   const req = Array.isArray(draft.spaceTasks) ? draft.spaceTasks : [];
+  // tasks this type's General Clean already covers — never extras here
+  const included = includedTasksFor(rules, typeId);
+  const autoTasks = autoTasksFor(rules, typeId, draft.floorType);
   const linked = space ? notesForSpace(data, space).linked : [];
 
   const set = (patch: Partial<ClassicSpace>) => setDraft((d) => ({ ...d, ...patch }));
   const setType = (id: string) => {
     const rt = rules.roomTypes.find((x) => x.id === id);
-    set({ roomType: rt?.label ?? "", spaceTasks: autoTasksFor(rules, id) });
+    set({ roomType: rt?.label ?? "", spaceTasks: autoTasksFor(rules, id, draft.floorType) });
   };
+  // a new floor swaps the floor's automatic tasks (carpet → hard: Vacuuming
+  // out, Mopping in) — worked from the LATEST draft, so a task tapped a
+  // moment earlier is never lost
+  const setFloor = (floorType: string) => setDraft((d) => ({
+    ...d, floorType,
+    spaceTasks: tasksAfterFloorChange(rules, { ...d, spaceTasks: Array.isArray(d.spaceTasks) ? d.spaceTasks : [] }, floorType)
+  }));
 
   const save = () => {
     if (!String(draft.roomNumber ?? "").trim() && !String(draft.roomName ?? "").trim()) {
@@ -162,7 +174,7 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
             </select>
           </label>
           <label className="pfield">Floor type
-            <select value={draft.floorType || ""} onChange={(e) => set({ floorType: e.target.value })}>
+            <select value={draft.floorType || ""} onChange={(e) => setFloor(e.target.value)}>
               <option value="">— pick floor type —</option>
               {FLOOR_TYPES.map((f) => <option key={f}>{f}</option>)}
             </select>
@@ -207,7 +219,15 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
             <span className="ptask locked">General Clean</span>
             {rules.tasks.filter((t) => t.addable).map((t) => {
               const on = req.includes(t.id);
-              const auto = t.autoFor.includes(typeId);
+              const auto = autoTasks.includes(t.id);
+              if (included.includes(t.id)) {
+                return on ? (
+                  <button key={t.id} className="ptask warn"
+                    onClick={() => set({ spaceTasks: req.filter((x) => x !== t.id) })}>
+                    ⚠ {t.label} is in General Clean — tap to remove
+                  </button>
+                ) : <span key={t.id} className="ptask incl">{t.label} ✓ in General Clean</span>;
+              }
               return (
                 <button key={t.id} className={"ptask" + (on ? " on" : "")}
                   onClick={() => set({ spaceTasks: on ? req.filter((x) => x !== t.id) : [...req, t.id] })}>
@@ -216,7 +236,7 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
               );
             })}
           </div>
-          <small>• = automatic for this room type. Who does each task is decided in Max Schedules.</small>
+          <small>• = automatic for this room type or floor type. Who does each task is decided in Max Schedules.</small>
         </div>
 
         <label className="pfield">Notes <small>show wherever this room appears — including while scheduling</small>
@@ -466,6 +486,30 @@ export function SpaceExplorerView({ data, rules, commit, onEdit }: {
     setQ("");
   };
 
+  // the ✕ on a building tile (Josh, 2026-09-03): the whole building goes —
+  // plans, rooms, schedule references, routes — behind a two-step are-you-sure
+  const askDeleteBuilding = (name: string, label: string) => {
+    const fp = buildingFootprint(data, name);
+    const what = `${fp.plans} floor plan${fp.plans === 1 ? "" : "s"} and ${fp.rooms} room${fp.rooms === 1 ? "" : "s"}`;
+    if (!confirm(`Are you sure you want to delete ${label}?\n\nThat removes ${what}, and takes every one of those rooms off every schedule and route.`)) return;
+    if (!confirm(`Last check — really delete ${label}?\n\nThis cannot be undone.`)) return;
+    commit((d) => {
+      deleteBuilding(d, name);
+      // saveClassic never writes plans (they're heavyweight) — the flows
+      // that change them persist the key themselves, same as Plan Studio
+      try { localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans)); } catch { /* quota */ }
+    });
+    // sanitation/policing rounds built for this building point at its plans —
+    // they go with it (their shipped schedules were already scrubbed above)
+    const store = loadRoutes();
+    saveRoutes({
+      ...store,
+      sanitation: store.sanitation.filter((r) => r.building !== name),
+      policing: store.policing.filter((r) => r.building !== name)
+    });
+    setPath({ building: null, floor: null, dept: null });
+  };
+
   const crumb = [
     { label: "All buildings", at: { building: null, floor: null, dept: null } },
     ...(path.building !== null ? [{ label: path.building || "(no building)", at: { building: path.building, floor: null, dept: null } }] : []),
@@ -516,6 +560,9 @@ export function SpaceExplorerView({ data, rules, commit, onEdit }: {
                   <div className="bldgimg" style={{ backgroundImage: `url(${buildingArtUrl(t.name, art)})` }}>
                     <button className="bldgart" aria-label="Change this building's picture"
                       onClick={(e) => { e.stopPropagation(); setArtFor(t.name); }}>🖼 Picture</button>
+                    <button className="bldgdel" aria-label={`Delete ${t.label}`}
+                      title={`Delete ${t.label} — asks first`}
+                      onClick={(e) => { e.stopPropagation(); askDeleteBuilding(t.name, t.label); }}>✕</button>
                   </div>
                   <div className="bldgbody">
                     <b>{t.label}</b>

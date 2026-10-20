@@ -58,13 +58,32 @@ const preInjection =
   "\n<!-- ══ FUSION BRIDGE core + demo seed (injected at build; original archive untouched) ══ -->\n" +
   "<script>\n" + core + "\n</script>\n" +
   "<script>\n" + seed + "\n</script>\n";
+// The motion system's press physics for the classic app — DELIBERATELY
+// minimal. The archive has its own motion language (--om-ease, with
+// !important-forced .18s durations on button/a/select/input), so we add
+// only press DEPTH via the independent `scale` property and let the
+// archive's own curve animate it; declaring transitions here would
+// override the archive's per-element transition lists and kill its hover
+// motion. Injected at the END of body so it out-cascades the archive's
+// styles at equal specificity.
+const motionInjection =
+  "\n<style>\n" +
+  "/* FUSION motion: presses have weight (injected at build) */\n" +
+  "button:not(:disabled):active, .cursor-pointer:active { scale: .96; }\n" +
+  "</style>\n";
+
 const postInjection =
   "\n<!-- ══ FUSION BRIDGE UI ══ -->\n" +
-  "<script>\n" + ui + "\n</script>\n";
+  "<script>\n" + ui + "\n</script>\n" +
+  motionInjection;
 
 // Make Classic installable as a real app (its own icon on the taskbar/home
 // screen) and keep it self-updating. The service worker is network-first, so
 // an installed OpsMatrix always shows the newest deploy — see public/sw.js.
+// The motion system's press physics, scoped to what is safely universal in
+// the classic app: buttons and Tailwind's cursor-pointer tiles sink on press
+// and spring back on release. Uses the independent `scale` property so it
+// COMPOSES with any Tailwind transform utilities instead of overriding them.
 const headInjection =
   '\n<link rel="manifest" href="./opsmatrix.webmanifest"/>\n' +
   '<link rel="apple-touch-icon" href="./apple-touch-icon.png"/>\n' +

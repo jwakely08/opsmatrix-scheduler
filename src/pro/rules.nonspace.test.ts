@@ -53,6 +53,25 @@ describe("non-space defs and qualifiers", () => {
     expect(custom.qualifierIds).toEqual([]);
   });
 
+  it("cart setup and teardown are built in, pinned to the start and end of the shift", () => {
+    const r = defaultRules();
+    expect(r.nonSpaceDefs.find((d) => d.id === "cart-setup")).toMatchObject({ minutes: 15, position: "start" });
+    expect(r.nonSpaceDefs.find((d) => d.id === "cart-teardown")).toMatchObject({ minutes: 15, position: "end" });
+    expect(r.nonSpaceDefs.find((d) => d.id === "discharge")!.position).toBeUndefined();
+  });
+
+  it("cart defs saved before positions existed pick them up; a manager's choice stays", () => {
+    const r = defaultRules() as unknown as { nonSpaceDefs: Record<string, unknown>[] };
+    r.nonSpaceDefs = [
+      { id: "cart-setup", label: "Cart Setup", defaultHours: 0.25, minutes: 15, qualifierIds: [] },
+      { id: "cart-teardown", label: "Cart Teardown", defaultHours: 0.25, minutes: 15, qualifierIds: [], position: "anytime" }
+    ];
+    localStorage.setItem(RULES_KEY, JSON.stringify(r));
+    const loaded = loadRules();
+    expect(loaded.nonSpaceDefs.find((d) => d.id === "cart-setup")!.position).toBe("start");
+    expect(loaded.nonSpaceDefs.find((d) => d.id === "cart-teardown")!.position).toBe("anytime");
+  });
+
   it("counted schedule entries multiply out; legacy entries keep their hour block", () => {
     expect(nonSpaceTaskMinutes({ id: "a", name: "Discharges", hours: 0, scheduleId: "s", roomIds: [], count: 5, minutesPer: 45 })).toBe(225);
     expect(nonSpaceTaskMinutes({ id: "b", name: "Old Route", hours: 2, scheduleId: "s", roomIds: [] })).toBe(120);
@@ -82,28 +101,57 @@ describe("deleted built-ins stay deleted", () => {
   });
 });
 
+describe("the cleaning procedure", () => {
+  it("starts as the labeled 7-step example", () => {
+    const p = defaultRules().procedure;
+    expect(p.example).toBe(true);
+    expect(p.show).toBe(true);
+    expect(p.steps.map((s) => s.title)).toEqual([
+      "Empty trash", "High dust", "Damp wipe / disinfect", "Spot clean",
+      "Clean the restroom", "Dust mop", "Damp mop"
+    ]);
+  });
+
+  it("an account saved before the procedure existed gets the example", () => {
+    const r = defaultRules() as unknown as Record<string, unknown>;
+    delete r.procedure;
+    localStorage.setItem(RULES_KEY, JSON.stringify(r));
+    expect(loadRules().procedure.example).toBe(true);
+  });
+
+  it("the facility's own steps and the hide switch survive a reload", () => {
+    const r = defaultRules();
+    r.procedure = { steps: [{ title: "Knock and announce" }], show: false, example: false };
+    saveRules(r);
+    expect(loadRules().procedure).toEqual({ steps: [{ title: "Knock and announce" }], show: false, example: false });
+  });
+});
+
 describe("the General Clean formula toggles", () => {
   const room = { squareFeet: 330, roomType: "Office", floorType: "Hard floor — finished" };
 
-  it("formulaOff drops the base line (and the type qualifier that rides on it)", () => {
+  it("formulaOff drops the General Clean line", () => {
     const r: Rules = defaultRules();
     const withBase = computeMinutes(r, room).total;
     r.general.formulaOff = true;
     const without = computeMinutes(r, room);
-    expect(without.lines.some((l) => l.label.startsWith("General cleaning"))).toBe(false);
+    expect(without.lines.some((l) => l.label.startsWith("General Clean"))).toBe(false);
     expect(without.total).toBeLessThan(withBase);
   });
 
-  it("mopIncluded off is honest in the line label", () => {
+  it("floor type no longer changes General Clean (2026-10-12)", () => {
     const r: Rules = defaultRules();
-    r.general.mopIncluded = false;
-    const { lines } = computeMinutes(r, room);
-    expect(lines[0].label).toContain("(hard floor)");
-    expect(lines[0].label).not.toContain("mopping included");
+    const hard = computeMinutes(r, room);
+    const carpet = computeMinutes(r, { ...room, floorType: "Carpet" });
+    expect(carpet.total).toBe(hard.total);
+    expect(carpet.lines[0].label).toBe(hard.lines[0].label);
   });
 
-  it("Mopping and Vacuuming exist as standalone priced space tasks", () => {
+  it("Mopping and Vacuuming are priced only where General Clean does not include them", () => {
     const r = defaultRules();
+    // included by default: listed on the room, it adds nothing
+    expect(computeMinutes(r, { ...room, spaceTasks: ["damp-mop"] }).lines.some((l) => l.label.startsWith("Mopping"))).toBe(false);
+    r.roomTypes.find((rt) => rt.id === "office")!.includedTasks = ["trash-pull", "vacuum"];
     const mins = computeMinutes(r, { ...room, spaceTasks: ["damp-mop"] });
     expect(mins.lines.some((l) => l.label.startsWith("Mopping"))).toBe(true);
   });

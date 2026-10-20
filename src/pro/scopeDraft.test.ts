@@ -61,6 +61,19 @@ describe("per-section save isolation", () => {
     const brOnly = saveSection(saved, draft, "breaks");
     expect((brOnly.breaks ?? []).length).toBe(0);
   });
+
+  it("the cleaning procedure saves on its own", () => {
+    const saved = defaultRules();
+    const draft = clone(saved);
+    draft.procedure.steps[0].title = "Knock and announce";
+    draft.procedure.example = false;
+    draft.breaks = [];
+    expect(sectionDirty(saved, draft, "procedure")).toBe(true);
+    const next = saveSection(saved, draft, "procedure");
+    expect(next.procedure.steps[0].title).toBe("Knock and announce");
+    expect(next.procedure.example).toBe(false);
+    expect((next.breaks ?? []).length).toBe((saved.breaks ?? []).length);
+  });
 });
 
 describe("floor-care scheduling split", () => {
@@ -76,15 +89,16 @@ describe("floor-care scheduling split", () => {
   it("splitRequiredTasks separates a corridor's crews", () => {
     const corridor = { roomType: "Corridor", spaceTasks: ["auto-scrub", "dust-mop", "trash-pull", "high-dusting"] };
     const { cleaning, floorCare } = splitRequiredTasks(rules, corridor);
-    expect(cleaning.sort()).toEqual(["high-dusting", "trash-pull"]);
+    // Trash Pull is INCLUDED in a corridor's General Clean — never an extra
+    expect(cleaning.sort()).toEqual(["high-dusting"]);
     expect(floorCare.sort()).toEqual(["auto-scrub", "dust-mop"]);
   });
 
   it("a custom task flagged floor-care in Scope moves crews", () => {
     const r = clone(rules);
     r.tasks.push({ id: "scrub-deck", label: "Deck Scrub", sqftPerMin: 100, flatMin: 0, autoFor: [], addable: true, floorCare: true });
-    const { cleaning, floorCare } = splitRequiredTasks(r, { roomType: "Office", spaceTasks: ["scrub-deck", "trash-pull"] });
+    const { cleaning, floorCare } = splitRequiredTasks(r, { roomType: "Office", spaceTasks: ["scrub-deck", "high-dusting"] });
     expect(floorCare).toEqual(["scrub-deck"]);
-    expect(cleaning).toEqual(["trash-pull"]);
+    expect(cleaning).toEqual(["high-dusting"]);
   });
 });

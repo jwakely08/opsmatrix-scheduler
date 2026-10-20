@@ -1,5 +1,5 @@
 # OPSMATRIX — COMPLETE PROJECT HANDOFF
-*Written 2026-08-06, last refreshed 2026-09-01 latest (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
+*Written 2026-08-06, last refreshed 2026-10-12 latest (§6: FLOOR WORK FOLLOWS FLOOR TYPE — a space task's `autoForFloor` trigger + `floorSkipTypes`, Mopping/Vacuuming at ISSA 540 rates, `applyFloorType` swaps them on a floor change). Same-day earlier (§6: GENERAL CLEAN = THE ROOM TYPE'S FORMULA — by size / fixed / both, typed in the hospital's own unit, ISSA defaults, included-in-General-Clean lists, no floor-type effect, no minimum, Duplicate type, automatic migration of saved rules and the operator's issa-* workaround). Earlier 2026-09-29 (§12aa: SCHEDULES EXPORT — a five-sheet raw workbook (schedules, timed room stops, per-task minutes, discharges, breaks) so a client's own system can re-create every schedule; third tile in Admin Settings → Exporting). Earlier 2026-09-25 (§12z: SCHEDULES-MAP FIXES + DEPARTMENTS — per-tap zoom reset killed, live schedule bar while assigning, Save button on the room sidebar, and the department system: select-and-assign with colors in Max Space, department outlines on the Schedules map — one border per contiguous cluster of rooms sitting ON the rooms' own walls, not per-room boxes and never a halo; a department split by a corridor gets a border per side, and a wall two departments share draws once, hatched between their two colors). Earlier 2026-09-23 (§12y: SUPABASE DATA API GRANTS — migration 0005 makes table grants explicit ahead of Supabase's 2026-10-30 auto-grant removal, plus the every-future-migration convention). Earlier 2026-09-13 (§12x: DEPARTMENT EVERYWHERE — Map View sidebar field, Rover voice "department imaging" with walk-sticky carry, CAD import names the usages Scope doesn't know). Earlier 2026-09-12 (§12w: THE STRUCTURED CAD IMPORTER — a facilities-managed DXF is TRANSCRIBED, not detected: closed space polylines + block-attribute room tags become exact rooms with numbers, names, Scope types and true square footage; proven end-to-end on a real 859-room hospital DWG→DXF in 2.2s with zero AI calls). Earlier 2026-09-05 (§12v: STEP 3 OF THE "$30M FEEL" — whole-hub consistency: dark-scheme native controls (selects/checkboxes/time inputs on the input glass everywhere) + the staggered `arrive` entrance on every card family, driven by a full screenshot survey of every hub screen). Earlier 2026-09-04 (§12u: THE 3D SHOWCASE VIEW — orthographic extruded matrix on every map page with a spin-and-settle load animation; iso3d.ts pure projection + Map3D.tsx canvas renderer, 3D/2D toggle in the zoom stack, taps stay exact via affine unprojection. Same-day earlier §12t: THE MOTION SYSTEM — app-wide tactile press/hover physics: spring-rebound presses via the independent `scale` property, delayed room hover bloom, settling panels; `src/motion.css` loaded after each app's stylesheet, press-depth-only injection for classic which keeps its own om-ease language). Earlier 2026-09-03 (§12s: DENSE-SHEET ROOM DETECTION — label-bubble suppression, door/window gap sealing, tiled high-res AI reading with cross-tile merge, scale-aware snap; ≥92% measured on the Franciscan Lafayette benchmark via the new bench/ harness). Same-day earlier (§12r: PRODUCTION LIVE at opsmatrix.pages.dev; corridor-sliver snap guard; baked neon maps for iOS parity; CLIENT SCHEDULE EXPORT — the client's xlsx template value-patched byte-faithfully, Scope break schedules + per-schedule day pills/hours/break picker). Earlier 2026-09-01 (§12p: ROVER MODE — full-screen voice space validation, on-device speech + local grammar, instant per-room saves; §12o: WITH-info uploads go edit→ship with locate+crop and merge-sum — no calibration; Import modals portal out of the header trap; §12n: THE DEEP THEME — hub-wide futuristic glass/glow aesthetic matching classic, building picture tiles with Josh's 8 renders; §12m route-engine fixes: Max Schedules crash on shipped routes, one floor per sanitation route, engine-owned editing). Earlier 2026-08-31 night (§12m: the two new route engines — MAX SANITATION (soiled-utility routes priced by real distance from a dock pin) and MAX POLICING (the porter shell); building-first hierarchy on every map + a persistent left menu on every hub page; Scope rework — per-occurrence non-space tasks with qualifiers incl. travel time, counted discharges in Max Schedules, formula mop/vacuum toggles, General Clean visible and deletable, colour-coded tasks instead of the sponge icon; Max Floor Care opens straight into the builder with Needs / Does-not-need and dust-mop↔machine-sweep exclusivity; EVERY plan upload now ships through the Calibration Editor with data preloaded; migration 0003 + 0004 for the two new synced stores). Earlier 2026-08-28 evening (§12g: Admin Settings → Exporting — scoped Excel exports in two formats with a test-proven re-import round trip; plan upload now OPENS with the calibrate-or-read question; importer learned Priority/Cleanable/Notes columns + applies Fixture Count + round-trips the three floor labels). Same-day earlier: staging UX punch list §12f: Max Space rebuilt in the hub — Explorer + Room List + editor with floor type/fixtures/priority 1-2-3/cleanable + duplicate/edit/delete; universal ‹ Back button across classic+hub; Rooms list-scheduling tab + schedule color picker + plain-language room sidebar; Floor Care map picking; Max chat full replies + date awareness + prompt caching; calibration path restored; dashboard/calendar tile fixes). Earlier refresh 2026-08-26 (production hardening pass §12e: cloud mode with Supabase auth/MFA/sync + server-side Claude proxy + Cloudflare pipelines — ALL dormant without env vars; xlsx 0.20.3 security update; workspace backup; see PRODUCTION_READINESS_REPORT.md, PRODUCTION_ROADMAP.md, SETUP_PRODUCTION.md). Purpose: drop this file into a fresh AI chat (or hand to a developer) and continue seamlessly. Everything below is current, verified, and deployed. If you are an AI session working on this repo: update this file before your session ends whenever you ship meaningful changes.*
 
 ---
 
@@ -75,8 +75,10 @@ The user's Anthropic API key lives in TWO slots (fixed 2026-08-24 — Josh's key
 
 ## 6. THE RULES ENGINE (`src/pro/rules.ts`, storage `opsmatrix_fusion_rules`)
 
-- **General formula** (applied to every room): 1 min per `hardSqftPerMin` (33) sq ft hard floor (mopping included) / per `carpetSqftPerMin` (40) sq ft carpet (vacuuming included; carpet rooms carry `vacuumDaysPerWeek`). Labeled as ISSA-style healthcare starting rates, all editable.
-- **Room types** (12 preloaded per Josh's spec, each `{id, label, qualifierMin, frequency}`): Office(+0, 5x/wk), Exam Room(+4), Emergency Room(+10), Patient Room(+6), Lounge(+2), Lobby(+2), Waiting Room(+2), Procedure Room(+8), Restroom(+8), Operating Room(+25), Corridor(+0), Hallway(+0). Custom types addable (name+frequency+qualifier, General Clean always attached, NO building/applies dropdowns).
+- **General Clean = the room type's formula (Josh, 2026-10-12 — supersedes the per-floor-type rates).** Each `RoomTypeRule` carries `method` (`size` = sq ft ÷ rate · `fixed` = fixed minutes per room · `both`), `fixedMin`, ONE stored rate `sqftPerHour` plus `rateUnit` (the unit it was typed in: sq ft/hr, sq ft/min, min per 100 sq ft, min per 1,000 sq ft — display only), `issaCategory` (for "Reset to ISSA") and `includedTasks` (what its General Clean already covers — default Trash Pull, Mopping, Vacuuming). **Floor type never changes General Clean; there is no minimum per room** (`general.minMinutes`, `hardSqftPerMin`/`carpetSqftPerMin`, `mopIncluded`/`vacuumIncluded` are retired — kept only so saved data round-trips and migration can seed rates). **No per-room overrides**: a room needing more gets an extra task; a room that differs gets its own type (Scope "Duplicate type" copies formula + included list + extras; rename takes the rooms along via `renameRoomTypes`). Engine: `gcFormula` / `gcMinutes` (unrounded) / `gcText` → the ONE General Clean line "Office: 152 sq ft ÷ 4,250 sq ft/hr = 2.1 min" (minutes line label `General Clean — …`; printed sheets show it beside the General Clean chip via `DocRow.generalClean`, one task per line); `requiredTasks` drops included tasks (so they never price, schedule or report uncovered), `rawSpaceTasks` is the stored list for editors, `includedConflicts` flags rooms still listing one (pickers show "✓ in General Clean" / "⚠ … tap to remove"; Scope offers "Take it off those rooms" → `stripIncludedTasks`); `autoTasksFor` never returns an included task. Defaults = ISSA 612 midpoints (`ISSA_CATEGORIES`, os.xiri.ai/blog/issa-612-cleaning-rates-explained): General office 4,250 · Conference 3,500 · Lobbies & corridors 5,500 · Elevator 600 · Restroom 1,000 · Break room/cafeteria 3,150 · Medical/clinical 2,150 · Laboratory 1,850 · Locker room 1,850 sq ft/hr; `ISSA_TYPE_CATEGORY` maps every built-in (clinical types → Medical/clinical; Corridor/Hallway/Stairwell/Lobby/Waiting → Lobbies & corridors; Storage + infrastructure → General office). New built-ins: Conference Room, Nurses Station, Break Room / Kitchen, Laboratory, Clean Supply / Med Room.
+- **Migration (`migrateRules`, run by `loadRules`; rules `version: 2`)**: a saved type without a formula gets its ISSA rate where ISSA applies (else the old hard-floor rate, shown in sq ft/min), its old `qualifierMin` as the fixed part ("both"), and an included list from the old mop/vacuum toggles. The 2026-10-12 operator workaround (5,500 sf/hr base + `issa-*` helper tasks) converts to per-type rates — each type takes the category of the helper that rode on it — and the helpers vanish from rules; `loadClassic` strips their ids from `spaceTasks` and schedule `roomTasks` (`stripIssaHelperTasks`). On hub load, migrated rules are persisted and every room whose stored minutes disagree is re-timed. Scope: one card per room type ("General Clean = [fixed] + sq ft ÷ [rate] [unit ▾]", live example at the median size of that type's rooms, ISSA match + Reset to ISSA, included-task toggles, extras, its own Save via `saveRoomType`); formula fields are admin-only (`canEditFormula`). Hey Max `set_room_type_rule` takes `general_clean_method`, `fixed_minutes`, `rate` + `rate_unit`, `reset_to_issa`, `included_tasks`.
+- **Floor work follows the room's FLOOR type (Josh, 2026-10-12).** A space task may carry `autoForFloor` (`carpet` · `hard-finished` · `hard-unfinished`, via `floorKind`; blank floor reads as hard finished) and `floorSkipTypes` (room types the floor rule skips); non-cleanable types never get floor tasks. `autoTasksFor(rules, typeId, floorType)` = the type's `autoFor` tasks + the floor's, minus included tasks; `autoTasksForSpace` for a room. Built-ins: Mopping (`damp-mop`, 68.67 sq ft/min = ISSA 540 #429, 4,120/hr) on both hard floors, Vacuuming (`vacuum`, 47.62 = ISSA 540 #280, 2,857/hr) on carpet, both skipping Corridor/Hallway (floor crew's); stock types still list both as included in General Clean, so the trigger only bites where a type unticks them (Josh's Fairview data does, on every type). `taskSourceLabel` shows the ISSA source in Scope while the rate is untouched. A floor change goes through `applyFloorType` / `tasksAfterFloorChange`: the old floor's automatic tasks come off, the new floor's go on, everything else (manual adds/removals the change doesn't touch) stays; `applyRoomType` and `refreshAutoTasks` pass the room's floor. Scope's Space tasks rows edit the trigger (owned by the Space tasks section). `loadRules` gives saved built-in mop/vacuum without the fields the stock rule (a saved `[]` stays) and moves an untouched old stock rate (60 / 55, label unchanged) to ISSA. Tests: `rules.floor.test.ts`.
+- **Room types** (history: 12 preloaded per Josh's 2026-08 spec with flat qualifiers; since 2026-10-12 each carries the General Clean formula above). Custom types addable (name + frequency + ISSA match).
 - **Space tasks** `{id, label, sqftPerMin|null, flatMin, autoFor:[roomTypeIds], addable}`: Auto Scrub (1/200, auto corridors+hallways), Dust Mop (1/150, auto corridors+hallways), Burnishing (1/100, manual), High Dusting (1/120, independently assignable), Trash Pull (2min flat). Custom addable.
 - **Non-space defs** `{id, label, defaultHours}`: Discharges(2h), Sanitation Route(3h), Day Porter(8h). Instances get attached to schedules; room-linking optional.
 - `computeMinutes(rules, space, {tasks?, includeBase?})` prices full rooms or coverage subsets; every number renders as plain-English lines. Any rules change → `syncSpaceMinutes` recalcs every space's `estimatedCleaningMinutes` (keeps Classic's displays consistent).
@@ -455,6 +457,471 @@ Lives ONLY in Max Space → Map View (🚙 Rover Mode button, shown when a plan 
   right before it, or a short tag (number/letter) right after it, stays in the name;
   spoken twice, first = type, second = name (unchanged); bare mention = type only.
   21 parser tests.
+
+## 12r. POST-LAUNCH FIXES + CLIENT SCHEDULE EXPORT (2026-09-02/03)
+
+- **Production is LIVE**: PR #32 merged staging→main 2026-09-01, gated deploy approved,
+  https://opsmatrix.pages.dev. (Demo mishap logged: proxy 403 = origin not in
+  ALLOWED_ORIGINS — the per-deploy `<hash>.opsmatrix.pages.dev` links are deliberately
+  rejected; demo only from the canonical URL.)
+- **Corridor sliver fix** (`planSnap.snapCollapsed`, PR #33): in a corridor both traced
+  edges could snap onto the same strong wall and collapse the box. Rule: a snap may
+  refine a trace, never destroy it — a stage that shrinks the drawn shape below 30%
+  area (or crushes a bbox dimension below 25%) is rejected; `PlanStudio.cleanSnap`
+  guards wall-snap and neighbour-seating independently.
+- **Baked neon maps** (`neonMap.ts`, PR #34): iOS Safari silently drops the CSS
+  filter+blend on SVG `<image>`, washing phone maps white. The matrix is now baked
+  once per plan into cyan-on-transparent pixels (`neonizePixels` + 4-way halo), used
+  by MapCanvas + Plan Studio (`.planneon`); live-filter `.planimg` remains only as the
+  moment-of-load fallback. Label cutoff adapts (24px on <700px canvases); editor
+  strokes/pins thickened. Stored plans stay light blueprints; printing untouched.
+- **CLIENT SCHEDULE EXPORT** (Josh's client template, "exactly replicated, no
+  deviation"): the client's own xlsx ships pre-extracted under
+  `public/templates/client-schedule/`; `clientSchedule.ts` patches ONLY cell values
+  (styles/borders/logo/7-Step panel/reminders pass through byte-identical) and
+  `xlsxZip.ts` re-packs a stored zip. Header from the schedule: B2 name, B3 day
+  bubbles, B4 hours, B5/B6 + timeline rows from the picked BREAK SCHEDULE; E2 org
+  name; ritual rows re-time (start/start+10, end−10/−5/end); times print on anchor
+  rows only (client's style); 20 assignment slots, overflow → identical page 2.
+  New Scope → "Break schedules" (rules.breakSchedules: named A/B/C plans of
+  break/lunch windows, per-section save with the flat breaks). Schedule cards gained
+  ClientRow (Mon–Sun day pills, hours, break-schedule picker → ClassicSchedule.days/
+  hoursStart/hoursEnd/breakScheduleId) + "⬇ Client schedule export" button.
+  Verified: 331 unit tests; node build from real parts validated via openpyxl
+  (values, styles, both pages) + Playwright click-the-button download re-validated.
+- **Delete a whole building** (2026-09-03): the ✕ on Explorer's building tiles —
+  two confirms (footprint counts, then "cannot be undone"), then
+  `classicStore.deleteBuilding`: plans, rooms (by name OR plan linkage), schedule
+  spaceOrder/roomTasks/routeStopMinutes, non-space links, buildingArt entry, and the
+  building's sanitation/policing rounds in the routes store. NOTE the gotcha it
+  surfaced: saveClassic never writes `opsmatrix_v7_plans` — any flow that changes
+  d.plans must persist that key itself inside its commit (Plan Studio idiom).
+  Rule for future template uploads: the AI reads the template and decides which
+  OpsMatrix data fits which cells; client boilerplate stays untouched.
+- **TEMPLATE MANAGER** (same day): Admin Settings → Exporting → "Schedule
+  templates" — upload any client's sheet (.xlsx or .pdf), name it, and the name
+  becomes an export button on every schedule card. `.xlsx`: stored byte-untouched
+  (settings.clientTemplates, base64 ≤512KB); Max maps the cells IN-APP via the
+  claude-proxy (`templateRead.ts`: sheet inventory → structured-output TemplateMap).
+  `.pdf`: no workbook to preserve, so Max reads the page (pdf.js render) and
+  RECREATES it as Excel (`sheetBuild.ts` spec→styled xlsx) — UI says to eyeball it
+  once. Generic engine `templateExport.ts` patches any workbook by map (sparse
+  cells/rows now inserted by `patchSheetXml`), page-2 clone on single-sheet
+  workbooks, `xlsxZip.readZip` (stored + DecompressionStream inflate). With no
+  templates saved, the bundled Akron button stands in. 340 tests; Playwright drove
+  upload → named button → download (AI stubbed), openpyxl-validated.
+
+## 12s. DENSE-SHEET ROOM DETECTION + THE BENCHMARK (2026-09-03)
+
+Mission: make room detection RELIABLE on large, complex hospital sheets. The benchmark is
+Josh's real Franciscan Lafayette Central 2nd-floor 11x17 PDF (~200 numbered rooms, five
+wings) — cleaner and higher-resolution than most plans we'll ingest, so if detection fails
+here the business doesn't work. **Measured result (EW wing, rooms 2101–2156, hand-labelled
+answer key): 92.2% of rooms drawn in place with their printed numbers using a fully
+automatic conservative reader, 100% with full-coverage readings, 98.4% with ±1.5% polygon
+noise — zero misplaced, zero false or duplicate numbers in every run.** Corridors: 4/8
+named in place (follow-up below).
+
+**Why dense sheets failed before** (all four fixed):
+1. One 2000px image of the whole sheet leaves a room 40–60px — the reader sees smudges.
+2. The printed room-number stadium "bubbles" are enclosed regions themselves: fake rooms,
+   room-severing walls, and snap magnets.
+3. `snapToWalls`' default reach (`min(55, 0.035·width)`) EQUALS a room pitch on a dense
+   sheet — correctly placed AI boxes teleported onto the neighbours' walls at ingest and
+   the no-overlap rule then killed them.
+4. Doors/windows on professional sheets are plain GAPS in wall lines (no swing arcs), so
+   flood-fill detection leaked every room into the corridors/outside.
+
+**The architecture now** (all pure pieces unit-tested; 365 tests green):
+- **planSnap.ts** — `labelBubbles` (enclosure + stadium proportions + glyph-sized interior
+  ink; a slim room holding its own bubble no longer matches), `textClusters` (glyph
+  clusters catch wall-crossing bubbles), `eraseBubbles` (bubbles + text wiped from the
+  ink), `sealDoorGaps` (short empty runs flanked by a thin wall cross-section are filled;
+  one thin flank suffices — corner-hung doors; narrow rooms have thick flanks both sides
+  and are never filled), `autoDetectRooms` upgrades (MAX-pooled ink downsample so 1–2px
+  vector walls survive; seal-then-dilate; label-ghost filter; `maxSide`/`keepBorder`/
+  `dilate`/`minAreaFrac` options), `snapReachFor` (reach for a placed seed = 25% of the
+  seed's own short side, capped by the old default), `medianBubbleShort` (p70 — robust to
+  junk detections; this is the sheet's printed-text size signal).
+- **planTiles.ts** (NEW) — `tileGrid` sizes an overlapping tile grid from the bubble size
+  (no bubbles → single shot, so magicplan scans and photos are untouched);
+  `dropEmptyTiles`; `mergeTileRooms` merges per-tile readings into whole-sheet
+  coordinates: same-number fragments union across seams, clipped readings lose to whole
+  ones, cross-tile zone wrappers drop, and **readings with different printed numbers
+  always coexist** — a printed number is evidence of a distinct room, so only same/no-
+  number overlaps dedupe. `tilesForPicture` is the browser-side analysis.
+- **aiPlanImport.ts** — `readPlanTiled` reads tiles concurrently (3 lanes, per-tile
+  `emptyOk`, a failed tile fails the read honestly), merges, keeps progress messages
+  plain ("reading section 3 of 15…"). `TILE_PROMPT_NOTE` tells the model edge-cut rooms
+  are fine. Wired into BOTH `AiPlanImport.handleFile` (upload) and PlanStudio's
+  "✨ Max draws the rooms" retry (`StudioPicture.renderRegion` carries the source
+  re-render hook). The locate+crop now runs in BOTH answer modes (it was read-mode only —
+  the no-sizes flow tiled the title block).
+- **studioIngest.ts** (NEW) — the Calibration Editor's `cleanSnap` + AI-seed ingest
+  extracted pure (PlanStudio delegates), so the harness drives EXACTLY the production
+  path. Ingest uses the scale-aware reach and the number-aware no-overlap rule; the
+  editor's snap gray is bubble-erased (`eraseBubbles(buildGray(...))`).
+- **bench/** (NEW) — the scoring harness; see `bench/README.md` for the full workflow and
+  scores. Playwright drives the real modules through the vite dev server with
+  api.anthropic.com stubbed per tile. **Nothing derived from the real plan is committed**
+  (PDF, answer key, readings all gitignored — public repo, real hospital); scripts
+  regenerate everything from a dropped-in PDF.
+
+**Staging feedback round (same day, Josh's first real run — on Fable 5)**: wall-TRACE
+shapes (the model outlining wall lines instead of floor, chapel/lobby area) are now
+rejected by an average-width test; doorway needle SPIKES from the snap's corner rebuild
+are filtered (`dropSpikes`); a dedicated whole-sheet CORRIDOR PASS reads the circulation
+space in one look and merges as a pseudo-tile (corridors fragment badly tile-by-tile);
+prompts now spell out that corridors are wall-to-wall floor with their printed tags and
+that doorway gaps never merge rooms; and the no-overlap rules got a hard principle — a
+NUMBERED reading only ever loses to its own number, so sloppy corridor polygons can't
+eat rooms. Round 2 (same day, hollow walls + missing rooms): walls on professional sheets have
+WIDTH (two lines + cavity) — snapToWalls now seats every edge on the wall face NEAREST
+the room's interior (raw face scan; a narrow white run behind a line is the cavity, a
+wide one is the room), and the border-to-border rule checks for wall ink between two
+edges before closing a gap, so neighbouring fills stop draping over walls and
+overlapping. Shapes floating in blank space (a corridor polygon hallucinated into the
+courtyard) are dropped by a boundary-support test — unless they carry a printed number.
+And THE GAP FILL: after Max's rooms land, autoDetectRooms runs on the studio's own
+bubble-erased gray and every enclosed room nothing covers is added as an unnamed shape
+("N drawn from the plan's own lines — they need names"); oversized enclosures are
+skipped (a courtyard is enclosed too — no real room is >5% of the sheet). Bench after
+round 2: 100% clean, 98.4% at ±1.5% jitter, +31 gap-filled rooms on the benchmark
+sheet, corridors 5/8. The AI model
+moved to claude-fable-5-1 everywhere (reader, suggestions, proxy default — the proxy
+FUNCTION must be redeployed to pick that up; done on staging 2026-09-03).
+
+**Follow-ups / open**: corridor naming across tiles (fragments union under one name; EW2C/
+F/G/H names get lost to per-tile leaks — corridors are not in the ≥90% room metric);
+rooms opening into wide lobbies can't be separated by the LOCAL reader (the vision model
+reads them fine — the harness documents them in extra-readings.json); staging validation
+against the real model is the next step (the harness's reader is a conservative stand-in);
+NW/SW/CW wings unlabelled (key covers EW — extending is mechanical: bubbles.mjs montage →
+make-key.mjs).
+
+## 12t. THE MOTION SYSTEM — TACTILE PRESS/HOVER PHYSICS (2026-09-04)
+
+Josh's "$30M feel" initiative, step 1 of 3 (next: the 3D showcase view with a
+spin-and-settle load animation; then rolling every screen onto the system).
+The spec in his words: clicks should feel like pushing a real button with
+pushback; room hovers should bloom slightly and a beat late, never snap;
+treat it like a video game where feel matters.
+
+**`src/motion.css`** — one motion law for both React apps, imported AFTER
+`styles.css` / `pro.css` in each entry so it wins the cascade at equal
+specificity:
+- Tokens: `--m-press` 70ms (contact), `--m-glide` 200ms (color/glow),
+  `--m-bloom` 260ms + `--m-bloom-delay` 50ms (room hovers), `--m-settle`
+  320ms with `--m-spring: cubic-bezier(.34,1.56,.64,1)` (overshoot ~6% and
+  settle back = the rebound).
+- Press physics use the independent **`scale` property** (not `transform`)
+  so they COMPOSE with the theme layers' translateY hover lifts: base state
+  carries the slow spring transition (that animates the release), `:active`
+  swaps in the fast 70ms press to `scale .96` (tiles/cards `.985`).
+- Room bloom asymmetry: the `:hover` state carries `transition-delay`
+  (transition props come from the DESTINATION state), so hovering blooms
+  50ms late but un-hovering releases instantly — sweeping the cursor across
+  a dense map never strobes.
+- Calibration Editor shapes got a `.studio-shape` class on their `<g>`
+  (PlanStudio.tsx) — hover bloom/press are scoped to `.tool-select` only so
+  nothing wobbles under the reshape pins; the pins themselves swell 1.3x on
+  hover. Panels/modals/toasts settle on the spring instead of appearing.
+- `prefers-reduced-motion` kills all of it.
+
+**classic.html**: the archive has its OWN deliberate motion language
+(`--om-ease` with `!important`-forced .18s durations on button/a/select/
+input) — do NOT fight it. make-classic.cjs injects only press DEPTH
+(`button:active, .cursor-pointer:active { scale: .96 }`) at the END of body
+(the archive's styles out-cascade a head injection), and the archive's own
+curve animates it. Declaring transitions there would override the archive's
+per-element transition lists and kill its hover motion — learned the hard
+way, don't repeat it.
+
+Verified live via Playwright computed styles: spring transition + pressed
+scale 0.96 on `.pbtn`/`.btn`, 50ms-in/0ms-out delay on `.proom`, classic
+press riding om-ease. 376 tests green, tsc clean, classic boots with no
+page errors.
+
+## 12u. THE 3D SHOWCASE VIEW + SPIN-AND-SETTLE (2026-09-04)
+
+Step 2 of the "$30M feel" initiative (step 1 = §12t motion system; step 3 =
+rolling every screen onto the design system). Josh's spec: the matrix should
+read like his futuristic mockups — tilted, extruded, "more of a cube look" —
+but it must stay TRUE to the detected rooms (his explicit worry: AI-video
+generation invents artifacts), plus a spin-around-and-settle animation every
+time a floor plan loads.
+
+**`src/pro/iso3d.ts`** — the projection, pure math (18 unit tests):
+- ORTHOGRAPHIC axonometric: spin around plan center, tilt back
+  (REST_TILT≈55°, REST_SPIN≈-10°), z straight up. Orthographic ⇒ the
+  ground-plane mapping is ONE affine matrix (`isoGroundMatrix` →
+  ctx.transform lays the baked neon plan down as the floor), parallel
+  lines stay parallel, and `isoUnproject` is exact — a tap on a roof
+  resolves to the same plan coords the 2D map uses. No perspective warp,
+  nothing invented.
+- `extrudeRoom`: every polygon edge → a wall quad, lit by edge direction
+  (fake key light from screen-left), walls sorted far-to-near; painter's
+  order across rooms by centroid depth (`drawOrder`). Works because rooms
+  are disjoint and share one height.
+- `introPose(t)`: the load animation path — comes in flat, pulled back and
+  ~110° over-rotated, sweeps around (easeOutCubic) and lands on the rest
+  pose with a breath of overshoot (easeOutBack). INTRO_MS=1700.
+
+**`src/pro/Map3D.tsx`** — the canvas renderer (canvas, not SVG: the intro
+animates every face every frame; 200 rooms × ~7 faces would choke React
+reconciliation). Self-contained gestures copied from MapCanvas (tap slop,
+pinch, drag pan, wheel zoom). Scene state in refs; repaints ON DEMAND —
+rAF runs only during the intro and the hover/press lerps. Hover blooms the
+block taller over ~180ms (the motion system, canvas edition), press sinks
+it, the selected room stands 1.45× tall with a white glowing outline.
+Labels billboard upright on the roofs, gated by projected roof width, and
+hidden until the intro is 75% settled. `prefers-reduced-motion` skips the
+intro. Dim rooms (the #33404d "not in this schedule" slate) render low
+(0.35× height) and faint. overlayFor renders as a translucent coat (NOT
+the 2D stripes — v1 simplification). 220-room stress bench: 1.8ms/frame.
+
+**`MapCanvas.tsx`**: `view3d` state persisted in sessionStorage
+(`om_map_3d`) so the choice sticks across every map page; the 3D/2D toggle
+rides the zoom stack (`.map3dbtn`); zoom/fit buttons route to the Map3D
+imperative api ref when 3D is on. All map surfaces get it: Max Schedules,
+Max Space Map View, Floor Care / Sanitation / Policing pickers — same
+fillFor/flagFor/marker/onCanvas contracts in both views (a Sanitation dock
+tap unprojects at z=0).
+
+Verified in the browser: intro sweeps and settles, hover cursor + bloom,
+click opens the room sidebar, 2D↔3D round-trip clean, no page errors.
+394 tests green. Follow-ups: two-tone stripes in 3D; maybe drag-to-rotate.
+
+## 12v. STEP 3 — THE WHOLE HUB ON ONE SYSTEM (2026-09-05)
+
+The final step of the "$30M feel" initiative (§12t motion, §12u 3D view).
+Method: a full Playwright screenshot survey of every hub-owned screen
+first (Max Space ×4 tabs, Schedules ×3, Floor Care, Sanitation, Policing,
+Workload, Scope, Exporting — scratchpad survey/, not committed), then fix
+what the survey actually found rather than guessing. Verdict: the deep
+theme already covered layouts and cards well; exactly TWO systematic gaps
+appeared on every screen, both fixed in a "STEP 3" layer at the END of
+pro.css (after the deep theme — same cascade law).
+
+1. **Native form controls broke the glass.** Bare `<select>`s (Room
+   List's "+ Add to…", Floor Care's task filter, all of Scope's rate
+   dropdowns), default checkboxes, and stock time inputs rendered
+   browser-white. Fix: `:root { color-scheme: dark }` (native pickers,
+   dropdown lists, calendar popups all render dark) + the input-glass
+   treatment on bare `select`/`option`/`input[type=time|date]` +
+   `accent-color: #0d9488` on checkboxes/radios. Scope's formula inputs
+   (which were washed-out gray) came right with color-scheme alone.
+
+2. **Screens appeared instead of arriving.** The `arrive` keyframe
+   (rise 14px + settle, 0.4s on --m-out) now runs on every card family
+   on MOUNT, with a per-sibling nth-child stagger (45ms steps, capped
+   ~310ms at child 8+; `backwards` holds cards invisible through their
+   delay). Tab switches remount their subtree so the arrival replays
+   when a screen is pulled up — and never on mere data edits, because
+   React keeps live nodes mounted. `.wi-table tbody tr` ripples in
+   faster (30ms steps) — a list should feel poured, not dropped.
+   Verified live: wi-cards KPIs measure 0/45/90/…/310ms.
+
+Notes: no skeleton shimmer was added — the hub is local-first and
+renders synchronously, there is nothing async to skeleton. Classic's
+Dashboard/Floor Plans pages looked dim in mid-transition screenshots;
+that's the archive's own routeIn/fadeUp animation settling (verified
+bright after settle) — archive-owned, untouched. 394 tests green;
+build:classic not needed (pro.css only).
+
+## 12w. THE STRUCTURED CAD IMPORTER (2026-09-12)
+
+A client handed Josh a whole hospital first floor as DWG (FV-01, AC1032).
+Inventory (via the GPL libredwg WASM in the dev sandbox — a DEV TOOL only,
+never shipped): a facilities-managed file with 859 closed space polylines
+on SP-PLINE and 858 block-attribute tags (Room Number / Room Usage), every
+tag matching a boundary. Files like that don't need detection — they get
+TRANSCRIBED.
+
+**`src/pro/cadImport.ts`** (pure, 15 tests): a string-aware DXF entity
+reader (LWPOLYLINE/POLYLINE closed polys, TEXT/MTEXT with inline-format
+cleanup, INSERT+ATTRIB tag capture, $INSUNITS) + the room builder:
+- candidates = closed polylines with room-plausible areas; units from the
+  header, or guessed so the median room lands in a believable sq-ft band.
+- matching runs TWICE: pass 1 lets strong tags claim the smallest
+  containing candidate and VOTE for the space layer; pass 2 rematches
+  preferring that layer. Without pass 2 a tag over a desk claims the desk
+  outline — FV-01 lost 44 rooms to exactly that.
+- free TEXT is fallback-only (grid bubbles live there); untagged polys
+  survive only on the winning layer (real unlabeled spaces, not furniture).
+- `cadUsageToScopeLabel`: the CAD abbreviation dictionary (PAT. RM.→Patient
+  Room, TLT→Restroom, CORR→Corridor, EVS/SOILED→Utility Room…), deliberately
+  conservative — unknown words stay "" = Needs review, never a silent wrong
+  price. Soiled-utility KEEPS its words in roomName so Max Sanitation's
+  /soil/i room matcher still fires.
+- `cadLooksStructured`: ≥5 numbered rooms and ≥50% numbered → the upload
+  flow skips the AI read entirely.
+
+**Wiring**: AiPlanImport tries the structured path first for every .dxf;
+on success the Calibration Editor opens with EXACT shapes (new PlanStudio
+prop `initialExactShapes` — loaded as-is, never snapped/deduped/ingested),
+knownSqFt from the geometry, sizesFromFile=true. Polygons land on the
+raster through the shared `dxfTransform` (extracted from dxfToPicture — one
+mapping, never re-derived). CAD rasters draw at ~4px/ft (2000–4800px cap)
+so a 954-ft floor stays crisp under zoom. Unstructured DXF falls through
+to raster+AI as before. The DWG error message now teaches Save-As-DXF.
+
+**Validated on the real file**: converted FV-01 DWG→DXF in the sandbox
+(scratchpad script; the client file and its DXF stay OUT of the repo —
+public repo, real hospital), then E2E through the real UI: upload → 2.2s →
+859 shapes in the editor, 857 numbered, 0 orphan tags, 73% auto-typed to
+Scope, exact sq ft (median 148). Clicked FVE1-880: curved corridor, 2416
+ft², type Corridor. 409 tests green; build:classic untouched.
+
+**Field fix, same day (Josh's staging screenshot — "crooked rooms")**: the
+CAD rooms shipped straight but DISPLAYED crooked. Root cause was ours, twice
+over: shipped plans stored geometry on a fixed 1400px canvas (1.5px/ft on a
+954-ft floor → rooms 3–26px wide), and `rectifyForDisplay`'s fixed 2.5px
+vertex merge ate real 2.3px wall jogs, welding two straight walls into one
+diagonal. Fixes: `rectifyForDisplay` tolerances are now PROPORTIONAL to the
+polygon (merge ≤ 8% of the short side capped at 2.5px; never flatten a jog
+deeper than 25% of the room — big sloppy AI/hand traces still square up),
+and PlanStudio ships at the PICTURE's own resolution (`shipSize`, capped
+4800). Verified E2E: upload → ship → stored visualPts for FV1-521/522/523
+measure 0.00° off-axis, FV1-028 keeps its genuine 26° notch. 412 tests.
+
+## 12x. DEPARTMENT EVERYWHERE + UNKNOWN-TYPE VISIBILITY (2026-09-13)
+
+Josh's asks after the first real CAD import:
+- **Unknown space types**: nothing changed in the RULE (an unknown usage
+  ships with roomType "" = Needs review — never a silent wrong price), but
+  the CAD import notice now NAMES the unknown words with counts ("12 rooms
+  use words Scope doesn't know yet (VEST. ×6, ALCOVE ×6, …)") so the
+  manager can add them as Scope room types in one trip or pick per room.
+- **Department on the room click**: the Max Space Map View sidebar
+  (SpaceSidebar) gained a Department field — datalist of every department
+  the account already uses, typing a new one creates it (same pattern as
+  RoomEditor / the Calibration Editor). ScheduleRoomSidebar deliberately
+  not touched: it's assignment-focused and links to "edit room details".
+- **Rover speaks departments**: roverParse understands labeled
+  "department <words>" (parsed BEFORE the room number so "department 4
+  east room number 102" doesn't donate digits; Title Cased; new FILLER).
+  RoverMode shows the field (datalist) and the department is STICKY for
+  the walk: say "department imaging" once and every room opened after
+  pre-fills it until a different one is spoken/typed — a walker validates
+  a wing at a time. The room's own saved department always wins over the
+  sticky one. 417 tests (5 new parse cases); verified live in the sidebar.
+
+## 12y. SUPABASE DATA API GRANTS (2026-09-23)
+
+Supabase email: from **2026-10-30** new tables in `public` no longer get
+automatic Data API grants. Our live project's existing tables are
+unaffected (they keep their grants), but all four migrations relied on the
+auto-grant — a FRESH environment built from them after that date (new
+customer project, DR rebuild, `supabase db reset`, preview branch) would
+come up with every table unreachable through supabase-js.
+
+Fix: **migration 0005_data_api_grants.sql** — explicit grants on all
+tables/sequences to `authenticated` + `service_role`, deliberately NOT
+`anon` (every policy requires an authenticated org member; invite
+redemption is a security-definer function — anon never passed RLS, so this
+is a small hardening with zero behavior change). RLS stays the only
+security boundary. Safe to apply to the live project any time (re-grants
+are no-ops): `npx supabase db push` or paste into the SQL editor.
+
+**CONVENTION (also in the migration header): every future `create table`
+must, in the same migration, enable RLS + grant to authenticated /
+service_role — or the Data API can't reach it.**
+
+## 12z. SCHEDULES-MAP WORKFLOW FIXES + THE DEPARTMENT SYSTEM (2026-09-25)
+
+Josh's production batch:
+- **Zoom no longer resets per tap**: MapCanvas's fit effect keyed the whole
+  `plan` OBJECT, which is rebuilt on every commit — each room tap while
+  assigning a schedule refit the map. Now keyed `[plan.id, plan.w, plan.h]`.
+- **Live schedule bar on the map**: the "✏ Editing …" strip carries the
+  SAME `scheduleMinutes` total and HoursBar as the Schedules tab (one
+  truth — both always used the same totaler; the map just never showed
+  target or bar). Minutes legitimately go DOWN too: tapping a room already
+  on the schedule REMOVES it, and taking a room whose base clean another
+  schedule owned shrinks that one.
+- **Room minutes on labels**: confirmed for Josh — that's computeMinutes
+  (General Clean + type minutes + tasks), the same number schedules sum.
+- **SpaceSidebar Save button**: edits now BUFFER in a draft and commit on
+  💾 Save (button reads "✓ Saved" when clean); switching rooms or closing
+  auto-saves pending changes, so nothing is ever lost. Room-type changes
+  refresh auto-tasks in the draft live. Floor type verified: unset prices
+  at the hard-floor rate (isCarpet("")=false) — times always flow once
+  sq ft exists; the picker's empty option now SAYS so.
+- **THE DEPARTMENT SYSTEM** (`departments.ts`, pure + 6 tests): colors in
+  `v7.settings.departmentColors` (validated on read); `colorForDept` =
+  stored pick, else a stable hash into DEPT_PALETTE (10 colors, disjoint
+  from SCHED_COLORS so an outline never reads as a schedule fill).
+  Max Space Map View → **🏷 Departments**: tap rooms to select (white
+  stripes), name + color dot + "✓ Assign N rooms"; the map recolors by
+  department, legend lists them. Max Schedules map → **🏛 Dept outlines**:
+  ONE border around the OUTER edge of all the department's rooms combined
+  — never per-room boxes (Josh's correction to v1, same day). A department
+  split by another department's corridor gets a separate border per
+  disconnected cluster (his administration-split-by-billing example).
+  Geometry in `departmentBorders()` (departments.ts, pure + 10 tests in
+  departmentBorders.test.ts): paint room polygons into a ≤1440-wide grid,
+  then a morphological CLOSE — dilate to bridge wall-thickness gaps
+  (joinPx = max(8, min(planW,planH)*0.008); neighbours merge, corridors
+  don't), erode the same amount so the traced line lands ON the rooms'
+  own walls (v2's dilate-only halo cut through neighbouring rooms — Josh
+  caught it) — 4-connected components, edge-walker contour trace per
+  component, RDP simplify, back to plan px. **Shared walls hatch between
+  the two colors** (Josh, same correction): `outlineRuns()` samples each
+  loop, stretches within joinPx*1.25+2 of ANOTHER department's border
+  become one midline run carrying both colors (emitted once, by the
+  lower-indexed border); MapCanvas draws those as two overlaid dashed
+  paths (dasharray 10/10, offset 10 — alternating color ticks), solid
+  runs keep the loop's crisp original vertices. `departmentOutlineRuns()`
+  is the one-call MapsApp uses. MapCanvas `outlines` prop
+  (`.deptborder`, non-scaling 5px stroke, pointer-events none) renders
+  after the plan image, under labels; rooms keep stroke=fill. The same
+  borders show in Max Space dept mode. 3D view outlines: not yet
+  (follow-up).
+
+433 tests green. E2E-verified: zoom survives taps, bar live-updates
+(including the remove case), save round-trip, 2-room assign with stored
+color, cluster borders on both maps hugging the room union to ≤0.4px
+(the halo overshot ~15px), and the demo's one true shared wall
+(Bedroom 3 ↔ Bedroom 2, 7px) rendering as a single two-color hatched
+midline while corridor-separated departments stay solid-only.
+
+## 12aa. SCHEDULES EXPORT — A RAW WORKBOOK TO RE-CREATE THE SCHEDULE (2026-09-29)
+
+Josh's client-handoff ask, sharpened same day: the client's digitization
+partner must be able to RE-CREATE the schedules in their own system —
+however long each task takes, the order, the breaks, everything. Admin
+Settings → Exporting's third tile, **🗓 Schedules export — Excel**
+(`schedulesWorkbookSheets` in exportData.ts, pure + 6 tests in
+exportData.test.ts), writes FIVE sheets joined by Schedule # (+ Stop #):
+
+- **Schedules** — one row per schedule: #, name, shift + start/end times,
+  days ("Mon Tue …" via sched.days), worker, target hours, and the doc
+  totals (room stops, room minutes, schedule-task minutes, break minutes,
+  total).
+- **Room Stops** — one row per room in cleaning order (the tap order),
+  timed start→end (end = start + minutes, so each stop's end is the next
+  stop's start), with the designations (building/floor/department/type/
+  sqft/priority), the visit's task summary and its minutes.
+- **Task Minutes** — one row per task per stop: how long EACH task takes
+  in that room, straight from computeMinutes' own itemized lines
+  (General Clean formula line, room-type qualifier, each extra task),
+  plus a "Room minimum top-up" row when the per-room minimum clamps up —
+  so the task rows always sum to the stop's minutes.
+- **Schedule Tasks** — discharges/project work with count, minutes and
+  linked room numbers.
+- **Breaks** — each break's window, minutes, and after which stop it falls.
+
+All built on buildScheduleDoc — the same engine as the printed sheet, so
+the file always matches the screen. Deliberately ALL schedules (scope
+pickers don't apply — a schedule split by scope would mislead an ingest)
+and raw on purpose: no totals pages, no formatting. Filename
+`opsmatrix-schedules-YYYY-MM-DD.xlsx`.
+
+439 tests green (incl. exact per-task math: 180 ft² carpet room → General
+Clean 4.5m + High Dusting 1.5m; counted discharges 4×25=100m with the
+linked room resolved to its number). E2E: exported live from the demo
+walkthrough — "✓ 3 schedules, 10 room stops, 5 sheets".
 
 ## 13. BUILD & DEPLOY WORKFLOW
 

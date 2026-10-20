@@ -16,7 +16,7 @@
 //   • Re-import must be safe: rows are matched to existing rooms by source
 //     identity, and a value the manager hand-edited is never clobbered.
 import {
-  type Rules, typeIdFromLabelStrict, autoTasksFor, computeMinutes, loadRules
+  type Rules, typeIdFromLabelStrict, autoTasksFor, tasksAfterFloorChange, computeMinutes, loadRules
 } from "./rules";
 
 /** one worksheet as raw cells (SheetJS sheet_to_json header:1, or CSV rows) */
@@ -260,7 +260,10 @@ export function scopeTypeMatch(rules: Rules, sourceName: string): string | null 
   return hits.length === 1 ? hits[0] : null;
 }
 
-const TYPE_RULES: [RegExp, string][] = [
+// a rule may name a preferred type and a stand-in: the dedicated built-ins
+// added 2026-10-12 (Nurses Station, Conference Room, Break Room / Kitchen,
+// Laboratory, Clean Supply / Med Room) win while the account has them
+const TYPE_RULES: [RegExp, string | string[]][] = [
   [/\b(pat|patient)\b.*\b(tlt|toilet|bath)|^pat\.?\s*tlt/i, "restroom"],
   [/tlt|toilet|restroom|bathroom|lavat|shwr|shower|\bwc\b/i, "restroom"],
   [/\b(pat|patient)\b|patient\s*(rm|room)|^pt\.?\s*(rm|room)/i, "patient-room"],
@@ -271,12 +274,17 @@ const TYPE_RULES: [RegExp, string][] = [
   [/emergency|\ber\b(?!\w)/i, "emergency-room"],
   [/corr(idor)?\.?$|^corr/i, "corridor"],
   [/hallway|\bhall\b/i, "hallway"],
-  [/nurses?\s*stn|nurses?\s*station|nourish|\bdictation\b|work\s*(area|rm|room)|\bcopy\b|recep(tion)?\b/i, "office"],
-  [/office|\bofc\b|dietitian|social\s*work|admin|conf(erence)?|consult|interview|registrar|classroom|class\s*rm|group\s*rm|training/i, "office"],
+  [/\blab\b|laboratory|pathology|histology|cytology|blood\s*bank/i, ["lab"]],
+  [/nurses?\s*stn|nurses?\s*station/i, ["nurses-station", "office"]],
+  [/nourish|\bdictation\b|work\s*(area|rm|room)|\bcopy\b|recep(tion)?\b/i, "office"],
+  [/conf(erence)?|meeting\s*(rm|room)|board\s*(rm|room)/i, ["conference-room", "office"]],
+  [/office|\bofc\b|dietitian|social\s*work|admin|consult|interview|registrar|classroom|class\s*rm|group\s*rm|training/i, "office"],
   [/waiting|\bwait\b/i, "waiting-room"],
   [/lobby|vest(ibule)?\.?\b|entry|entrance/i, "lobby"],
-  [/lounge|break\s*(rm|room)|staff\s*rm|on.?call|sleep|respite|family\s*rm|kitchen|vending/i, "lounge"],
-  [/soiled|clean\s*util|\butil(ity)?\b|hskpg|housekeeping|\bevs\b|janitor|med\.?\s*(rm|room)|meds\.?\b|medication|decontam|^ante\b|\blinen\b|equip\.?(ment)?\s*(rm|room|stor|alcove)/i, "utility-room"],
+  [/break\s*(rm|room)|kitchen|vending/i, ["break-room", "lounge"]],
+  [/lounge|staff\s*rm|on.?call|sleep|respite|family\s*rm/i, "lounge"],
+  [/clean\s*(util|supply)|med\.?\s*(rm|room)|meds\.?\b|medication/i, ["clean-utility", "utility-room"]],
+  [/soiled|\butil(ity)?\b|hskpg|housekeeping|\bevs\b|janitor|decontam|^ante\b|\blinen\b|equip\.?(ment)?\s*(rm|room|stor|alcove)/i, "utility-room"],
   [/locker|lkrs?\.?\b/i, "locker-room"],
   [/stor(age)?\.?$|^stor|closet|\bsupply\b/i, "storage"],
   [/stair/i, "stairwell"],
@@ -339,8 +347,11 @@ export function normalizeRoomType(
   // the Scope library itself: a type the manager added is recognized here
   const scoped = scopeTypeMatch(rules, raw);
   if (scoped) return labelFor(rules, scoped);
-  for (const [re, id] of TYPE_RULES) {
-    if (re.test(raw)) return labelFor(rules, id);
+  for (const [re, ids] of TYPE_RULES) {
+    if (!re.test(raw)) continue;
+    if (typeof ids === "string") return labelFor(rules, ids);
+    const id = ids.find((x) => rules.roomTypes.some((rt) => rt.id === x));
+    if (id) return labelFor(rules, id);
   }
   return null;
 }
@@ -368,7 +379,7 @@ export function resolvePendingRoomTypes(
     if (!label) continue;
     sp.roomType = label;
     if (!Array.isArray(sp.spaceTasks) || (sp.spaceTasks as unknown[]).length === 0) {
-      sp.spaceTasks = autoTasksFor(rules, typeIdFromLabelStrict(rules, label) ?? "");
+      sp.spaceTasks = autoTasksFor(rules, typeIdFromLabelStrict(rules, label) ?? "", String(sp.floorType ?? ""));
     }
     sp.estimatedCleaningMinutes = computeMinutes(rules, sp as never).total;
     sp.updatedAt = new Date().toISOString();
@@ -671,7 +682,7 @@ export function importRoomList(
       if (!sp.roomType) sp.roomType = "";
       if (!sp.floorType) sp.floorType = "";
       sp.spaceTasks = sp.roomType
-        ? autoTasksFor(rules, typeIdFromLabelStrict(rules, String(sp.roomType)) ?? "")
+        ? autoTasksFor(rules, typeIdFromLabelStrict(rules, String(sp.roomType)) ?? "", String(sp.floorType))
         : [];
       sp.estimatedCleaningMinutes = computeMinutes(rules, sp as never).total;
       spaces.push(sp);
@@ -690,6 +701,10 @@ export function importRoomList(
           continue; // already right
         }
         if (curBlank || String(cur ?? "") === String(prev[f] ?? " ")) {
+          // a new floor swaps the floor's automatic tasks (Mopping ↔ Vacuuming)
+          if (f === "floorType" && Array.isArray(existing.spaceTasks)) {
+            existing.spaceTasks = tasksAfterFloorChange(rules, existing as never, String(v));
+          }
           existing[f] = v;          // still what we set last time → safe to update
           source.applied[f] = v;
           changed = true;

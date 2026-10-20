@@ -1,4 +1,4 @@
-// Read a floor plan PICTURE with Claude Fable 5 and rebuild it as an
+// Read a floor plan PICTURE with Claude Fable 5.1 and rebuild it as an
 // OpsMatrix plan.
 //
 // The uploaded file (PDF page, photo, screenshot, coloured architectural
@@ -18,7 +18,7 @@ import { guessType, estimateMinutes, type ImportResult } from "./fusionEntry";
 
 export type { ImportResult };
 
-export const AI_MODEL = "claude-fable-5";
+export const AI_MODEL = "claude-fable-5-1";
 const API_URL = "https://api.anthropic.com/v1/messages";
 
 /** Room types the model may choose from — the classic rate table's own keys. */
@@ -113,11 +113,61 @@ export const PLAN_PROMPT = [
   "  the printed figure. If no area is printed, return 0 — do not estimate.",
   "• roomType — the closest match from the allowed list.",
   "",
-  "Include corridors and hallways: they are cleaned too. Exclude anything",
-  "outside the building envelope, and exclude shafts, chases and stairwells",
-  "that are not cleaned floor area.",
+  "Include corridors, hallways, lobbies and waiting areas: they are cleaned",
+  "too. A corridor's polygon is its FLOOR AREA — it spans wall-to-wall",
+  "across the corridor's width and runs the corridor's length. NEVER trace",
+  "along a wall line itself: a shape that follows a wall and is only a",
+  "wall-thickness wide is wrong, always. Corridors usually carry their own",
+  "printed tag in a rounded bubble (like EW2C or CW2A) — use it as the",
+  "roomNumber. Exclude anything outside the building envelope, and exclude",
+  "shafts, chases and stairwells that are not cleaned floor area.",
+  "",
+  "A GAP in a wall is a doorway. The wall between two rooms still separates",
+  "them — never merge neighbouring rooms into one polygon because a doorway",
+  "connects them, and never let a polygon poke through a doorway into the",
+  "corridor.",
   "",
   "Return every room you can see. Do not stop early."
+].join("\n");
+
+/**
+ * The corridor pass: corridors span the whole sheet, so tile-by-tile
+ * reading fragments them badly — but they are also the LARGEST features on
+ * the plan, readable from one whole-sheet look. This dedicated pass asks
+ * only for the circulation space and is merged in as one more "tile".
+ */
+export const CORRIDOR_PROMPT = [
+  "You are reading an architectural floor plan for a hospital cleaning",
+  "system. This pass is ONLY about the CIRCULATION SPACE: corridors,",
+  "hallways, lobbies, waiting areas and open atria — the walkable floor",
+  "between the rooms. Do NOT return the rooms themselves.",
+  "",
+  "For each corridor / lobby return:",
+  "• polygon — the corridor's FLOOR AREA as a closed outline in normalised",
+  "  image coordinates (0..1, [0,0] top-left). The polygon spans wall-to-wall",
+  "  across the corridor's width and follows its full length — an L- or",
+  "  U-shaped corridor is one polygon with corners. NEVER trace along a wall",
+  "  line: a ribbon one wall-thickness wide is wrong, always.",
+  "• roomNumber — the corridor's printed tag if one is shown in a rounded",
+  "  bubble (like EW2C, CW2A, NW2B). Empty string if none is printed.",
+  "• name — the printed tag, or a plain name like \"Corridor\" or \"Lobby\".",
+  "• squareFeet — 0 unless an area is printed.",
+  "• roomType — \"Corridor\" (or \"Lobby\" / \"Waiting Room\" where that is",
+  "  clearly what the space is).",
+  "",
+  "Cover ALL of the circulation space — a wing's corridor that runs the full",
+  "length of the wing gets a polygon running that full length. Exclude the",
+  "rooms, shafts and stairwells."
+].join("\n");
+
+/** appended when the picture is one tile of a larger sheet */
+export const TILE_PROMPT_NOTE = [
+  "",
+  "NOTE: this image is one SECTION of a larger floor plan. Rooms cut off by",
+  "the image edge are normal — return the visible part of them anyway, and",
+  "read their number if it is visible. Sections overlap, so a room that is",
+  "only partly visible here will be read whole from a neighbouring section",
+  "and the readings merged."
 ].join("\n");
 
 // ── pass 1: find the drawing on the sheet ───────────────────────────────────
@@ -279,6 +329,12 @@ export interface ReadPlanOptions {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
+  /** an empty reading is a normal answer (a blank tile), not an error */
+  emptyOk?: boolean;
+  /** this picture is one SECTION of a larger sheet — read edge rooms too */
+  tileNote?: boolean;
+  /** replace the room-reading prompt (the corridor pass uses this) */
+  promptOverride?: string;
 }
 
 /** thrown with a plain-English message the UI can show as-is */
@@ -290,7 +346,7 @@ function splitDataUrl(dataUrl: string): { mediaType: string; data: string } {
   return { mediaType: m[1], data: m[2] };
 }
 
-/** Ask Fable 5 to read the plan. Network only — no drawing happens here. */
+/** Ask Fable 5.1 to read the plan. Network only — no drawing happens here. */
 export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReading> {
   const key = (opts.apiKey || "").trim();
   if (!key && !opts.proxy) {
@@ -311,7 +367,7 @@ export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReadi
       body: JSON.stringify({
         model: opts.model || AI_MODEL,
         max_tokens: 16000,
-        // Fable 5 thinks by default; effort is the depth control. No
+        // Fable 5.1 thinks by default; effort is the depth control. No
         // temperature/top_p — that model rejects sampling parameters.
         output_config: {
           effort: opts.effort || "high",
@@ -321,7 +377,11 @@ export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReadi
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: mediaType, data } },
-            { type: "text", text: PLAN_PROMPT }
+            {
+              type: "text",
+              text: opts.promptOverride ??
+                (opts.tileNote ? PLAN_PROMPT + TILE_PROMPT_NOTE : PLAN_PROMPT)
+            }
           ]
         }]
       })
@@ -356,6 +416,13 @@ export async function readPlanWithAI(opts: ReadPlanOptions): Promise<AiPlanReadi
   const rooms = sanitizeRooms(normalizeCoordinateScale(parsed.rooms, {
     width: opts.imageWidth, height: opts.imageHeight
   }));
+  if (!rooms.length && opts.emptyOk) {
+    return {
+      buildingName: (parsed.buildingName || "").trim(),
+      floorName: (parsed.floorName || "").trim(),
+      rooms: []
+    };
+  }
   if (!rooms.length) {
     // two very different situations — say which one happened
     const reported = Array.isArray(parsed.rooms) ? parsed.rooms.length : 0;
@@ -416,7 +483,7 @@ function pointInPolygon(poly: number[][], x: number, y: number): boolean {
 function explainHttpError(status: number, body: string): string {
   if (status === 401) return "That API key was rejected. Check it under Admin Settings → Max AI.";
   if (status === 400 && /retention/i.test(body)) {
-    return "Claude Fable 5 needs 30-day data retention enabled on the Anthropic account.";
+    return "Claude Fable 5.1 needs 30-day data retention enabled on the Anthropic account.";
   }
   if (status === 429) return "Claude is rate limited right now. Wait a moment and try again.";
   if (status >= 500) return "Claude is having trouble right now. Try again in a moment.";
@@ -691,6 +758,103 @@ export async function importPlanFromImage(
     floor: opts.floor || "",
     aspect: picture.aspect
   });
+}
+
+/**
+ * Read a large, dense sheet in TILES: each tile re-rendered at full
+ * resolution from the source (vector-sharp for PDFs), read on its own, and
+ * the readings merged back into whole-picture coordinates (planTiles.ts owns
+ * the layout + merge math). One tile ≡ the classic single-shot read.
+ *
+ * A tile that reads empty is fine; a tile that FAILS (network, key, rate
+ * limit) fails the whole read — half a floor plan silently missing is worse
+ * than an honest error.
+ */
+export async function readPlanTiled(
+  opts: ReadPlanOptions & {
+    tiles: { x0: number; y0: number; x1: number; y1: number }[];
+    renderRegion: (
+      box: DrawingBox, targetLongEdge: number
+    ) => Promise<PlanPicture>;
+    /** long edge each tile is rendered at (planTiles.TILE_RENDER_EDGE) */
+    tileEdge: number;
+    /** merge implementation (planTiles.mergeTileRooms) — injected so this
+     *  module stays free of a src/pro import cycle */
+    merge: (
+      perTile: { box: DrawingBox; rooms: AiRoom[] }[], w: number, h: number
+    ) => AiRoom[];
+    concurrency?: number;
+  }
+): Promise<AiPlanReading> {
+  const { tiles } = opts;
+  if (tiles.length <= 1) return readPlanWithAI(opts);
+
+  const results: { box: DrawingBox; rooms: AiRoom[]; building: string; floor: string }[] = [];
+  let done = 0;
+  const say = () => opts.onProgress?.(
+    `Max is reading the plan up close — section ${Math.min(done + 1, tiles.length)} of ${tiles.length}…`);
+  say();
+
+  const jobs = tiles.map((box) => async () => {
+    const pic = await opts.renderRegion(box, opts.tileEdge);
+    const reading = await readPlanWithAI({
+      ...opts,
+      imageDataUrl: pic.dataUrl,
+      imageWidth: pic.width,
+      imageHeight: pic.height,
+      emptyOk: true,
+      tileNote: true,
+      onProgress: undefined
+    });
+    results.push({ box, rooms: reading.rooms, building: reading.buildingName, floor: reading.floorName });
+    done++;
+    say();
+  });
+  const lanes = Math.max(1, Math.min(opts.concurrency ?? 3, jobs.length));
+  let next = 0;
+  await Promise.all(Array.from({ length: lanes }, async () => {
+    while (next < jobs.length) {
+      const job = jobs[next++];
+      await job();
+    }
+  }));
+
+  // corridors span the whole sheet and fragment badly tile-by-tile, but
+  // they're big enough to read from one whole-sheet look — a dedicated pass,
+  // merged like one more tile (the merge unions it with the tile fragments)
+  try {
+    opts.onProgress?.("Max is tracing the corridors…");
+    const corridors = await readPlanWithAI({
+      ...opts,
+      emptyOk: true,
+      tileNote: false,
+      promptOverride: CORRIDOR_PROMPT,
+      onProgress: undefined
+    });
+    if (corridors.rooms.length) {
+      results.push({
+        box: { x0: 0, y0: 0, x1: 1, y1: 1 },
+        rooms: corridors.rooms, building: "", floor: ""
+      });
+    }
+  } catch { /* the corridor pass is an upgrade — room reading stands alone */ }
+
+  const rooms = opts.merge(
+    results.map((r) => ({ box: r.box, rooms: r.rooms })),
+    opts.imageWidth || 1000,
+    opts.imageHeight || 1000
+  );
+  if (!rooms.length) {
+    throw new AiPlanError(
+      "No rooms could be found on that sheet. Make sure the floor plan itself is visible and the walls are legible."
+    );
+  }
+  opts.onProgress?.(`Found ${rooms.length} rooms — drawing the plan…`);
+  return {
+    buildingName: results.map((r) => r.building).find(Boolean) ?? "",
+    floorName: results.map((r) => r.floor).find(Boolean) ?? "",
+    rooms
+  };
 }
 
 function slug(s: string): string {

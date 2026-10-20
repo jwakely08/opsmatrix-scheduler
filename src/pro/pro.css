@@ -33,11 +33,16 @@ body {
   background: #0d1526; border-bottom: 1px solid rgba(148,163,184,.12);
 }
 .psel { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #94a3b8; }
-.psel select, .pfield select, .pfield input, .prule input, .prule select {
+.psel select, .pfield select, .pfield input, .prule input, .prule select, .gccard input, .gccard select {
   background: #1e293b; color: #e2e8f0; border: 1px solid rgba(148,163,184,.25);
   border-radius: 7px; padding: 6px 9px; font-size: 13px; font-family: inherit;
 }
 .linkhint { display: inline-flex; align-items: center; gap: 8px; color: #eab308; font-size: 13px; }
+/* live schedule total while tapping rooms on the map (same bar as Schedules) */
+.linkhint.schedlive { flex-wrap: wrap; }
+.linkhint.schedlive .fc-hoursbar { min-width: 150px; padding: 0; }
+.schedlivemins { font-style: normal; font-family: Consolas, monospace; font-size: 12.5px; color: #e2e8f0; }
+.schedlivemins.over { color: #f87171; }
 
 .pro-main { flex: 1; display: flex; min-height: 0; }
 .pro-mapwrap { flex: 1; position: relative; min-width: 0; }
@@ -131,6 +136,26 @@ body {
 }
 .prule b { min-width: 110px; }
 .prule em { font-style: normal; color: #64748b; font-size: 11.5px; flex: 1; }
+/* Scope room-type cards (2026-10-12): the General Clean formula, typed as given */
+.gccard { border: 1px solid rgba(148,163,184,.18); border-radius: 12px; padding: 12px 14px; margin: 10px 0; display: flex; flex-direction: column; gap: 9px; font-size: 13px; }
+.gchead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gcname { font-weight: 700; font-size: 14px; min-width: 180px; flex: 0 1 260px; }
+.gcsrc { color: #5eead4; font-size: 11.5px; }
+.gcgrow { flex: 1; }
+.gcformula { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #0d1526; border: 1px solid rgba(45,212,191,.25); border-radius: 10px; padding: 9px 12px; }
+.gceq { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 14px; }
+.gceq input[type=number] { width: 84px; text-align: center; font-weight: 700; }
+.gcexample { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: #94a3b8; }
+.gcexample b { color: #e2e8f0; }
+.gcissa { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-left: auto; font-size: 12px; }
+.gcrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.gclabel { color: #94a3b8; font-size: 12px; min-width: 170px; }
+.ptask.incl { opacity: .55; cursor: default; border-style: dashed; }
+.ptask.warn { border-color: #f59e0b; color: #fbbf24; background: rgba(245,158,11,.12); }
+/* a space task's floor trigger: its own line under the task */
+.pfloorrule { flex-basis: 100%; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: #94a3b8; padding-left: 4px; }
+.pfloorrule .gcsrc { flex-basis: 100%; }
+.pfloorrule .chipadd { max-width: 200px; }
 .prule.add { border: 1px dashed rgba(148,163,184,.3); border-radius: 9px; margin-top: 10px; padding: 10px; }
 .prule.add input { flex: 1; min-width: 90px; }
 
@@ -529,6 +554,16 @@ body {
   background: rgba(15,23,42,.92); color: #e2e8f0; border: 1px solid rgba(148,163,184,.25);
 }
 .pro-zoomctl button:active { background: #0d9488; }
+/* the 3D showcase toggle rides with the zoom stack */
+.pro-zoomctl .map3dbtn { font-size: 13px; font-weight: 700; letter-spacing: .04em; }
+.pro-zoomctl .map3dbtn.on {
+  background: #0d9488; border-color: rgba(45,212,191,.6); color: #fff;
+  box-shadow: 0 0 16px rgba(45,212,191,.35);
+}
+.pro-map3d { cursor: grab; }
+.pro-map3d:active { cursor: grabbing; }
+/* department borders: one contour around each contiguous wing */
+.deptborder { pointer-events: none; opacity: 0.95; }
 
 /* ── iPhone / small phones ── */
 @media (max-width: 640px) {
@@ -1036,14 +1071,14 @@ body {
 
 /* filters bar + inputs: quiet glass, luminous focus */
 .pro-filters { background: rgba(6, 11, 23, 0.85); border-bottom: 1px solid var(--edge); backdrop-filter: blur(6px); }
-.psel select, .pfield select, .pfield input, .prule input, .prule select,
+.psel select, .pfield select, .pfield input, .prule input, .prule select, .gccard input, .gccard select,
 .wi-search, input[type="number"], input[type="text"], input[type="password"] {
   background: linear-gradient(180deg, rgba(15, 26, 48, 0.8), rgba(9, 16, 32, 0.9));
   border-color: rgba(120, 160, 210, 0.22);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.psel select:hover, .pfield select:hover, .pfield input:hover, .prule input:hover, .prule select:hover { border-color: rgba(56, 189, 248, 0.4); }
-.psel select:focus, .pfield select:focus, .pfield input:focus, .prule input:focus, .prule select:focus, .wi-search:focus {
+.psel select:hover, .pfield select:hover, .pfield input:hover, .prule input:hover, .prule select:hover, .gccard input:hover, .gccard select:hover { border-color: rgba(56, 189, 248, 0.4); }
+.psel select:focus, .pfield select:focus, .pfield input:focus, .prule input:focus, .prule select:focus, .gccard input:focus, .gccard select:focus, .wi-search:focus {
   outline: none; border-color: var(--edge-hot); box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.12), var(--glow);
 }
 
@@ -1296,6 +1331,14 @@ body {
     drop-shadow(0 0 1.5px rgba(103, 232, 249, 0.9));
 }
 
+/* the BAKED matrix (neonMap.ts): transparent-ground cyan linework composited
+   like any ordinary image — no filter, no blend mode, so iOS Safari cannot
+   silently drop the look the way it does with the live-filter route above
+   (which stays only as the moment-of-load fallback). */
+.pro-map .planneon, .studio-canvas .planneon {
+  opacity: 0.96;
+}
+
 /* overlays always win: portaled to <body> and above every stacking context */
 .pro-modalback { z-index: 1000; }
 
@@ -1366,3 +1409,115 @@ body {
   .rover-brand { font-size: 13.5px; }
   .rover-fields { grid-template-columns: 1fr 1fr; }
 }
+
+/* ── Client Schedule Export controls (Josh, 2026-09-03) ─────────────────── */
+.clientrow {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 6px 10px 2px; font-size: 12.5px; color: var(--muted, #94a3b8);
+}
+.daypills { display: inline-flex; gap: 4px; }
+.daypill {
+  width: 26px; height: 26px; border-radius: 50%; padding: 0;
+  border: 1px solid rgba(120, 160, 210, 0.35);
+  background: transparent; color: inherit; font-weight: 700; cursor: pointer;
+}
+.daypill.on {
+  background: #0d9488; border-color: #14b8a6; color: #ffffff;
+  box-shadow: 0 0 8px rgba(20, 184, 166, 0.45);
+}
+.clienthours input, .clientbreaks select { margin-left: 6px; }
+.clienthours input + input { margin-left: 4px; }
+.bsched { flex-wrap: wrap; }
+.bsched .bsname { font-weight: 700; min-width: 170px; }
+.bswin { display: inline-flex; align-items: center; gap: 5px; }
+
+/* the delete-building ✕ on Explorer's building tiles (Josh, 2026-09-03) */
+.bldgdel {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  width: 28px; height: 28px; padding: 0; border-radius: 50%;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  background: rgba(15, 23, 42, 0.78);
+  color: #f87171; font-size: 14px; font-weight: 700; cursor: pointer;
+  line-height: 1;
+}
+.bldgdel:hover { background: rgba(127, 29, 29, 0.85); color: #ffffff; box-shadow: 0 0 10px rgba(239, 68, 68, 0.5); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   STEP 3 OF THE "$30M FEEL" (Josh, 2026-09-05): the WHOLE hub on one
+   system. The 2026-09-04 survey found exactly two systematic gaps across
+   every screen, fixed here. Keep this AFTER the deep theme — same cascade
+   law as that layer.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── gap 1: native form controls broke the glass. Every select, checkbox,
+   and time/date input was still stock-browser white on half the screens
+   (Room List's "+ Add to…", Floor Care's task filter, all of Scope). One
+   law now: the whole document is dark-scheme (native pickers, dropdown
+   lists and calendar popups render dark), and every control wears the
+   input glass whether or not a wrapper class ever styled it. ─────────── */
+:root { color-scheme: dark; }
+select {
+  background: linear-gradient(180deg, rgba(15, 26, 48, 0.8), rgba(9, 16, 32, 0.9));
+  color: #dbe7f7;
+  border: 1px solid rgba(120, 160, 210, 0.22);
+  border-radius: 8px; padding: 6px 9px; font-family: inherit; font-size: 13px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+select:hover { border-color: rgba(56, 189, 248, 0.4); }
+select:focus {
+  outline: none; border-color: var(--edge-hot);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.12), var(--glow);
+}
+select option { background: #0d1526; color: #dbe7f7; }
+input[type="time"], input[type="date"] {
+  background: linear-gradient(180deg, rgba(15, 26, 48, 0.8), rgba(9, 16, 32, 0.9));
+  color: #dbe7f7;
+  border: 1px solid rgba(120, 160, 210, 0.22);
+  border-radius: 8px; padding: 6px 9px; font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+input[type="time"]:focus, input[type="date"]:focus {
+  outline: none; border-color: var(--edge-hot);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.12), var(--glow);
+}
+input[type="checkbox"], input[type="radio"] {
+  accent-color: #0d9488; width: 15px; height: 15px; cursor: pointer;
+}
+
+/* ── gap 2: screens APPEARED instead of arriving. Every card family now
+   rises in on mount with a per-sibling stagger — a tab switch remounts
+   its subtree, so the arrival replays exactly when a screen is "pulled
+   up" and never on mere data edits (React keeps live nodes mounted).
+   `backwards` holds each card invisible through its delay. The reduced-
+   motion kill-switch in motion.css flattens all of it. ────────────────── */
+@keyframes arrive {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+.schedcard, .fc-tile, .expltile, .bcard, .bldgtile, .studio-set, .upltile,
+.wi-kpi, .wi-hero, .wi-chart, .wi-tablewrap, .wi-blank, .wi-toolbar,
+.pbreak, .prule-block, .fc-rail, .fc-eqpick, .studio-info, .studio-calbox,
+.newschedform, .pro-empty, .pformula, .pro-filters {
+  animation: arrive 0.4s var(--m-out, ease) backwards;
+}
+:is(.schedcard, .fc-tile, .expltile, .bcard, .bldgtile, .studio-set, .upltile,
+  .wi-kpi, .wi-chart, .wi-tablewrap):nth-child(2) { animation-delay: 45ms; }
+:is(.schedcard, .fc-tile, .expltile, .bcard, .bldgtile, .studio-set, .upltile,
+  .wi-kpi, .wi-chart, .wi-tablewrap):nth-child(3) { animation-delay: 90ms; }
+:is(.schedcard, .fc-tile, .expltile, .bcard, .bldgtile, .studio-set, .upltile,
+  .wi-kpi, .wi-chart, .wi-tablewrap):nth-child(4) { animation-delay: 135ms; }
+:is(.schedcard, .fc-tile, .expltile, .bcard, .bldgtile, .studio-set, .upltile,
+  .wi-kpi, .wi-chart, .wi-tablewrap):nth-child(5) { animation-delay: 180ms; }
+:is(.schedcard, .fc-tile, .expltile, .bcard, .bldgtile, .studio-set, .upltile,
+  .wi-kpi, .wi-chart, .wi-tablewrap):nth-child(6) { animation-delay: 225ms; }
+:is(.schedcard, .fc-tile, .expltile, .bcard, .bldgtile, .studio-set, .upltile,
+  .wi-kpi, .wi-chart, .wi-tablewrap):nth-child(7) { animation-delay: 270ms; }
+:is(.schedcard, .fc-tile, .expltile, .bcard, .bldgtile, .studio-set, .upltile,
+  .wi-kpi, .wi-chart, .wi-tablewrap):nth-child(n+8) { animation-delay: 310ms; }
+/* table rows ripple in fast — a list should feel poured, not dropped */
+.wi-table tbody tr { animation: arrive 0.32s var(--m-out, ease) backwards; }
+.wi-table tbody tr:nth-child(2) { animation-delay: 30ms; }
+.wi-table tbody tr:nth-child(3) { animation-delay: 60ms; }
+.wi-table tbody tr:nth-child(4) { animation-delay: 90ms; }
+.wi-table tbody tr:nth-child(5) { animation-delay: 120ms; }
+.wi-table tbody tr:nth-child(n+6) { animation-delay: 150ms; }
