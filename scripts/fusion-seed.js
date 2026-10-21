@@ -60,4 +60,8 @@
     console.warn("OpsMatrix demo seed failed", e);
   }
   healApiKey();
+  // one place, one name: "fairview" and "Fairview" are the same building (placeNames.ts)
+  try {
+    if (window.OpsMatrixFusion && window.OpsMatrixFusion.repairPlaceNames) window.OpsMatrixFusion.repairPlaceNames();
+  } catch (eP) { /* never block the app */ }
 })();

@@ -4,6 +4,7 @@ import { MapsApp } from "./MapsApp";
 import { AuthGate } from "./AuthGate";
 import { buildClassicDemo, demoStamp } from "../bridge/fusionEntry";
 import { healApiKey, loadApiKey } from "./classicStore";
+import { repairPlaceNames } from "./placeNames";
 import { initMonitoring } from "../lib/logger";
 import "./pro.css";
 import "../motion.css"; // the motion system — must load after pro.css to win the cascade
@@ -51,6 +52,9 @@ if (!cloudConfigured && /[?&]demo=1/.test(window.location.search)) {
 // every entrance: if the classic app's save effect (or anything else) dropped
 // the saved API key out of opsmatrix_v7, put it back from the backup slot
 healApiKey();
+
+// one place, one name: "fairview" and "Fairview" are the same building
+try { repairPlaceNames(); } catch { /* never block the app */ }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
