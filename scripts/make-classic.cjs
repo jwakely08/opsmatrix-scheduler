@@ -84,7 +84,11 @@ const postInjection =
 // the classic app: buttons and Tailwind's cursor-pointer tiles sink on press
 // and spring back on release. Uses the independent `scale` property so it
 // COMPOSES with any Tailwind transform utilities instead of overriding them.
+// The storage room-maker runs before anything else can save (public/storage-room.js;
+// maps.html loads the same file).
+const storageRoom = fs.readFileSync(path.join(ROOT, "public", "storage-room.js"), "utf8");
 const headInjection =
+  "\n<script>\n" + storageRoom + "\n</script>" +
   '\n<link rel="manifest" href="./opsmatrix.webmanifest"/>\n' +
   '<link rel="apple-touch-icon" href="./apple-touch-icon.png"/>\n' +
   '<meta name="apple-mobile-web-app-capable" content="yes"/>\n' +

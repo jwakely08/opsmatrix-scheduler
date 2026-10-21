@@ -70,7 +70,7 @@ type Tab = "map" | "rooms" | "schedules" | "spaces" | "scope" | "workload" | "fl
  * Keeping it in the hash (and re-reading it reactively) is what makes the
  * universal back button able to return to an EXACT view.
  */
-function parseHash(h: string): { tab: Tab; spacesView: SpacesView; autoAdd: boolean; planCal?: boolean; planRead?: boolean } {
+function parseHash(h: string): { tab: Tab; spacesView: SpacesView; autoAdd: boolean; planCal?: boolean; planRead?: boolean; planCad?: boolean } {
   if (h === "#scope") return { tab: "scope", spacesView: "explorer", autoAdd: false };
   if (h === "#workload") return { tab: "workload", spacesView: "explorer", autoAdd: false };
   if (h === "#exporting") return { tab: "exporting", spacesView: "explorer", autoAdd: false };
@@ -82,7 +82,7 @@ function parseHash(h: string): { tab: Tab; spacesView: SpacesView; autoAdd: bool
     return {
       tab: "spaces", spacesView: (m?.[1] as SpacesView) ?? "explorer",
       autoAdd: /[?&]add=1/.test(h),
-      planCal: /[?&]plancal=1/.test(h), planRead: /[?&]plan=1/.test(h)
+      planCal: /[?&]plancal=1/.test(h), planRead: /[?&]plan=1/.test(h), planCad: /[?&]plan=cad/.test(h)
     };
   }
   if (h === "#tab-schedules") return { tab: "schedules", spacesView: "explorer", autoAdd: false };
@@ -99,7 +99,7 @@ export function MapsApp() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  const { tab, spacesView, autoAdd, planCal, planRead } = parseHash(hash);
+  const { tab, spacesView, autoAdd, planCal, planRead, planCad } = parseHash(hash);
 
   // every view registers itself on the shared back-trail
   const navToken = tab === "spaces" ? "hub:spaces/" + spacesView : "hub:" + tab;
@@ -363,8 +363,8 @@ export function MapsApp() {
           {spacesView === "map" && plan && (
             <button className="pbtn rover-toggle" onClick={() => setRoverOn(true)}>🚙 Rover Mode</button>
           )}
-          <UploadHub key={planCal ? "plancal" : planRead ? "planread" : "plain"} commit={commit} rules={rules}
-            autoPlan={planCal ? "calibrate" : planRead ? "choice" : undefined} />
+          <UploadHub key={planCal ? "plancal" : planCad ? "plancad" : planRead ? "planread" : "plain"} commit={commit} rules={rules}
+            autoPlan={planCal ? "calibrate" : planCad ? "cad" : planRead ? "choice" : undefined} />
           <button className="pbtn primary" onClick={() => openEditor(null)}>＋ Add Room</button>
         </>}
         {(tab === "map" || tab === "rooms" || tab === "schedules") && (
@@ -768,13 +768,16 @@ function PrintPreview({ data, rules, scheduleId, onClose }: {
 function UploadHub({ commit, rules, autoPlan }: {
   commit: (mut: (d: ClassicData) => void) => void;
   rules: Rules;
-  /** open the plan modal on arrival: "choice" (classic's Floor plan tile)
-      or "calibrate" (classic's no-sizes tile / legacy links) */
-  autoPlan?: "choice" | "calibrate";
+  /** open the plan modal on arrival: "choice" (classic's Floor plan tile),
+      "calibrate" (classic's no-sizes tile / legacy links) or "cad" (classic's
+      CAD drawing tile) */
+  autoPlan?: "choice" | "calibrate" | "cad";
 }) {
   const [chooser, setChooser] = useState(false);
   const [planOpen, setPlanOpen] = useState(() => Boolean(autoPlan));
-  const [planMode] = useState<"read" | "calibrate" | undefined>(autoPlan === "calibrate" ? "calibrate" : undefined);
+  // the plan modal's starting point: the arrival link's, or the tile just picked
+  const arrivalMode = autoPlan === "calibrate" ? "calibrate" : autoPlan === "cad" ? "cad" : undefined;
+  const [planMode, setPlanMode] = useState<"read" | "calibrate" | "cad" | undefined>(arrivalMode);
   const [rlPhase, setRlPhase] = useState<"idle" | "working" | "done" | "error">("idle");
   const [rlError, setRlError] = useState("");
   const [rlSummary, setRlSummary] = useState<ImportSummary | null>(null);
@@ -829,10 +832,14 @@ function UploadHub({ commit, rules, autoPlan }: {
             <div className="pshead"><h2>Upload space data</h2>
               <button className="pbtn ghost" onClick={() => setChooser(false)}>✕</button></div>
             <p className="pnote">Pick what you have — OpsMatrix knows what to do with each.</p>
-            <button className="upltile" onClick={() => { setChooser(false); setPlanOpen(true); }}>
-              <b>🗺 Floor plan — picture, PDF or CAD (DXF)</b>
-              <span>Max reads the rooms, numbers and sizes, then redraws the plan in OpsMatrix's own style.
-                A CAD file with room data comes in exact — nothing guessed.</span>
+            <button className="upltile" onClick={() => { setChooser(false); setPlanMode("cad"); setPlanOpen(true); }}>
+              <b>🗂 CAD drawing with room data (DXF)</b>
+              <span>Every room, number, name and square foot comes straight from the drawing's own data —
+                exact, nothing guessed. No AI and no API key.</span>
+            </button>
+            <button className="upltile" onClick={() => { setChooser(false); setPlanMode(arrivalMode === "cad" ? undefined : arrivalMode); setPlanOpen(true); }}>
+              <b>🗺 Floor plan — picture or PDF</b>
+              <span>Max reads the rooms, numbers and sizes, then redraws the plan in OpsMatrix's own style.</span>
             </button>
             <button className="upltile" onClick={() => { setChooser(false); rlRef.current?.click(); }}>
               <b>📊 Room list — Excel, CSV or raw data</b>
@@ -847,7 +854,7 @@ function UploadHub({ commit, rules, autoPlan }: {
         document.body
       )}
 
-      <AiPlanImport open={planOpen} onClose={() => setPlanOpen(false)}
+      <AiPlanImport key={planMode ?? "choice"} open={planOpen} onClose={() => setPlanOpen(false)}
         defaultMode={planMode} rules={rules}
         commit={commit} onImported={() => window.location.reload()} />
 
@@ -2532,9 +2539,12 @@ function BackupCard() {
               const snap = JSON.parse(await f.text());
               const when = String(snap?.exportedAt ?? "").slice(0, 10) || "an unknown date";
               if (!confirm(`Replace everything on this device with the backup from ${when}? This cannot be undone.`)) return;
-              applyWorkspace(snap, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v));
-              setMsg("✓ Backup restored — reloading…");
-              setTimeout(() => window.location.reload(), 600);
+              const skipped: string[] = [];
+              applyWorkspace(snap, (k) => localStorage.getItem(k), (k, v) => localStorage.setItem(k, v), skipped);
+              setMsg(skipped.length
+                ? "✓ Backup restored — your floors, rooms and schedules are all in. This device didn't have room for the editable copies of the floor pictures. Reloading…"
+                : "✓ Backup restored — reloading…");
+              setTimeout(() => window.location.reload(), skipped.length ? 3500 : 600);
             } catch (err) {
               setMsg("⚠ " + String((err as Error)?.message ?? err));
             }

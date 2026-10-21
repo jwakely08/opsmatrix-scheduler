@@ -60,12 +60,21 @@ export function collectWorkspace(get: Getter, now: () => string = () => new Date
 }
 
 /**
+ * Stores a device can go without when it runs out of room: the Calibration
+ * Editor's editable copies of each floor (each holds a large picture). Floors,
+ * rooms, plans and schedules never depend on them. iPads allow a website far
+ * less storage than computers, so a multi-floor backup may not fit whole.
+ */
+const SKIPPABLE_WHEN_FULL: ReadonlySet<string> = new Set(["opsmatrix_fusion_planstudio"]);
+
+/**
  * Replace this device's workspace with a snapshot. The device's own saved
  * API key survives: it is read BEFORE applying and re-injected into the
  * incoming opsmatrix_v7 afterwards (backups/synced rows never carry one).
  * Throws plain-English errors on anything that isn't a valid snapshot.
+ * A skippable store that doesn't fit is left out (listed in `skipped`).
  */
-export function applyWorkspace(snapshot: unknown, get: Getter, set: Setter): string[] {
+export function applyWorkspace(snapshot: unknown, get: Getter, set: Setter, skipped?: string[]): string[] {
   const s = snapshot as WorkspaceSnapshot;
   if (!s || typeof s !== "object" || s.format !== WORKSPACE_FORMAT || !s.stores || typeof s.stores !== "object") {
     throw new Error("That file is not an OpsMatrix backup.");
@@ -94,7 +103,19 @@ export function applyWorkspace(snapshot: unknown, get: Getter, set: Setter): str
         raw = JSON.stringify(v7);
       } catch { /* validated above — unreachable */ }
     }
-    set(key, raw);
+    if (SKIPPABLE_WHEN_FULL.has(key)) {
+      try {
+        set(key, raw);
+      } catch {
+        // out of room: carry on without it — and don't leave an older copy
+        // behind that no longer matches the restored floors
+        try { set(key, "[]"); } catch { /* nothing to clear */ }
+        skipped?.push(key);
+        continue;
+      }
+    } else {
+      set(key, raw);
+    }
     applied.push(key);
   }
   if (!applied.length) throw new Error("That backup file contains no OpsMatrix data.");
