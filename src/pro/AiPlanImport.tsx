@@ -16,6 +16,7 @@ import { createPortal } from "react-dom";
 import { planFileToImage, isPdf } from "./planFile";
 import { dxfToPicture, dxfSegments, dxfTransform, segmentBounds, isDxf, isDwg } from "./dxfRaster";
 import { parseCad, buildCadRooms, cadLooksStructured } from "./cadImport";
+import { isOmfloor, readOmfloor, omfloorToDxf } from "./omfloorImport";
 import { scopeLabelFor } from "./studioIngest";
 import type { StudioShapeData } from "./studioSets";
 import { loadApiKey, saveApiKey } from "./classicStore";
@@ -109,18 +110,19 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
     setPhase("working");
     setError("");
     try {
-      if (mode === "cad" && !isDxf(file)) {
+      if (mode === "cad" && !isDxf(file) && !isOmfloor(file)) {
         throw new AiPlanError(isDwg(file)
-          ? "That's a DWG drawing — OpsMatrix needs it as a DXF first. Pick the .dxf version of this floor."
-          : "That isn't a CAD file (.dxf). Pick the floor's .dxf file — or go back and choose the picture or PDF option.");
+          ? "That's the DWG drawing itself — open it in the CAD converter first, then pick the floor file it saves (.omfloor)."
+          : "That isn't a floor file. Pick the floor's .omfloor file from the CAD converter (or a .dxf) — or go back and choose the picture or PDF option.");
       }
       // ── the structured CAD path (Josh, 2026-09-12): a facilities-managed
       // DXF carries room boundaries and tags as DATA. When that structure is
       // there we TRANSCRIBE it — exact shapes, numbers, names and square
       // footage, no AI read at all. Anything less structured falls through
-      // to the normal picture → Max pipeline below.
-      if (isDxf(file)) {
-        const text = await file.text();
+      // to the normal picture → Max pipeline below. A floor file from our CAD
+      // converter (.omfloor) takes this same path, written out as that DXF.
+      if (isDxf(file) || isOmfloor(file)) {
+        const text = isOmfloor(file) ? omfloorToDxf(await readOmfloor(file)) : await file.text();
         setStatus("Reading the CAD data…");
         const built = buildCadRooms(parseCad(text));
         if (cadLooksStructured(built)) {
@@ -173,10 +175,10 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
           return;
         }
       }
-      if (mode === "cad") {
+      if (mode === "cad" || isOmfloor(file)) {
         throw new AiPlanError(
-          "This CAD file doesn't carry room data OpsMatrix can read exactly (room outlines with room-number tags), " +
-          "so nothing was brought in. To have Max read it as a picture instead, go back and choose the picture or PDF option."
+          "This file doesn't carry room data OpsMatrix can read exactly (numbered room outlines), " +
+          "so nothing was brought in. To have Max read a drawing as a picture instead, go back and choose the picture or PDF option."
         );
       }
       const picture = await fileToPicture(file);
@@ -298,17 +300,18 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
         }}>
           <div className="pro-modal aiplan">
             <div className="pshead">
-              <h2>{mode === "cad" && step === "form" ? "🗂 CAD drawing with room data" : "🗺 Upload a floor plan"}</h2>
+              <h2>{mode === "cad" && step === "form" ? "🗂 CAD floor with room data" : "🗺 Upload a floor plan"}</h2>
               {phase !== "working" && <button className="pbtn ghost" onClick={close}>✕</button>}
             </div>
 
             {(phase === "form" || phase === "error") && step === "choice" && (
               <>
                 <button className="upltile" onClick={() => { setMode("cad"); setStep("form"); }}>
-                  <b>🗂 CAD drawing with room data (DXF)</b>
+                  <b>🗂 CAD floor with room data (.omfloor or DXF)</b>
                   <span>
-                    Every room, number, name and square foot comes straight from the drawing's own
-                    data — exact, nothing guessed. No AI and no API key.
+                    A floor file from our CAD converter (.omfloor), or a CAD drawing that carries its rooms
+                    (.dxf). Every room, number, name and square foot comes straight from the file — exact,
+                    nothing guessed. No AI and no API key.
                   </span>
                 </button>
                 <p className="pnote">
@@ -337,7 +340,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
               <>
                 <p className="pnote">
                   {mode === "cad"
-                    ? "Pick the floor's CAD file (.dxf). Every room comes straight from its data — exact outlines, numbers, names and square footage — and the Calibration Editor opens with all of it filled in, ready to check and ship. Nothing is sent to Max, so no API key is needed."
+                    ? "Pick the floor file — the .omfloor from our CAD converter, or a CAD drawing with room data (.dxf). Every room comes straight from its data — exact outlines, numbers, names and square footage — and the Calibration Editor opens with all of it filled in, ready to check and ship. Nothing is sent to Max, so no API key is needed."
                     : mode === "calibrate"
                     ? "Pick the file — picture, PDF, or CAD (DXF). Max draws the rooms first; the Calibration Editor opens with them ready to correct."
                     : "Pick the file — picture, PDF, or CAD (DXF). Max reads the rooms, their numbers and the stated square footage; the Calibration Editor opens with all of it filled in, ready to check and ship."}
@@ -389,7 +392,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
                 <button className="pbtn primary wide"
                   disabled={!account.trim() || !building.trim() || !floor.trim() || (mode === "read" && !keySaved && !proxied)}
                   onClick={() => fileRef.current?.click()}>
-                  {mode === "cad" ? "Choose the CAD file (.dxf)" : mode === "calibrate" ? "Choose the file — open the Calibration Editor" : "Choose floor plan (image, PDF or DXF)"}
+                  {mode === "cad" ? "Choose the floor file (.omfloor or .dxf)" : mode === "calibrate" ? "Choose the file — open the Calibration Editor" : "Choose floor plan (image, PDF or DXF)"}
                 </button>
                 {(!account.trim() || !building.trim() || !floor.trim()) &&
                   <small className="pnote">Fill in account, building and floor first — that's where this plan files itself.</small>}
