@@ -5,6 +5,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { boundsOf, pointIn, type ClassicData, type ClassicPlan, type ClassicSpace } from "./classicStore";
 import { buildingArtUrl } from "./buildingArt";
+import { sortFloorsTopDown } from "./floorOrder";
 import { neonPlanUrl } from "./neonMap";
 import { Map3D, type Map3DApi } from "./Map3D";
 
@@ -367,7 +368,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
       )}
       {plans.length > 1 && (
         <div className="floorstack">
-          {[...plans].reverse().map((p) => (
+          {sortFloorsTopDown(plans).map((p) => (
             <button key={p.id} className={"floorcard" + (p.id === plan.id ? " on" : "")}
               onClick={() => onPlan(p.id)}>
               <span>{p.floor ?? p.id}</span>
