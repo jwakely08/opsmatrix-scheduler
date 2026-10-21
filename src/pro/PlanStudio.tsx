@@ -21,6 +21,7 @@
 // from Max Space → Calibration Editor re-ships onto the SAME rooms.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { reloadWhenSaved } from "./reloadWhenSaved";
 import {
   buildGray, eraseBubbles, shoelacePx, centroid, unionPolygons,
   type Gray, type XY
@@ -982,7 +983,7 @@ export function CalibrationEditorHome({ rules }: {
           sessionStorage.setItem("fusion-studio-updated",
             `✓ ${editing.building || "The plan"}${editing.floor ? " · " + editing.floor : ""} updated — ${n} rooms, same rooms in Max Space, schedules intact.` +
             (saved ? "" : " (The editable set could not be re-saved — storage is full — but Max Space is updated.)"));
-          window.location.reload();
+          reloadWhenSaved();
         }}
         onCancel={() => setEditing(null)} />
     );
