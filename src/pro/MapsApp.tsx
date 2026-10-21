@@ -833,9 +833,9 @@ function UploadHub({ commit, rules, autoPlan }: {
               <button className="pbtn ghost" onClick={() => setChooser(false)}>✕</button></div>
             <p className="pnote">Pick what you have — OpsMatrix knows what to do with each.</p>
             <button className="upltile" onClick={() => { setChooser(false); setPlanMode("cad"); setPlanOpen(true); }}>
-              <b>🗂 CAD drawing with room data (DXF)</b>
-              <span>Every room, number, name and square foot comes straight from the drawing's own data —
-                exact, nothing guessed. No AI and no API key.</span>
+              <b>🗂 CAD floor with room data (.omfloor or DXF)</b>
+              <span>A floor file from our CAD converter, or a CAD drawing that carries its rooms. Every room,
+                number, name and square foot comes straight from the file — exact, nothing guessed. No AI and no API key.</span>
             </button>
             <button className="upltile" onClick={() => { setChooser(false); setPlanMode(arrivalMode === "cad" ? undefined : arrivalMode); setPlanOpen(true); }}>
               <b>🗺 Floor plan — picture or PDF</b>
