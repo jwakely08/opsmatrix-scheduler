@@ -739,7 +739,9 @@
       var s = result.summary;
       setStatus("✓ " + s.rooms + " rooms imported, " + s.autoDetected + " drawn on the plan automatically" +
         (s.needsTracing ? " (" + s.needsTracing + " to trace by hand)" : "") + ". Reloading…");
-      setTimeout(function () { window.location.reload(); }, 1200);
+      // reload once the import is safely stored (public/storage-room.js)
+      var saved = window.__opsmatrixStorage && window.__opsmatrixStorage.flush ? window.__opsmatrixStorage.flush() : Promise.resolve();
+      saved.then(null, function () {}).then(function () { setTimeout(function () { window.location.reload(); }, 1200); });
     }, function () {
       setStatus("Could not read those files", true);
     });
@@ -1696,7 +1698,8 @@
       setApiKey(CLOUD_KEY_PLACEHOLDER);
       if (!sessionStorage.getItem("fusion-proxy-reloaded")) {
         sessionStorage.setItem("fusion-proxy-reloaded", "1");
-        window.location.reload();
+        var stored = window.__opsmatrixStorage && window.__opsmatrixStorage.flush ? window.__opsmatrixStorage.flush() : Promise.resolve();
+        stored.then(null, function () {}).then(function () { window.location.reload(); });
       }
     }).catch(function () { /* stays keyless until sign-in — wrapper still guards */ });
   }

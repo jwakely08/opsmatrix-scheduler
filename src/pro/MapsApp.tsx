@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { reloadWhenSaved } from "./reloadWhenSaved";
 import {
   loadClassic, saveClassic, syncSpaceMinutes, refreshAutoTasks, coverageForSpace, uncovered, setCoverage,
   coverageMinutes, scheduleMinutes, createSchedule, deleteSchedule, scheduleColor, SCHED_COLORS,
@@ -816,7 +817,7 @@ function UploadHub({ commit, rules, autoPlan }: {
       });
       alert(`✓ ${result.summary.rooms} rooms imported, ${result.summary.autoDetected} drawn automatically` +
         (outcome.attached ? `, ${outcome.attached} matched to rooms you already had` : ""));
-      window.location.reload();
+      reloadWhenSaved();
     } catch (err) {
       alert("Could not read that scan: " + err);
     }
@@ -856,7 +857,7 @@ function UploadHub({ commit, rules, autoPlan }: {
 
       <AiPlanImport key={planMode ?? "choice"} open={planOpen} onClose={() => setPlanOpen(false)}
         defaultMode={planMode} rules={rules}
-        commit={commit} onImported={() => window.location.reload()} />
+        commit={commit} onImported={() => reloadWhenSaved()} />
 
       <input ref={rlRef} type="file" style={{ display: "none" }}
         accept=".xlsx,.xlsm,.xls,.csv,.tsv"
@@ -2544,7 +2545,7 @@ function BackupCard() {
               setMsg(skipped.length
                 ? "✓ Backup restored — your floors, rooms and schedules are all in. This device didn't have room for the editable copies of the floor pictures. Reloading…"
                 : "✓ Backup restored — reloading…");
-              setTimeout(() => window.location.reload(), skipped.length ? 3500 : 600);
+              reloadWhenSaved(skipped.length ? 3500 : 600);
             } catch (err) {
               setMsg("⚠ " + String((err as Error)?.message ?? err));
             }

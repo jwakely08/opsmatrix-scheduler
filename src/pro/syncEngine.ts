@@ -14,6 +14,7 @@
 // The decision logic is a pure function (decideSync) so the truth table is
 // unit-tested without a server.
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { reloadWhenSaved } from "./reloadWhenSaved";
 import {
   WORKSPACE_KEYS, collectWorkspace, snapshotFingerprint, storeHash
 } from "./workspaceStore";
@@ -226,7 +227,7 @@ export class SyncEngine {
     });
     // the app read localStorage at startup; a downloaded workspace needs a
     // fresh read to be visible — one guarded reload, same pattern as imports
-    window.location.reload();
+    reloadWhenSaved();
   }
 
   private async push(

@@ -54,10 +54,15 @@ const bodyOpenEnd = html.indexOf(">", bodyOpen) + 1;
 const endIdx = html.lastIndexOf("</body>");
 if (endIdx === -1) throw new Error("classic app has no </body> — refusing to guess");
 
+// The workspace lives in this device's IndexedDB (public/storage-room.js, inlined first in the
+// head). Every body script reads it, so each one waits: they're written as
+// type="text/x-opsmatrix-after-storage" and run, in their original order, once storage is ready
+// and the page is parsed (the starter script in the head).
+const WAIT = "text/x-opsmatrix-after-storage";
 const preInjection =
   "\n<!-- ══ FUSION BRIDGE core + demo seed (injected at build; original archive untouched) ══ -->\n" +
-  "<script>\n" + core + "\n</script>\n" +
-  "<script>\n" + seed + "\n</script>\n";
+  '<script type="' + WAIT + '">\n' + core + "\n</script>\n" +
+  '<script type="' + WAIT + '">\n' + seed + "\n</script>\n";
 // The motion system's press physics for the classic app — DELIBERATELY
 // minimal. The archive has its own motion language (--om-ease, with
 // !important-forced .18s durations on button/a/select/input), so we add
@@ -74,7 +79,7 @@ const motionInjection =
 
 const postInjection =
   "\n<!-- ══ FUSION BRIDGE UI ══ -->\n" +
-  "<script>\n" + ui + "\n</script>\n" +
+  '<script type="' + WAIT + '">\n' + ui + "\n</script>\n" +
   motionInjection;
 
 // Make Classic installable as a real app (its own icon on the taskbar/home
@@ -87,8 +92,27 @@ const postInjection =
 // The storage room-maker runs before anything else can save (public/storage-room.js;
 // maps.html loads the same file).
 const storageRoom = fs.readFileSync(path.join(ROOT, "public", "storage-room.js"), "utf8");
+// runs the waiting body scripts, in order, once storage is ready and the page is parsed
+const starter =
+  "(function () {\n" +
+  "  function run() {\n" +
+  "    var list = document.querySelectorAll('script[type=\"" + WAIT + "\"]');\n" +
+  "    for (var i = 0; i < list.length; i++) {\n" +
+  "      var s = document.createElement('script');\n" +
+  "      s.text = list[i].text;\n" +
+  "      list[i].parentNode.replaceChild(s, list[i]);\n" +
+  "    }\n" +
+  "  }\n" +
+  "  var storage = window.__opsmatrixStorage;\n" +
+  "  var ready = storage && storage.ready ? storage.ready['catch'](function () {}) : Promise.resolve();\n" +
+  "  var parsed = new Promise(function (done) {\n" +
+  "    if (document.readyState !== 'loading') done(); else document.addEventListener('DOMContentLoaded', function () { done(); });\n" +
+  "  });\n" +
+  "  Promise.all([ready, parsed]).then(run);\n" +
+  "})();\n";
 const headInjection =
   "\n<script>\n" + storageRoom + "\n</script>" +
+  "\n<script>\n" + starter + "</script>" +
   '\n<link rel="manifest" href="./opsmatrix.webmanifest"/>\n' +
   '<link rel="apple-touch-icon" href="./apple-touch-icon.png"/>\n' +
   '<meta name="apple-mobile-web-app-capable" content="yes"/>\n' +
@@ -105,10 +129,16 @@ const headInjection =
 const headEnd = html.indexOf("</head>");
 if (headEnd === -1) throw new Error("classic app has no </head> — refusing to guess");
 
+// the archive's own app script waits too (exactly one, or refuse to guess)
+const archiveBody = html.slice(bodyOpenEnd, endIdx);
+const APP_TAG = '<script type="text/javascript">';
+if (archiveBody.split(APP_TAG).length !== 2 || /<script>/.test(archiveBody)) {
+  throw new Error("make-classic: expected exactly one inline app script in the archive's body — archive changed, refusing to guess");
+}
 const out =
   html.slice(0, headEnd) + headInjection +
   html.slice(headEnd, bodyOpenEnd) + preInjection +
-  html.slice(bodyOpenEnd, endIdx) + postInjection +
+  archiveBody.replace(APP_TAG, '<script type="' + WAIT + '">') + postInjection +
   html.slice(endIdx);
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, out, "utf8");
