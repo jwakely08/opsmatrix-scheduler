@@ -64,4 +64,8 @@
   try {
     if (window.OpsMatrixFusion && window.OpsMatrixFusion.repairPlaceNames) window.OpsMatrixFusion.repairPlaceNames();
   } catch (eP) { /* never block the app */ }
+  // a floor whose rooms are in but whose map isn't gets its map drawn again (planHeal.ts)
+  try {
+    if (window.OpsMatrixFusion && window.OpsMatrixFusion.healMissingPlans) window.OpsMatrixFusion.healMissingPlans();
+  } catch (eH) { /* never block the app */ }
 })();
