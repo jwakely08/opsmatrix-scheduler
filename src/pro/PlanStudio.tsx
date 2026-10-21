@@ -91,7 +91,8 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
   /** the file STATED its sizes — every room arrives already measured, so
    *  calibration is a spot-check, not a 3-room ceiling */
   sizesFromFile?: boolean;
-  onShipped: (roomCount: number, setSaved: boolean) => void;
+  /** planSaved: false when the device had no room left for the floor's picture */
+  onShipped: (roomCount: number, setSaved: boolean, planSaved?: boolean) => void;
   onCancel: () => void;
 }) {
   const W = picture.width, H = picture.height;
@@ -540,8 +541,19 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
     const map = existingSet
       ? applyStudioUpdate(d, existingSet, result, shapesData, rules)
       : applyStudioShip(d, result, shapesData, account, rules);
-    saveClassic(d);
-    try { localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans)); } catch { /* quota */ }
+    // a device whose storage for OpsMatrix is full (iPads allow far less than
+    // computers, and every floor picture is large) must say so, not fail silently
+    try {
+      saveClassic(d);
+    } catch {
+      const msg = "This device is out of storage space for OpsMatrix, so this floor couldn't be saved. " +
+        "Floor pictures take a lot of room.";
+      setErr(msg);
+      alert(msg);
+      return;
+    }
+    let planSaved = true;
+    try { localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(d.plans)); } catch { planSaved = false; }
     const saved = saveStudioSet(existingSet
       ? {
         ...existingSet, shapes: shapesData, spaceIdByShape: map,
@@ -559,7 +571,7 @@ export function PlanStudio({ picture, account, building, floor, rules, existingS
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       });
-    onShipped(shapes.length, saved);
+    onShipped(shapes.length, saved, planSaved);
   }
 
   const selShapes = shapes.filter((s) => sel.has(s.id));

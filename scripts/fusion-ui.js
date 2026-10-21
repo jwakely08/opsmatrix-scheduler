@@ -447,6 +447,8 @@
     card.innerHTML =
       "<h3 style='margin:0 0 4px;font-size:17px'>Upload space data</h3>" +
       "<p style='margin:0 0 14px;font-size:13px;color:#5b7083'>Pick what you have — OpsMatrix knows what to do with each.</p>" +
+      "<div id='fusion-hub-cad'>" + tile("🗂 CAD drawing with room data (DXF)",
+        "Every room, number, name and square foot comes straight from the drawing's own data — exact, nothing guessed. No AI and no API key.") + "</div>" +
       "<div id='fusion-hub-plan'>" + tile("🗺 Floor plan — picture or PDF",
         "Max reads the rooms, numbers and sizes, then redraws the plan in OpsMatrix's own style.") + "</div>" +
       "<div id='fusion-hub-excel'>" + tile("📊 Room list — Excel, CSV or raw data",
@@ -461,7 +463,12 @@
     wrap.addEventListener("click", function (e) { if (e.target === wrap) close(); });
     document.getElementById("fusion-hub-cancel").addEventListener("click", close);
     // ONE plan flow for the whole app (Josh: consistency) — the hub's
-    // upload modal owns pictures/PDFs/CAD, the question, and the editor
+    // upload modal owns pictures/PDFs/CAD, the question, and the editor.
+    // A CAD drawing with room data goes straight in: no sizes question, no API key.
+    document.getElementById("fusion-hub-cad").addEventListener("click", function () {
+      close();
+      window.location.href = "./maps.html#spaces?plan=cad";
+    });
     document.getElementById("fusion-hub-plan").addEventListener("click", function () {
       close();
       window.location.href = "./maps.html#spaces?plan=1";
