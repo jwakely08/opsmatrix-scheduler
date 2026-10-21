@@ -101,3 +101,28 @@ describe("backupFilename", () => {
     expect(backupFilename(new Date("2026-08-26T12:00:00Z"))).toBe("opsmatrix-backup-2026-08-26.json");
   });
 });
+
+describe("applyWorkspace on a device that's out of room", () => {
+  it("leaves out the editable floor copies, says so, and clears the device's old ones", () => {
+    const src = fakeStorage({
+      opsmatrix_v7: V7,
+      opsmatrix_fusion_planstudio: JSON.stringify([{ id: "set-1", picture: { dataUrl: "x".repeat(1000) } }]),
+      opsmatrix_fusion_routes: "{}"
+    });
+    const snap = collectWorkspace(src.get);
+    const dst = fakeStorage({ opsmatrix_fusion_planstudio: '[{"id":"old"}]' });
+    const tightSet = (k: string, v: string) => { if (v.length > 500) throw new Error("QuotaExceededError"); dst.set(k, v); };
+    const skipped: string[] = [];
+    const applied = applyWorkspace(snap, dst.get, tightSet, skipped);
+    expect(skipped).toEqual(["opsmatrix_fusion_planstudio"]);
+    expect(applied).toContain("opsmatrix_v7");
+    expect(applied).toContain("opsmatrix_fusion_routes");
+    expect(applied).not.toContain("opsmatrix_fusion_planstudio");
+    expect(dst.get("opsmatrix_fusion_planstudio")).toBe("[]");
+  });
+  it("still stops when an essential store doesn't fit", () => {
+    const snap = collectWorkspace(fakeStorage({ opsmatrix_v7: V7 }).get);
+    const dst = fakeStorage();
+    expect(() => applyWorkspace(snap, dst.get, () => { throw new Error("QuotaExceededError"); })).toThrow();
+  });
+});

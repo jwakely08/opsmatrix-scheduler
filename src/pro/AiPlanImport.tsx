@@ -25,14 +25,18 @@ import type { ClassicData } from "./classicStore";
 import type { Rules } from "./rules";
 
 type Phase = "form" | "working" | "done" | "error";
-type ReadMode = "read" | "calibrate";
+// "cad" (Josh, 2026-10-20: "no workarounds"): a CAD drawing that carries its
+// rooms as data comes straight in — no question about sizes, no API key, and
+// it is NEVER handed to Max: a drawing without room data is refused, not read
+type ReadMode = "read" | "calibrate" | "cad";
 
 export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, rules }: {
   commit: (mut: (d: ClassicData) => void) => void;
   onImported: () => void;
   open: boolean;
   onClose: () => void;
-  /** open straight into one mode (e.g. classic's "no sizes" tile) */
+  /** open straight into one mode (e.g. classic's "no sizes" tile, or the
+      upload hub's "CAD drawing" tile) */
   defaultMode?: ReadMode;
   rules: Rules;
 }) {
@@ -105,6 +109,11 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
     setPhase("working");
     setError("");
     try {
+      if (mode === "cad" && !isDxf(file)) {
+        throw new AiPlanError(isDwg(file)
+          ? "That's a DWG drawing — OpsMatrix needs it as a DXF first. Pick the .dxf version of this floor."
+          : "That isn't a CAD file (.dxf). Pick the floor's .dxf file — or go back and choose the picture or PDF option.");
+      }
       // ── the structured CAD path (Josh, 2026-09-12): a facilities-managed
       // DXF carries room boundaries and tags as DATA. When that structure is
       // there we TRANSCRIBE it — exact shapes, numbers, names and square
@@ -163,6 +172,12 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
           setStudioPic({ dataUrl: pic.dataUrl, width: pic.width, height: pic.height, aspect: pic.aspect });
           return;
         }
+      }
+      if (mode === "cad") {
+        throw new AiPlanError(
+          "This CAD file doesn't carry room data OpsMatrix can read exactly (room outlines with room-number tags), " +
+          "so nothing was brought in. To have Max read it as a picture instead, go back and choose the picture or PDF option."
+        );
       }
       const picture = await fileToPicture(file);
 
@@ -262,11 +277,13 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
         rules={rules} initialAiRooms={studioSeeds} initialExactShapes={studioExact ?? undefined}
         initialNotice={studioNotice}
         sizesFromFile={studioSized}
-        onShipped={(rooms, setSaved) => {
+        onShipped={(rooms, setSaved, planSaved) => {
           setStudioPic(null);
           setStudioExact(null);
           setResult({ rooms, printed: rooms, scaled: true, calibrated: true });
-          if (!setSaved) setStatus("Note: the editable calibration set could not be saved (storage full) — the floor plan itself is in.");
+          if (planSaved === false) setStatus("The rooms are in, but this device ran out of storage space for the floor's picture — this floor has no map.");
+          else if (!setSaved) setStatus("Note: the editable calibration set could not be saved (storage full) — the floor plan itself is in.");
+          else setStatus("");
           setPhase("done");
         }}
         onCancel={() => setStudioPic(null)} />
@@ -281,15 +298,22 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
         }}>
           <div className="pro-modal aiplan">
             <div className="pshead">
-              <h2>🗺 Upload a floor plan</h2>
+              <h2>{mode === "cad" && step === "form" ? "🗂 CAD drawing with room data" : "🗺 Upload a floor plan"}</h2>
               {phase !== "working" && <button className="pbtn ghost" onClick={close}>✕</button>}
             </div>
 
             {(phase === "form" || phase === "error") && step === "choice" && (
               <>
+                <button className="upltile" onClick={() => { setMode("cad"); setStep("form"); }}>
+                  <b>🗂 CAD drawing with room data (DXF)</b>
+                  <span>
+                    Every room, number, name and square foot comes straight from the drawing's own
+                    data — exact, nothing guessed. No AI and no API key.
+                  </span>
+                </button>
                 <p className="pnote">
-                  One question first: does the file state its measurements — room sizes or
-                  square footage readable on the plan (or in the CAD data)?
+                  For a picture or PDF, one question first: does the file state its measurements —
+                  room sizes or square footage readable on the plan?
                 </p>
                 <button className="upltile" onClick={() => { setMode("read"); setStep("form"); }}>
                   <b>✨ Yes — the sizes are in the file</b>
@@ -312,7 +336,9 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
             {(phase === "form" || phase === "error") && step === "form" && (
               <>
                 <p className="pnote">
-                  {mode === "calibrate"
+                  {mode === "cad"
+                    ? "Pick the floor's CAD file (.dxf). Every room comes straight from its data — exact outlines, numbers, names and square footage — and the Calibration Editor opens with all of it filled in, ready to check and ship. Nothing is sent to Max, so no API key is needed."
+                    : mode === "calibrate"
                     ? "Pick the file — picture, PDF, or CAD (DXF). Max draws the rooms first; the Calibration Editor opens with them ready to correct."
                     : "Pick the file — picture, PDF, or CAD (DXF). Max reads the rooms, their numbers and the stated square footage; the Calibration Editor opens with all of it filled in, ready to check and ship."}
                 </p>
@@ -334,7 +360,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
                   </label>
                 </div>
 
-                {proxied ? (
+                {mode === "cad" ? null : proxied ? (
                   <p className="pnote keysaved">✓ AI reading is included with your OpsMatrix account.</p>
                 ) : keySaved ? (
                   <p className="pnote keysaved">
@@ -363,7 +389,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
                 <button className="pbtn primary wide"
                   disabled={!account.trim() || !building.trim() || !floor.trim() || (mode === "read" && !keySaved && !proxied)}
                   onClick={() => fileRef.current?.click()}>
-                  {mode === "calibrate" ? "Choose the file — open the Calibration Editor" : "Choose floor plan (image, PDF or DXF)"}
+                  {mode === "cad" ? "Choose the CAD file (.dxf)" : mode === "calibrate" ? "Choose the file — open the Calibration Editor" : "Choose floor plan (image, PDF or DXF)"}
                 </button>
                 {(!account.trim() || !building.trim() || !floor.trim()) &&
                   <small className="pnote">Fill in account, building and floor first — that's where this plan files itself.</small>}
@@ -373,8 +399,10 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
                   <button className="plink" onClick={() => setStep("choice")}>‹ Back to the question</button>
                 </p>
 
+                {/* CAD: no type filter — iPads can grey out .dxf files they don't recognise;
+                    the file is checked as soon as it's picked */}
                 <input ref={fileRef} type="file" style={{ display: "none" }}
-                  accept="image/*,application/pdf,.pdf,.dxf,.dwg"
+                  accept={mode === "cad" ? undefined : "image/*,application/pdf,.pdf,.dxf,.dwg"}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     e.target.value = "";
@@ -396,6 +424,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
             {phase === "done" && result && (
               <>
                 <p className="pnote big">✓ {result.rooms} rooms on the new floor plan.</p>
+                {status && <p className="warntext">⚠ {status}</p>}
                 <p className="pnote">
                   Shipped to Max Space — drawn in OpsMatrix's own style, every room measured, and
                   filed under {[account, building, floor].filter(Boolean).join(" → ")}. The set
