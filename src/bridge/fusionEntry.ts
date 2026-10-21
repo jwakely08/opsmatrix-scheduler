@@ -353,6 +353,7 @@ export {
 } from "../pro/rules";
 export { retuneAllSpaces, fusionFloorLabel, FLOOR_TYPES } from "../pro/classicStore";
 export { repairPlaceNames } from "../pro/placeNames";
+export { healMissingPlans } from "../pro/planHeal";
 export { loadAliases, normalizeFloorType as normalizeFloorFinish } from "../pro/roomListImport";
 
 // Max Floor Care: store + timing + equipment catalog, for Hey Max's tools

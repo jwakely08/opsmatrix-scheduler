@@ -6,6 +6,7 @@ import { AuthGate } from "./AuthGate";
 import { buildClassicDemo, demoStamp } from "../bridge/fusionEntry";
 import { healApiKey, loadApiKey } from "./classicStore";
 import { repairPlaceNames } from "./placeNames";
+import { healMissingPlans } from "./planHeal";
 import { initMonitoring } from "../lib/logger";
 import "./pro.css";
 import "../motion.css"; // the motion system — must load after pro.css to win the cascade
@@ -56,6 +57,9 @@ healApiKey();
 
 // one place, one name: "fairview" and "Fairview" are the same building
 try { repairPlaceNames(); } catch { /* never block the app */ }
+
+// a floor whose rooms are in but whose map isn't gets its map drawn again from those rooms
+healMissingPlans();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
