@@ -17,6 +17,7 @@ import { planFileToImage, isPdf } from "./planFile";
 import { dxfToPicture, dxfSegments, dxfTransform, segmentBounds, isDxf, isDwg } from "./dxfRaster";
 import { parseCad, buildCadRooms, cadLooksStructured } from "./cadImport";
 import { isOmfloor, readOmfloor, omfloorToDxf } from "./omfloorImport";
+import { knownPlaces, nextFloorName, placeKey, type KnownAccount } from "./placeNames";
 import { scopeLabelFor } from "./studioIngest";
 import type { StudioShapeData } from "./studioSets";
 import { loadApiKey, saveApiKey } from "./classicStore";
@@ -30,6 +31,44 @@ type Phase = "form" | "working" | "done" | "error";
 // rooms as data comes straight in — no question about sizes, no API key, and
 // it is NEVER handed to Max: a drawing without room data is refused, not read
 type ReadMode = "read" | "calibrate" | "cad";
+
+// Account and building are PICKED from what OpsMatrix already has (Josh, 2026-10-20: a floor
+// typed into "fairview" became a second building beside "Fairview"). The last place used — or the
+// only one there is — comes pre-selected; "＋ New…" types a new one, and a typed name that matches
+// an existing place in all but capitals/spacing becomes that place.
+const NEW_PLACE = "\u0000new";
+const LAST_PLACE = "opsmatrix_upload_place";
+
+function readPlaces(): KnownAccount[] {
+  try {
+    const v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") ?? "{}") ?? {};
+    return knownPlaces(Array.isArray(v7.spaces) ? v7.spaces : []);
+  } catch { return []; }
+}
+
+/** what the device already knows about the account (before any room has one) */
+function prefillAccount(): string {
+  try {
+    const v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") ?? "{}") ?? {};
+    const systems = [...new Set(((v7.spaces ?? []) as { system?: string }[])
+      .map((sp) => String(sp.system ?? "").trim()).filter(Boolean))];
+    if (systems.length === 1) return systems[0];
+    return String((v7.settings ?? {}).orgName ?? (v7.settings ?? {}).campus ?? "").trim();
+  } catch { return ""; }
+}
+
+/** the last place used if it's still here, else the only account / building there is */
+function startingPlace(places: KnownAccount[]): { account: string; building: string } {
+  let last: { account?: string; building?: string } = {};
+  try { last = JSON.parse(localStorage.getItem(LAST_PLACE) ?? "{}") ?? {}; } catch { /* none yet */ }
+  const prefill = prefillAccount();
+  const acc = places.find((a) => placeKey(a.name) === placeKey(last.account)) ??
+    (places.length === 1 ? places[0] : places.find((a) => placeKey(a.name) === placeKey(prefill)));
+  if (!acc) return { account: prefill, building: "" };
+  const b = acc.buildings.find((x) => placeKey(x.name) === placeKey(last.building)) ??
+    (acc.buildings.length === 1 ? acc.buildings[0] : undefined);
+  return { account: acc.name, building: b?.name ?? "" };
+}
 
 export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, rules }: {
   commit: (mut: (d: ClassicData) => void) => void;
@@ -51,19 +90,35 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
   // structured CAD import: exact shapes transcribed from the file's own data
   const [studioExact, setStudioExact] = useState<Omit<StudioShapeData, "id">[] | null>(null);
   // the hierarchy is entered UP FRONT (Josh: account → building → floor,
-  // departments are chosen per room later): account prefills from what the
-  // device already knows
-  const [account, setAccount] = useState(() => {
-    try {
-      const v7 = JSON.parse(localStorage.getItem("opsmatrix_v7") ?? "{}") ?? {};
-      const systems = [...new Set(((v7.spaces ?? []) as { system?: string }[])
-        .map((sp) => String(sp.system ?? "").trim()).filter(Boolean))];
-      if (systems.length === 1) return systems[0];
-      return String((v7.settings ?? {}).orgName ?? (v7.settings ?? {}).campus ?? "").trim();
-    } catch { return ""; }
-  });
-  const [building, setBuilding] = useState("");
+  // departments are chosen per room later), picked from the places already here
+  const [places, setPlaces] = useState<KnownAccount[]>(() => readPlaces());
+  const [account, setAccount] = useState(() => startingPlace(places).account);
+  const [building, setBuilding] = useState(() => startingPlace(places).building);
   const [floor, setFloor] = useState("");
+  const [typingAccount, setTypingAccount] = useState(false);
+  const [typingBuilding, setTypingBuilding] = useState(false);
+  // every time the form opens: the places as they are now, and where the last floor went
+  useEffect(() => {
+    if (!open) return;
+    const p = readPlaces();
+    const start = startingPlace(p);
+    setPlaces(p);
+    setAccount(start.account);
+    setBuilding(start.building);
+    setFloor("");
+    setTypingAccount(false);
+    setTypingBuilding(false);
+  }, [open]);
+  const accountHit = places.find((a) => placeKey(a.name) === placeKey(account));
+  const buildingHit = accountHit?.buildings.find((b) => placeKey(b.name) === placeKey(building));
+  const floorHit = buildingHit?.floors.find((f) => placeKey(f.name) === placeKey(floor));
+  const nextFloor = buildingHit ? nextFloorName(buildingHit.floors) : "";
+  /** the names as they'll be filed: an existing place's own spelling wins */
+  const settleNames = () => {
+    setAccount(accountHit?.name ?? account.trim());
+    setBuilding(buildingHit?.name ?? building.trim());
+    setFloor(floorHit?.name ?? floor.trim());
+  };
   const [apiKey, setApiKey] = useState<string>(() => loadApiKey());
   const [keySaved, setKeySaved] = useState<boolean>(() => Boolean(loadApiKey()));
   const [status, setStatus] = useState("");
@@ -282,6 +337,8 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
         onShipped={(rooms, setSaved, planSaved) => {
           setStudioPic(null);
           setStudioExact(null);
+          // the next floor most likely goes to the same account and building
+          try { localStorage.setItem(LAST_PLACE, JSON.stringify({ account, building })); } catch { /* not remembered */ }
           setResult({ rooms, printed: rooms, scaled: true, calibrated: true });
           if (planSaved === false) setStatus("The rooms are in, but this device ran out of storage space for the floor's picture — this floor has no map.");
           else if (!setSaved) setStatus("Note: the editable calibration set could not be saved (storage full) — the floor plan itself is in.");
@@ -350,18 +407,63 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
                     Departments are picked per room later, in the editor. */}
                 <div className="prow">
                   <label className="pfield">Account <small>your hospital system</small>
-                    <input value={account} placeholder="e.g. Summa Health"
-                      onChange={(e) => setAccount(e.target.value)} />
+                    {places.length > 0 && !typingAccount ? (
+                      <select value={accountHit?.name ?? ""} onChange={(e) => {
+                        if (e.target.value === NEW_PLACE) {
+                          setTypingAccount(true); setTypingBuilding(true); setAccount(""); setBuilding("");
+                          return;
+                        }
+                        const picked = places.find((a) => a.name === e.target.value);
+                        setAccount(e.target.value);
+                        setBuilding(picked && picked.buildings.length === 1 ? picked.buildings[0].name : "");
+                        setTypingBuilding(false);
+                      }}>
+                        {!accountHit && <option value="">Pick the account…</option>}
+                        {places.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}
+                        <option value={NEW_PLACE}>＋ New account…</option>
+                      </select>
+                    ) : (
+                      <input value={account} placeholder="e.g. Summa Health" autoFocus={typingAccount}
+                        onChange={(e) => setAccount(e.target.value)}
+                        onBlur={() => { if (accountHit) { setAccount(accountHit.name); setTypingAccount(false); } }} />
+                    )}
                   </label>
                   <label className="pfield">Building
-                    <input value={building} placeholder="e.g. Crawfordsville"
-                      onChange={(e) => setBuilding(e.target.value)} />
+                    {accountHit && accountHit.buildings.length > 0 && !typingBuilding ? (
+                      <select value={buildingHit?.name ?? ""} onChange={(e) => {
+                        if (e.target.value === NEW_PLACE) { setTypingBuilding(true); setBuilding(""); return; }
+                        setBuilding(e.target.value);
+                      }}>
+                        {!buildingHit && <option value="">Pick the building…</option>}
+                        {accountHit.buildings.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
+                        <option value={NEW_PLACE}>＋ New building…</option>
+                      </select>
+                    ) : (
+                      <input value={building} placeholder="e.g. Crawfordsville" autoFocus={typingBuilding && !typingAccount}
+                        onChange={(e) => setBuilding(e.target.value)}
+                        onBlur={() => { if (buildingHit) { setBuilding(buildingHit.name); setTypingBuilding(false); } }} />
+                    )}
                   </label>
                   <label className="pfield">Floor
-                    <input value={floor} placeholder="e.g. 2nd Floor"
-                      onChange={(e) => setFloor(e.target.value)} />
+                    <input value={floor} placeholder={nextFloor || "e.g. 2nd Floor"} list="plan-floor-names"
+                      onChange={(e) => setFloor(e.target.value)}
+                      onBlur={() => { if (floorHit) setFloor(floorHit.name); }} />
+                    <datalist id="plan-floor-names">
+                      {(buildingHit?.floors ?? []).map((f) => <option key={f.name} value={f.name} />)}
+                    </datalist>
                   </label>
                 </div>
+                {buildingHit && buildingHit.floors.length > 0 && (
+                  <p className="pnote">
+                    Already in {buildingHit.name}: {buildingHit.floors.map((f) => f.name).join(", ")}.
+                    {!floor.trim() && nextFloor && (
+                      <> <button className="plink" onClick={() => setFloor(nextFloor)}>Use “{nextFloor}”</button></>
+                    )}
+                  </p>
+                )}
+                {floorHit && buildingHit && (
+                  <p className="warntext">⚠ {floorHit.name} is already in {buildingHit.name} — this file updates its rooms (matched by room number).</p>
+                )}
 
                 {mode === "cad" ? null : proxied ? (
                   <p className="pnote keysaved">✓ AI reading is included with your OpsMatrix account.</p>
@@ -391,7 +493,7 @@ export function AiPlanImport({ commit, onImported, open, onClose, defaultMode, r
 
                 <button className="pbtn primary wide"
                   disabled={!account.trim() || !building.trim() || !floor.trim() || (mode === "read" && !keySaved && !proxied)}
-                  onClick={() => fileRef.current?.click()}>
+                  onClick={() => { settleNames(); fileRef.current?.click(); }}>
                   {mode === "cad" ? "Choose the floor file (.omfloor or .dxf)" : mode === "calibrate" ? "Choose the file — open the Calibration Editor" : "Choose floor plan (image, PDF or DXF)"}
                 </button>
                 {(!account.trim() || !building.trim() || !floor.trim()) &&
