@@ -606,6 +606,30 @@ export interface BuildPlanOptions {
 }
 
 /**
+ * The picture a plan drawn from its rooms carries: every room outline (plan
+ * pixels) stroked in the house wall colour, then the floors knocked back out
+ * in white — a solid wall mass exactly like a scan. Drawn again when rooms
+ * merge in Max Space (mergeRooms.ts), so the wall between them goes.
+ */
+export function drawRoomsPicture(rooms: { x: number; y: number }[][], w: number, h: number, pxPerFt?: number | null): string {
+  // wall thickness follows the plan's real scale (~5–6 inches of wall) so a
+  // dense clinic floor is not blotted out by cartoon-fat walls; without a
+  // scale, stay thin — thin walls on a sparse plan still read fine
+  const WALL = pxPerFt
+    ? Math.max(3, Math.min(11, Math.round(pxPerFt * 0.45)))
+    : 5;
+  const roomPaths = rooms.map((pts) => pts.map((q, i) => `${i === 0 ? "M" : "L"}${q.x} ${q.y}`).join(" ") + " Z");
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
+    `<rect width="${w}" height="${h}" fill="#fcfdfe"/>` +
+    roomPaths.map((d) =>
+      `<path d="${d}" fill="none" stroke="#2b3f4a" stroke-width="${WALL}" stroke-linejoin="round"/>`).join("") +
+    roomPaths.map((d) => `<path d="${d}" fill="#ffffff"/>`).join("") +
+    `</svg>`;
+  return "data:image/svg+xml;base64," + b64(svg);
+}
+
+/**
  * Redraw the rooms as an OpsMatrix plan: the same white ground and solid dark
  * wall mass a magicplan import produces, so a plan read from a photo is
  * indistinguishable from a scanned one once it is in the app.
@@ -624,31 +648,9 @@ export function buildPlanFromRooms(
   const floorName = opts.floor.trim() || reading.floorName || "1st Floor";
   const planId = `ai-${slug(building)}-${slug(floorName)}-${stamp}`;
 
-  // wall thickness follows the plan's real scale (~5–6 inches of wall) so a
-  // dense clinic floor is not blotted out by cartoon-fat walls; without a
-  // scale, stay thin — thin walls on a sparse plan still read fine
   const pxPerFtEarly = derivePxPerFt(reading.rooms, w, h);
-  const WALL = pxPerFtEarly
-    ? Math.max(3, Math.min(11, Math.round(pxPerFtEarly * 0.45)))
-    : 5;
   const toPx = (p: number[]) => ({ x: Math.round(p[0] * w * 10) / 10, y: Math.round(p[1] * h * 10) / 10 });
-
-  const roomPaths = reading.rooms
-    .map((r) => r.polygon.map((p, i) => {
-      const q = toPx(p);
-      return `${i === 0 ? "M" : "L"}${q.x} ${q.y}`;
-    }).join(" ") + " Z");
-
-  // walls: stroke every room outline in the house wall colour, then knock the
-  // floors back out in white — gives a solid wall mass exactly like a scan
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
-    `<rect width="${w}" height="${h}" fill="#fcfdfe"/>` +
-    roomPaths.map((d) =>
-      `<path d="${d}" fill="none" stroke="#2b3f4a" stroke-width="${WALL}" stroke-linejoin="round"/>`).join("") +
-    roomPaths.map((d) => `<path d="${d}" fill="#ffffff"/>`).join("") +
-    `</svg>`;
-  const img = "data:image/svg+xml;base64," + b64(svg);
+  const img = drawRoomsPicture(reading.rooms.map((r) => r.polygon.map(toPx)), w, h, pxPerFtEarly);
 
   const pxPerFt = pxPerFtEarly;
 

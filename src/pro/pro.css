@@ -40,6 +40,9 @@ body {
 .linkhint { display: inline-flex; align-items: center; gap: 8px; color: #eab308; font-size: 13px; }
 /* live schedule total while tapping rooms on the map (same bar as Schedules) */
 .linkhint.schedlive { flex-wrap: wrap; }
+.linkhint.mergebar em { font-style: normal; font-weight: 600; }
+.linkhint.mergebar .mergeok { color: #22c55e; }
+.linkhint.mergebar .mergewarn { color: #f97316; }
 .linkhint.schedlive .fc-hoursbar { min-width: 150px; padding: 0; }
 .schedlivemins { font-style: normal; font-family: Consolas, monospace; font-size: 12.5px; color: #e2e8f0; }
 .schedlivemins.over { color: #f87171; }
