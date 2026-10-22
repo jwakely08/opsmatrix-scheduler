@@ -20,6 +20,10 @@ import { buildingArtMap } from "./buildingArt";
 import {
   SpaceExplorerView, RoomListView, RoomEditor, notesForSpace, type SpacesView
 } from "./SpacesApp";
+import { mergeRooms, type MergeStores } from "./mergeRooms";
+import { loadRoutes, saveRoutes, type RouteStore } from "./routes";
+import { loadFloorCare, saveFloorCare, type FcStore } from "./floorcare";
+import { loadStudioSets, saveStudioSet, type StudioSet } from "./studioSets";
 import { ExportApp } from "./ExportApp";
 import { CalibrationEditorHome } from "./PlanStudio";
 import { sectionDirty, saveSection, roomTypeDirty, saveRoomType, type ScopeSection } from "./scopeDraft";
@@ -152,6 +156,19 @@ export function MapsApp() {
   const [deptPick, setDeptPick] = useState<Set<string>>(new Set());
   const [deptDraft, setDeptDraft] = useState({ name: "", color: "" });
   const [deptOutline, setDeptOutline] = useState(false);
+  // merge (Josh, 2026-10-22): ⧉ Merge in Max Space's Map View — tap the room that stays, then
+  // the room right next to it, and they are one room in all the data (mergeRooms.ts). Undo is
+  // there right after, until anything else changes.
+  const [mergeMode, setMergeMode] = useState(false);
+  const [mergeFirst, setMergeFirst] = useState<string | null>(null);
+  const [mergeNote, setMergeNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [mergeUndo, setMergeUndo] = useState<{
+    after: ClassicData; data: ClassicData; plans: boolean;
+    routes: RouteStore | null; floorCare: FcStore | null; sets: StudioSet[];
+  } | null>(null);
+  useEffect(() => {
+    setMergeMode(false); setMergeFirst(null); setMergeNote(null); setMergeUndo(null);
+  }, [navToken]);
   // the first brick of the role system: local build = the owner; cloud =
   // the signed-in profile's role (directors administer, others don't)
   const [role, setRole] = useState<AccountRole>(() => (cloudConfigured ? "staff" : "owner"));
@@ -181,6 +198,8 @@ export function MapsApp() {
   const needsBuilding = buildings.length > 1 && activeBuilding === null;
   const buildingPlans = activeBuilding === null ? [] : plans.filter((p) => planBuilding(p) === activeBuilding);
   const plan = buildingPlans.find((p) => p.id === planId) ?? buildingPlans[0] ?? null;
+  // a merge pairs two rooms on ONE floor — another floor starts over
+  useEffect(() => { setMergeFirst(null); }, [plan?.id]);
   const spaces = useMemo(
     () => (data.v7.spaces ?? []).filter((s) => !plan || s.visualPlanId === plan.id || !s.visualPlanId),
     [data.v7.spaces, plan]
@@ -213,6 +232,68 @@ export function MapsApp() {
       for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, next);
     });
   }, [commit]);
+
+  // ⧉ Merge: `otherId` becomes part of `keepId` everywhere — rooms, schedules, routes, Floor Care,
+  // the floor map and the Calibration Editor's drawing — or nothing changes and the note says why
+  const roomName = (sp: ClassicSpace) =>
+    String(sp.roomNumber ?? "").trim() || String(sp.roomName ?? "").trim() || "the room";
+  const mergeInto = (keepId: string, otherId: string) => {
+    const routesBefore = loadRoutes(), floorCareBefore = loadFloorCare(), setsBefore = loadStudioSets();
+    const work: MergeStores = {
+      data: JSON.parse(JSON.stringify(data)),
+      routes: loadRoutes(), floorCare: loadFloorCare(), sets: loadStudioSets()
+    };
+    const res = mergeRooms(work, keepId, [otherId], rules);
+    if (!res.ok) { setMergeNote({ ok: false, text: res.reason }); return; }
+    try {
+      saveClassic(work.data);
+      if (res.plansChanged) localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(work.data.plans));
+      if (res.routesChanged) saveRoutes(work.routes);
+      if (res.floorCareChanged) saveFloorCare(work.floorCare);
+    } catch {
+      // the device refused the save: put back what was there, so nothing is half-merged
+      try {
+        saveClassic(data);
+        if (res.plansChanged) localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(data.plans));
+        if (res.routesChanged) saveRoutes(routesBefore);
+        if (res.floorCareChanged) saveFloorCare(floorCareBefore);
+      } catch { /* nothing more to do */ }
+      setMergeNote({ ok: false, text: "This device couldn't save the merge (it's out of storage space), so nothing changed." });
+      return;
+    }
+    // the Calibration Editor's saved drawings are extras a full device may skip, as everywhere else
+    for (const s of res.setsChanged) saveStudioSet(s);
+    setData(work.data);
+    setMergeUndo({
+      after: work.data, data, plans: res.plansChanged,
+      routes: res.routesChanged ? routesBefore : null,
+      floorCare: res.floorCareChanged ? floorCareBefore : null,
+      sets: setsBefore.filter((s) => res.setsChanged.some((c) => c.id === s.id))
+    });
+    setMergeFirst(null);
+    setMergeNote({
+      ok: true,
+      text: `${res.merged.map(roomName).join(", ")} merged into ${roomName(res.keep)} — one room now, ` +
+        `${Math.round(Number(res.keep.squareFeet) || 0).toLocaleString()} sq ft`
+    });
+  };
+  const undoMerge = () => {
+    const u = mergeUndo;
+    if (!u || u.after !== data) return;
+    try {
+      saveClassic(u.data);
+      if (u.plans) localStorage.setItem("opsmatrix_v7_plans", JSON.stringify(u.data.plans));
+      if (u.routes) saveRoutes(u.routes);
+      if (u.floorCare) saveFloorCare(u.floorCare);
+    } catch {
+      setMergeNote({ ok: false, text: "This device couldn't save the undo (it's out of storage space)." });
+      return;
+    }
+    for (const s of u.sets) saveStudioSet(s);
+    setData(u.data);
+    setMergeUndo(null);
+    setMergeNote({ ok: true, text: "Merge undone — both rooms are back as they were." });
+  };
 
   // Scope's flag "rooms still list a task General Clean includes" → take it off
   const cleanIncluded = useCallback(() => {
@@ -394,8 +475,21 @@ export function MapsApp() {
           </>}
           {tab === "spaces" && spacesView === "map" && (
             <button className={"pbtn small" + (deptMode ? " primary" : "")}
-              onClick={() => { setDeptMode(!deptMode); setDeptPick(new Set()); setRoomSel(null); }}>
+              onClick={() => {
+                setDeptMode(!deptMode); setDeptPick(new Set()); setRoomSel(null);
+                setMergeMode(false); setMergeFirst(null); setMergeNote(null); setMergeUndo(null);
+              }}>
               🏷 Departments
+            </button>
+          )}
+          {tab === "spaces" && spacesView === "map" && (
+            <button className={"pbtn small" + (mergeMode ? " primary" : "")}
+              title="Tap the room that stays, then the room right next to it — they become one room everywhere"
+              onClick={() => {
+                setMergeMode(!mergeMode); setMergeFirst(null); setMergeNote(null); setMergeUndo(null);
+                setDeptMode(false); setDeptPick(new Set()); setRoomSel(null);
+              }}>
+              ⧉ Merge
             </button>
           )}
           <Sel label="Room type" v={filters.rtype ?? ""} on={(v) => setFilters({ ...filters, rtype: v })}
@@ -450,6 +544,28 @@ export function MapsApp() {
               <button className="pbtn small" onClick={() => { setDeptMode(false); setDeptPick(new Set()); }}>Done</button>
             </span>
           )}
+          {tab === "spaces" && spacesView === "map" && mergeMode && (() => {
+            const first = mergeFirst ? (data.v7.spaces ?? []).find((s) => s.id === mergeFirst) ?? null : null;
+            return (
+              <span className="linkhint schedlive mergebar">
+                {mergeNote && (
+                  <em className={mergeNote.ok ? "mergeok" : "mergewarn"}>{mergeNote.ok ? "✓ " : "⚠ "}{mergeNote.text}</em>
+                )}
+                {first
+                  ? <span>⧉ <b>{roomName(first)}</b> stays — now tap the room right next to it</span>
+                  : <span>⧉ Tap the room that stays, then the room right next to it</span>}
+                {mergeUndo && mergeUndo.after === data && (
+                  <button className="pbtn small" onClick={undoMerge}>↶ Undo</button>
+                )}
+                {first && (
+                  <button className="pbtn small" onClick={() => { setMergeFirst(null); setMergeNote(null); }}>✕ Start over</button>
+                )}
+                <button className="pbtn small primary" onClick={() => {
+                  setMergeMode(false); setMergeFirst(null); setMergeNote(null); setMergeUndo(null);
+                }}>Done</button>
+              </span>
+            );
+          })()}
         </div>
       )}
 
@@ -489,7 +605,8 @@ export function MapsApp() {
               const secondary = cov.find((c) => !c.primary) ?? cov[1];
               const col = scheduleColor(schedules, secondary.scheduleId);
               return col === "#64748b" ? null : col;
-            } : deptMode ? (sp) => (deptPick.has(sp.id) ? "#ffffff" : null) : undefined}
+            } : deptMode ? (sp) => (deptPick.has(sp.id) ? "#ffffff" : null)
+              : mergeMode ? (sp) => (sp.id === mergeFirst ? "#ffffff" : null) : undefined}
             outlines={deptBorders}
             flagFor={tab === "map" ? (sp) => {
               // ⚠ = this room isn't fully scheduled yet: its base clean or
@@ -509,6 +626,15 @@ export function MapsApp() {
                   else next.add(sp.id);
                   return next;
                 });
+                return;
+              }
+              // merge mode: the first tap picks the room that stays, the second merges its
+              // neighbour into it (or says why it can't, keeping the first room picked)
+              if (tab === "spaces" && mergeMode) {
+                if (!sp) return;
+                if (!mergeFirst) { setMergeFirst(sp.id); setMergeNote(null); return; }
+                if (sp.id === mergeFirst) { setMergeFirst(null); return; }
+                mergeInto(mergeFirst, sp.id);
                 return;
               }
               if (!sp) { setRoomSel(null); return; }
