@@ -3,6 +3,7 @@
 // follow ISSA-style healthcare production-rate conventions (editable
 // estimates, not gospel). Persisted under its own key; classic app data is
 // kept in sync by writing each space's estimatedCleaningMinutes.
+import type { IntakeProfile } from "./intakeScope";
 
 export interface TaskRule {
   id: string;
@@ -24,6 +25,15 @@ export interface TaskRule {
   addable: boolean;
   /** floor-tech work: scheduled in Max Floor Care, not in Max Schedules */
   floorCare?: boolean;
+  /**
+   * How often the task is done when that ISN'T every clean (Josh, 2026-10-28:
+   * an intake's floor care runs on its own days — burnishing patient rooms 3
+   * days a week while they're cleaned daily). `frequencyFor` is per room type,
+   * `frequency` everywhere else; absent = with every clean, as before. Only
+   * weekly workload uses it: a scheduled visit is still one visit.
+   */
+  frequency?: string;
+  frequencyFor?: Record<string, string>;
   builtIn?: boolean;
 }
 
@@ -113,6 +123,10 @@ export interface RoomTypeRule {
    * Absent = cleanable (every pre-existing type keeps its old behavior).
    */
   cleanability?: "cleanable" | "non-cleanable";
+  /** from an intake form: the shifts that primarily clean this type ("1st, Weekends") */
+  cleanedOn?: string;
+  /** from an intake form: the facility does more here than the general clean (pick its extras) */
+  beyondGeneral?: boolean;
   builtIn?: boolean;
 }
 
@@ -284,6 +298,8 @@ export interface Rules {
   breaks: BreakRule[];
   breakSchedules: BreakSchedule[];
   procedure: CleaningProcedure;
+  /** the intake form Scope was set up from — kept for reference (intakeScope.ts) */
+  intake?: IntakeProfile;
 }
 
 /**
@@ -525,7 +541,9 @@ export function migrateRules(rules: Rules): Rules {
 }
 
 export const FREQUENCIES = [
-  "7x / week", "6x / week", "5x / week", "3x / week", "2x / week", "1x / week", "Every other week", "Monthly"
+  "7x / week", "6x / week", "5x / week", "4x / week", "3x / week", "2x / week", "1x / week", "Every other week", "Monthly",
+  // cleaned only when someone asks (an intake form's "As needed / on request"): no routine weekly time
+  "As needed"
 ];
 
 export const RULES_KEY = "opsmatrix_fusion_rules";
@@ -663,7 +681,8 @@ export function loadRules(): Rules {
       // accounts saved before the procedure existed start on the example
       procedure: parsed.procedure && Array.isArray(parsed.procedure.steps)
         ? { show: parsed.procedure.show !== false, example: parsed.procedure.example === true, steps: parsed.procedure.steps }
-        : def.procedure
+        : def.procedure,
+      ...(parsed.intake && typeof parsed.intake === "object" ? { intake: parsed.intake } : {})
     };
     rules.nonSpaceDefs = Array.isArray(parsed.nonSpaceDefs) ? parsed.nonSpaceDefs : def.nonSpaceDefs;
     // Sanitation Route retired 2026-08-31: the Max Sanitation engine builds
@@ -813,14 +832,20 @@ export function typeIdFromLabelStrict(rules: Rules, label: string | undefined): 
   return m[norm(raw)] ?? legacyNewType(rules, norm(raw)) ?? null;
 }
 
-/** "7x / week" → 7, "Every other week" → 0.5, "Monthly" → 12/52. */
+/** "7x / week" → 7, "Every other week" → 0.5, "Monthly" → 12/52, "As needed" → 0. */
 export function freqPerWeek(frequency: string | undefined): number {
   const f = String(frequency ?? "").trim().toLowerCase();
   const m = f.match(/^(\d+(?:\.\d+)?)\s*x/);
   if (m) return Number(m[1]);
   if (/every other week/.test(f)) return 0.5;
   if (/month/.test(f)) return 12 / 52;
+  if (/as needed|on request/.test(f)) return 0;
   return 7; // unset frequency reads as daily, matching the built-in defaults
+}
+
+/** how often a task is done in rooms of a type, when that isn't with every clean */
+export function taskFrequency(t: TaskRule, typeId: string | null | undefined): string | undefined {
+  return (typeId ? t.frequencyFor?.[typeId] : undefined) || t.frequency || undefined;
 }
 
 export type Cleanability = "Cleanable" | "Non-cleanable" | "Needs review";
@@ -863,7 +888,21 @@ export function weeklyMinutes(rules: Rules, space: CleanableSpaceLike): number |
   const per = computeMinutes(rules, space).total;
   const tid = typeIdFromLabelStrict(rules, space.roomType);
   const rt = rules.roomTypes.find((x) => x.id === tid);
-  return per * freqPerWeek(rt?.frequency);
+  const visits = freqPerWeek(rt?.frequency);
+  // a task done on its own days (an intake's floor care) counts at its own frequency
+  const own: { minutes: number; perWeek: number }[] = [];
+  const included = rt ? includedTasksFor(rules, rt.id) : [];
+  for (const id of requiredTasks(rules, space)) {
+    if (included.includes(id)) continue;
+    const t = rules.tasks.find((x) => x.id === id);
+    const f = t ? taskFrequency(t, rt?.id) : undefined;
+    if (!t || !f) continue;
+    const sqft = Number(space.squareFeet) || 0;
+    own.push({ minutes: t.sqftPerMin ? sqft / t.sqftPerMin : t.flatMin, perWeek: freqPerWeek(f) });
+  }
+  if (!own.length) return per * visits;
+  const rest = Math.max(0, per - own.reduce((s, x) => s + x.minutes, 0));
+  return rest * visits + own.reduce((s, x) => s + x.minutes * x.perWeek, 0);
 }
 
 /**
