@@ -9,7 +9,7 @@
 // unresolved, never silently included or excluded.
 import {
   type Rules, type CleanableSpaceLike, spaceCleanability, weeklyMinutes,
-  estimatedFte, freqPerWeek, typeIdFromLabelStrict
+  estimatedFte, freqPerWeek, typeIdFromLabelStrict, requiredTasks, includedTasksFor, taskFrequency
 } from "./rules";
 import { blankDeptLabels, departmentDisplay } from "./roomListImport";
 
@@ -194,10 +194,18 @@ export function explainRoom(rules: Rules, sp: WorkSpace) {
   const rt = rules.roomTypes.find((x) => x.id === tid);
   const weekly = weeklyMinutes(rules, sp);
   const perVisit = Number(sp.estimatedCleaningMinutes) || 0;
+  // tasks done on their own days (an intake's floor care), which weekly minutes count that way
+  const included = rt ? includedTasksFor(rules, rt.id) : [];
+  const ownDays = requiredTasks(rules, sp).filter((id) => !included.includes(id)).flatMap((id) => {
+    const t = rules.tasks.find((x) => x.id === id);
+    const f = t ? taskFrequency(t, rt?.id) : undefined;
+    return t && f ? [`${t.label} ${f}`] : [];
+  });
   return {
     cleanability: clean,
     roomTypeLabel: rt?.label ?? null,
     frequency: rt?.frequency ?? null,
+    ownDays,
     timesPerWeek: rt ? freqPerWeek(rt.frequency) : null,
     perVisitMinutes: perVisit,
     weeklyMinutes: weekly,

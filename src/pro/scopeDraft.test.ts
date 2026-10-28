@@ -40,6 +40,27 @@ describe("per-section save isolation", () => {
     expect(afterTasks.tasks.find((t) => t.id === "burnish")!.autoFor).not.toContain("corridor"); // chips NOT saved
   });
 
+  it("how often a chip runs on a type travels with the chip (Room types), the task-wide one with Space tasks", () => {
+    const saved = defaultRules();
+    const draft = clone(saved);
+    const burnish = draft.tasks.find((t) => t.id === "burnish")!;
+    burnish.autoFor.push("patient-room");
+    burnish.frequencyFor = { "patient-room": "3x / week" };          // Room types' edit
+    draft.tasks.find((t) => t.id === "machine-carpet")!.frequency = "1x / week"; // Space tasks' edit
+
+    expect(sectionDirty(saved, draft, "roomTypes")).toBe(true);
+    const afterTypes = saveSection(saved, draft, "roomTypes");
+    expect(afterTypes.tasks.find((t) => t.id === "burnish")!.frequencyFor).toEqual({ "patient-room": "3x / week" });
+    expect(afterTypes.tasks.find((t) => t.id === "machine-carpet")!.frequency).toBeUndefined();
+
+    const afterTasks = saveSection(afterTypes, draft, "tasks");
+    expect(afterTasks.tasks.find((t) => t.id === "machine-carpet")!.frequency).toBe("1x / week");
+    // a Space tasks save keeps the chips' saved frequencies
+    expect(afterTasks.tasks.find((t) => t.id === "burnish")!.frequencyFor).toEqual({ "patient-room": "3x / week" });
+    expect(sectionDirty(afterTasks, draft, "roomTypes")).toBe(false);
+    expect(sectionDirty(afterTasks, draft, "tasks")).toBe(false);
+  });
+
   it("built-ins are deletable now — room types and tasks alike", () => {
     const saved = defaultRules();
     const draft = clone(saved);
