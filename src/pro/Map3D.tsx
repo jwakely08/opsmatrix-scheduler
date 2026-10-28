@@ -26,7 +26,11 @@ export interface Map3DApi {
 
 interface Shape { pts: XY[]; path: string; c: XY }
 
-export function Map3D({ plan, spaces, shapes, fillFor, overlayFor, flagFor, selectedId, onRoom, onCanvas, marker, groundSrc, api }: {
+export function Map3D({ plan, spaces, shapes, fillFor, overlayFor, flagFor, selectedId, onRoom, onCanvas, marker, groundSrc, api, keepView, follow }: {
+  /** the view is the user's once fitted: a resize never refits (MapCanvas's keepView) */
+  keepView?: boolean;
+  /** keep this room in sight, zoom untouched (MapCanvas's follow) */
+  follow?: string | null;
   plan: ClassicPlan;
   spaces: ClassicSpace[];
   shapes: Map<string, Shape>;
@@ -361,12 +365,54 @@ export function Map3D({ plan, spaces, shapes, fillFor, overlayFor, flagFor, sele
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groundSrc]);
 
-  // resize keeps the fit until the user drives
+  // ── following a room: glide it into sight, zoom untouched ──────────────────
+  const keepRef = useRef(Boolean(keepView));
+  keepRef.current = Boolean(keepView);
+  const followRef = useRef(follow ?? null);
+  followRef.current = follow ?? null;
+  const glide = useRef(0);
+  const ensureVisible = (id: string) => {
+    const cv = cvRef.current;
+    const sh = P.current.shapes.get(id);
+    if (!cv || !sh) return;
+    const st = S.current;
+    const p = isoProject(st.pose, sh.c.x, sh.c.y, wallH());
+    const sx = st.view.tx + p.x * st.view.k, sy = st.view.ty + p.y * st.view.k;
+    const w = cv.clientWidth, h = cv.clientHeight, m = 48;
+    if (sx >= m && sx <= w - m && sy >= m && sy <= h - m) return;
+    const dx = w / 2 - sx, dy = h / 2 - sy;
+    cancelAnimationFrame(glide.current);
+    const t0 = performance.now(), dur = 240;
+    let done = 0;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - t0) / dur);
+      const eased = 1 - (1 - t) * (1 - t);
+      const f = eased - done;
+      done = eased;
+      st.view = { ...st.view, tx: st.view.tx + dx * f, ty: st.view.ty + dy * f };
+      st.needsPaint = true;
+      wake();
+      if (t < 1) glide.current = requestAnimationFrame(step);
+    };
+    glide.current = requestAnimationFrame(step);
+  };
+  const ensureRef = useRef(ensureVisible);
+  ensureRef.current = ensureVisible;
+  useEffect(() => {
+    if (!follow) return;
+    let r2 = 0;
+    const r1 = requestAnimationFrame(() => { r2 = requestAnimationFrame(() => ensureRef.current(follow)); });
+    return () => { cancelAnimationFrame(r1); cancelAnimationFrame(r2); };
+  }, [follow]);
+  useEffect(() => () => cancelAnimationFrame(glide.current), []);
+
+  // resize keeps the fit until the user drives (or for good, with keepView)
   useEffect(() => {
     const cv = cvRef.current;
     if (!cv) return;
     const ro = new ResizeObserver(() => {
-      if (!S.current.userDrove) fit();
+      if (!S.current.userDrove && !keepRef.current) fit();
+      if (followRef.current) ensureRef.current(followRef.current);
       S.current.needsPaint = true;
       wake();
     });
@@ -403,6 +449,7 @@ export function Map3D({ plan, spaces, shapes, fillFor, overlayFor, flagFor, sele
   return (
     <canvas ref={cvRef} className="pro-map pro-map3d"
       onPointerDown={(e) => {
+        cancelAnimationFrame(glide.current); // a finger on the map stops any glide
         pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
         try { (e.target as Element).setPointerCapture?.(e.pointerId); } catch { /* fine */ }
         if (pointers.current.size === 2) {

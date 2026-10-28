@@ -11,8 +11,10 @@
 //     each pause, so we transparently restart while a room is open.
 //   • Parsing: roverParse.ts — a local grammar over Scope's own vocabulary.
 //     Zero network per room; the fields fill the moment a sentence lands.
-//   • Saving: every ✓ Confirm commits immediately. Save & Exit just leaves —
-//     a dead battery in the east wing loses nothing.
+//   • Saving: every ✓ Confirm commits immediately — and so does every way out of
+//     a room (Josh, 2026-10-28: "I hit save and exit and nothing happens"):
+//     tapping the next room, ✕, tapping the plan, another floor, Save & Exit,
+//     the iPad locking or switching apps. Only "cancel" throws the changes away.
 //   • 📍 My location drops a YOU pin where you tap. Automatic dead-reckoning
 //     was deliberately dropped: phone motion sensors drift metres in the
 //     first corridor, and a dot that lies is worse than no dot.
@@ -65,6 +67,19 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
   const [flash, setFlash] = useState("");
 
   const selected = spaces.find((s) => s.id === selId) ?? null;
+  // the rooms as saved, for the voice's numbers and for saving only what changed
+  const spacesRef = useRef(spaces);
+  spacesRef.current = spaces;
+  // a name was already said for the open room: a stray word can't replace it
+  const nameSpokenRef = useRef(false);
+  // the fields the walker typed or said in the open room — what leaving it saves
+  const touchedRef = useRef(new Set<keyof RoverDraft>());
+  const lastSavedRef = useRef("");
+  /** a typed change: the card shows it, and leaving the room saves it */
+  const edit = (patch: RoverDraft) => {
+    for (const k of Object.keys(patch) as (keyof RoverDraft)[]) touchedRef.current.add(k);
+    setDraft((prev) => ({ ...prev, ...patch }));
+  };
   // department is STICKY across the walk (Josh, 2026-09-13): a walker
   // validates a wing at a time — say "department imaging" once and every
   // room after carries it until a different department is spoken or typed
@@ -86,37 +101,91 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
     return () => { document.exitFullscreen?.().catch(() => { /* not fullscreen */ }); };
   }, []);
 
-  const confirmRoom = useCallback(() => {
+  /**
+   * Save what the open room's card holds — only when it differs from the room as saved. Every
+   * way out of a room comes through here; `force` marks the room validated even unchanged
+   * (✓ Confirm: "it's right as it is").
+   */
+  const saveOpen = useCallback((force = false): boolean => {
     const id = selRef.current;
-    const d = draftRef.current;
-    if (!id) return;
-    commit((data) => {
-      const sp = (data.v7.spaces ?? []).find((s) => s.id === id);
-      if (!sp) return;
-      if (d.roomNumber !== undefined) sp.roomNumber = d.roomNumber;
-      if (d.roomName !== undefined) sp.roomName = d.roomName;
-      // floor before type, so a re-typed room gets the NEW floor's tasks
-      if (d.floorType !== undefined) applyFloorType(sp, d.floorType, rules);
-      if (d.fixtureCount !== undefined) sp.fixtureCount = d.fixtureCount;
-      if (d.department !== undefined) sp.department = d.department;
-      if (d.roomType !== undefined) {
-        const tid = typeIdFromLabelStrict(rules, d.roomType);
-        if (tid) applyRoomType(sp, tid, rules); // label + auto tasks + minutes
-        else sp.roomType = d.roomType;
-      }
-      syncSpaceMinutes(sp, rules);
-    });
+    if (!id) return false;
+    // leaving a room saves what the walker typed or said there; ✓ Confirm saves the whole card
+    // (the sticky department rides only on a confirm, never on a room tapped just to look)
+    const full = draftRef.current;
+    const d: RoverDraft = force ? full : {};
+    if (!force) for (const k of touchedRef.current) (d as Record<string, unknown>)[k] = full[k];
+    const was = spacesRef.current.find((s) => s.id === id);
+    if (!was) return false;
+    const stamp = JSON.stringify([id, d]);
+    if (!force && stamp === lastSavedRef.current) return false; // already saved, just now
+    const same = (a: unknown, b: unknown) => String(a ?? "").trim() === String(b ?? "").trim();
+    const typeOf = (label: unknown) => typeIdFromLabelStrict(rules, String(label ?? "")) ?? String(label ?? "").trim();
+    const changed =
+      (d.roomNumber !== undefined && !same(d.roomNumber, was.roomNumber)) ||
+      (d.roomName !== undefined && !same(d.roomName, was.roomName)) ||
+      (d.floorType !== undefined && !same(d.floorType, was.floorType)) ||
+      (d.fixtureCount !== undefined && Number(d.fixtureCount) !== (Number(was.fixtureCount) || 0)) ||
+      (d.department !== undefined && !same(d.department, was.department)) ||
+      (d.roomType !== undefined && typeOf(d.roomType) !== typeOf(was.roomType));
+    if (!changed && !force) return false;
+    if (changed) {
+      commit((data) => {
+        const sp = (data.v7.spaces ?? []).find((s) => s.id === id);
+        if (!sp) return;
+        if (d.roomNumber !== undefined) sp.roomNumber = d.roomNumber;
+        if (d.roomName !== undefined) sp.roomName = d.roomName;
+        // floor before type, so a re-typed room gets the NEW floor's tasks
+        if (d.floorType !== undefined) applyFloorType(sp, d.floorType, rules);
+        if (d.fixtureCount !== undefined) sp.fixtureCount = d.fixtureCount;
+        if (d.department !== undefined) sp.department = d.department;
+        if (d.roomType !== undefined && typeOf(d.roomType) !== typeOf(sp.roomType)) {
+          const tid = typeIdFromLabelStrict(rules, d.roomType);
+          if (tid) applyRoomType(sp, tid, rules); // label + auto tasks + minutes
+          else sp.roomType = d.roomType;
+        }
+        syncSpaceMinutes(sp, rules);
+      });
+      lastSavedRef.current = stamp;
+    }
     if (d.department) lastDeptRef.current = d.department; // carries to the next rooms
     setConfirmedIds((prev) => new Set(prev).add(id));
-    setFlash("✓ Saved " + (d.roomNumber || selected?.roomNumber || ""));
+    setFlash("✓ Saved " + (d.roomNumber || was.roomNumber || ""));
     setTimeout(() => setFlash(""), 1400);
+    return true;
+  }, [commit, rules]);
+
+  /** close the open room's card — saving it, unless the walker said "cancel" */
+  const closeRoom = useCallback((save = true) => {
+    if (save) saveOpen();
     setSelId(null);
     setDraft({});
     setHeard("");
-  }, [commit, rules, selected]);
+  }, [saveOpen]);
+
+  const confirmRoom = useCallback(() => {
+    saveOpen(true);
+    closeRoom(false);
+  }, [saveOpen, closeRoom]);
+
+  // the iPad locking, or switching to another app, never loses the open room
+  const saveRef = useRef(saveOpen);
+  saveRef.current = saveOpen;
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === "hidden") saveRef.current(); };
+    const onPageHide = () => saveRef.current();
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onPageHide);
+      saveRef.current(); // leaving Rover any other way saves too
+    };
+  }, []);
 
   const confirmRef = useRef(confirmRoom);
   confirmRef.current = confirmRoom;
+  const closeRef = useRef(closeRoom);
+  closeRef.current = closeRoom;
 
   // ── the mic: open while a room is open, restart through iOS's pauses ─────
   useEffect(() => {
@@ -141,11 +210,23 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
         const r = e.results[i];
         const text = r[0].transcript;
         if (r.isFinal) {
-          const { draft: heard, command } = parseRoverUtterance(text, rules);
-          setDraft((prev) => mergeDraft(prev, heard));
+          // the open room's own number and this floor's: "297" and "F V 4 297" mean FV4-297
+          const open = spacesRef.current.find((s) => s.id === selRef.current);
+          const { draft: heard, command, nameLabeled } = parseRoverUtterance(text, rules, {
+            currentNumber: String(open?.roomNumber ?? ""),
+            floorNumbers: spacesRef.current.map((s) => String(s.roomNumber ?? "")).filter(Boolean)
+          });
+          const keepName = nameSpokenRef.current;
+          setDraft((prev) => mergeDraft(prev, heard, { keepName, nameLabeled }));
+          const nameTaken = heard.roomName !== undefined &&
+            (nameLabeled || !keepName || heard.roomName.trim().split(/\s+/).length >= 2);
+          if (nameTaken) nameSpokenRef.current = true;
+          for (const k of Object.keys(heard) as (keyof RoverDraft)[]) {
+            if (k !== "roomName" || nameTaken) touchedRef.current.add(k);
+          }
           if (command === "confirm") confirmRef.current();
           else if (command === "clear") setDraft({});
-          else if (command === "cancel") { setSelId(null); setDraft({}); }
+          else if (command === "cancel") closeRef.current(false);
         } else {
           interim += text;
         }
@@ -174,6 +255,8 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
   }, [selected?.id, rules]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openRoom = (sp: ClassicSpace) => {
+    nameSpokenRef.current = false;
+    touchedRef.current = new Set();
     setSelId(sp.id);
     // start from what the room already knows — speak only what changes
     setDraft({
@@ -203,15 +286,19 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
         <span className="grow" />
         <button className={"pbtn small" + (placingMe ? " on" : "")}
           onClick={() => setPlacingMe(!placingMe)}>📍 My location</button>
-        <button className="pbtn primary" onClick={onExit}>✓ Save &amp; Exit</button>
+        <button className="pbtn primary" onClick={() => { saveOpen(); onExit(); }}>✓ Save &amp; Exit</button>
       </header>
 
       <div className="rover-map">
         <MapCanvas
-          plan={plan} plans={plans} onPlan={onPlan}
+          plan={plan} plans={plans}
+          onPlan={(id) => { closeRoom(); onPlan(id); }}
           badge={<BuildingBadge building={building} />}
           spaces={spaces} shapes={shapes}
           mode="rover"
+          // the zoom is the walker's: opening a room's card never refits the floor, and the
+          // room just tapped slides into view above the card
+          keepView follow={selId}
           marker={mePin ? { x: mePin.x, y: mePin.y, label: "YOU" } : null}
           onCanvas={placingMe ? (pt) => { setMePin(pt); setPlacingMe(false); } : undefined}
           fillFor={(sp) =>
@@ -222,7 +309,10 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
           selectedId={selId}
           onRoom={(sp) => {
             if (placingMe) return; // the location tap wins
-            if (!sp) { setSelId(null); setDraft({}); return; }
+            if (sp && sp.id === selRef.current) return; // the open room, tapped again
+            // the room being left is saved first, then the next one opens
+            if (!sp) { closeRoom(); return; }
+            saveOpen();
             openRoom(sp);
           }}
           legend={
@@ -242,21 +332,21 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
           <div className="rover-sheethead">
             <b>{draft.roomNumber || selected.roomNumber || "Room"}</b>
             <span className="rover-heard">{heard || (micState === "listening" ? "speak the room's details…" : "")}</span>
-            <button className="pbtn ghost" onClick={() => { setSelId(null); setDraft({}); }}>✕</button>
+            <button className="pbtn ghost" aria-label="Save and close this room" onClick={() => closeRoom()}>✕</button>
           </div>
           <div className="rover-fields">
             <label>Room number
               <input value={draft.roomNumber ?? ""} placeholder="e.g. 102"
-                onChange={(e) => setDraft({ ...draft, roomNumber: e.target.value })} />
+                onChange={(e) => edit({ roomNumber: e.target.value })} />
             </label>
             <label>Room name
               <input value={draft.roomName ?? ""} placeholder="e.g. Dr Smith's Office"
-                onChange={(e) => setDraft({ ...draft, roomName: e.target.value })} />
+                onChange={(e) => edit({ roomName: e.target.value })} />
             </label>
             <label>Room type
               <select value={typeId ?? ""} onChange={(e) => {
                 const rt = rules.roomTypes.find((x) => x.id === e.target.value);
-                setDraft({ ...draft, roomType: rt?.label });
+                edit({ roomType: rt?.label });
               }}>
                 <option value="">{draft.roomType ? draft.roomType + " (?)" : "— say or pick —"}</option>
                 {rules.roomTypes.map((rt) => <option key={rt.id} value={rt.id}>{rt.label}</option>)}
@@ -264,7 +354,7 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
             </label>
             <label>Floor type
               <select value={draft.floorType ?? ""}
-                onChange={(e) => setDraft({ ...draft, floorType: e.target.value })}>
+                onChange={(e) => edit({ floorType: e.target.value })}>
                 <option value="">— say or pick —</option>
                 {FLOOR_TYPES.map((f) => <option key={f}>{f}</option>)}
               </select>
@@ -272,12 +362,12 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
             <label>Fixtures
               <input type="number" min={0} value={draft.fixtureCount ?? ""}
                 placeholder="0"
-                onChange={(e) => setDraft({ ...draft, fixtureCount: e.target.value === "" ? undefined : Number(e.target.value) })} />
+                onChange={(e) => edit({ fixtureCount: e.target.value === "" ? undefined : Number(e.target.value) })} />
             </label>
             <label>Department
               <input list="rover-depts" value={draft.department ?? ""}
                 placeholder='say "department imaging"'
-                onChange={(e) => setDraft({ ...draft, department: e.target.value || undefined })} />
+                onChange={(e) => edit({ department: e.target.value || undefined })} />
               <datalist id="rover-depts">
                 {deptOptions.map((d) => <option key={d} value={d} />)}
               </datalist>
@@ -286,7 +376,7 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
           <button className="pbtn primary rover-confirm" onClick={confirmRoom}>
             ✓ Confirm — save this room
           </button>
-          <small className="rover-say">Say it plainly: “102, office, Dr Smith's office, carpet, zero fixtures, department imaging” — then say “confirm”. The department sticks for every room after, until you say a new one.</small>
+          <small className="rover-say">Say it plainly: “102, office, Dr Smith's office, carpet, zero fixtures, department imaging”. Changes save when you tap the next room, ✕, or Save &amp; Exit — say “cancel” to throw them away. The department sticks for every room after, until you say a new one.</small>
         </div>
       )}
     </div>,

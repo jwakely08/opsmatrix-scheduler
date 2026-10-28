@@ -94,7 +94,13 @@ export function BuildingBadge({ building, onChange }: {
 
 // ── the map canvas (shared by Map + Spaces tabs, and Floor Care's builder) ──
 
-export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlines, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker }: {
+export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlines, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker, keepView, follow }: {
+  /** the view is the user's from the first fit on: a resize never refits (Rover's room card
+   *  opening under the map, Josh 2026-10-28: "it zooms back out… I lose track of which room") */
+  keepView?: boolean;
+  /** keep this room in sight — when it changes, or the map is resized, slide it into view
+   *  without touching the zoom */
+  follow?: string | null;
   plan: NonNullable<ClassicData["plans"][0]>;
   plans: ClassicData["plans"];
   onPlan: (id: string) => void;
@@ -164,6 +170,52 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
     zoomAt(svg.clientWidth / 2, svg.clientHeight / 2, factor);
   };
 
+  // ── following a room: slide it into sight, zoom untouched ──────────────────
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const shapesRef = useRef(shapes);
+  shapesRef.current = shapes;
+  const followRef = useRef(follow ?? null);
+  followRef.current = follow ?? null;
+  const keepViewRef = useRef(Boolean(keepView));
+  keepViewRef.current = Boolean(keepView);
+  const panAnim = useRef(0);
+  const ensureVisible = (id: string) => {
+    const svg = svgRef.current;
+    const sh = shapesRef.current.get(id);
+    if (!svg || !sh) return;
+    const w = svg.clientWidth, h = svg.clientHeight;
+    const v = viewRef.current;
+    const b = boundsOf(sh.pts);
+    const m = 28;
+    const x0 = v.tx + b.minX * v.k, x1 = v.tx + b.maxX * v.k, y0 = v.ty + b.minY * v.k, y1 = v.ty + b.maxY * v.k;
+    if (x0 >= m && x1 <= w - m && y0 >= m && y1 <= h - m) return; // already in sight
+    const dx = w / 2 - (v.tx + sh.c.x * v.k), dy = h / 2 - (v.ty + sh.c.y * v.k);
+    // a short glide, so the eye can follow where the room went
+    cancelAnimationFrame(panAnim.current);
+    const t0 = performance.now(), dur = 240;
+    let done = 0;
+    const step = (now: number) => {
+      const p = Math.min(1, (now - t0) / dur);
+      const eased = 1 - (1 - p) * (1 - p);
+      const f = eased - done;
+      done = eased;
+      setView((cur) => ({ ...cur, tx: cur.tx + dx * f, ty: cur.ty + dy * f }));
+      if (p < 1) panAnim.current = requestAnimationFrame(step);
+    };
+    panAnim.current = requestAnimationFrame(step);
+  };
+  const ensureRef = useRef(ensureVisible);
+  ensureRef.current = ensureVisible;
+  useEffect(() => {
+    if (!follow) return;
+    // after the layout settles (a card opening under the map shrinks it)
+    let r2 = 0;
+    const r1 = requestAnimationFrame(() => { r2 = requestAnimationFrame(() => ensureRef.current(follow)); });
+    return () => { cancelAnimationFrame(r1); cancelAnimationFrame(r2); };
+  }, [follow]);
+  useEffect(() => () => cancelAnimationFrame(panAnim.current), []);
+
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -177,7 +229,8 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
     setMapW(svg.clientWidth || 1000);
     const ro = new ResizeObserver(() => {
       setMapW(svg.clientWidth || 1000);
-      if (!userDrove.current) fit();
+      if (!userDrove.current && !keepViewRef.current) fit();
+      if (followRef.current) ensureRef.current(followRef.current);
     });
     ro.observe(svg);
     return () => ro.disconnect();
@@ -234,10 +287,11 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
         <Map3D plan={plan} spaces={spaces} shapes={shapes} fillFor={fillFor}
           overlayFor={overlayFor} flagFor={flagFor} selectedId={selectedId}
           onRoom={onRoom} onCanvas={onCanvas} marker={marker}
-          groundSrc={neon ?? plan.img} api={map3dApi} />
+          groundSrc={neon ?? plan.img} api={map3dApi} keepView={keepView} follow={follow} />
       ) : (
       <svg ref={svgRef} className="pro-map"
         onPointerDown={(e) => {
+          cancelAnimationFrame(panAnim.current); // a finger on the map stops any glide
           pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
           try { (e.target as Element).setPointerCapture?.(e.pointerId); } catch { /* not capturable — fine */ }
           if (pointers.current.size === 2) {
