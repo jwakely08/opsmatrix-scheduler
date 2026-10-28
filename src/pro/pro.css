@@ -580,6 +580,28 @@ body {
   background: #0d9488; border-color: rgba(45,212,191,.6); color: #fff;
   box-shadow: 0 0 16px rgba(45,212,191,.35);
 }
+/* which way the map faces (compass.ts) — its own corner, top-left; the needle points at real north */
+.pro-compass { position: absolute; left: 12px; top: 12px; z-index: 7; display: flex; align-items: flex-start; gap: 8px; }
+.pro-compass .compassbtn {
+  width: 42px; height: 42px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+  padding: 0; cursor: pointer; background: rgba(15,23,42,.92); border: 1px solid rgba(148,163,184,.25);
+}
+.pro-compass .compassbtn:active { background: #0d9488; }
+.pro-compass .compassbtn svg { transition: transform .25s ease-out; }
+.pro-compass .compassbtn.on { border-color: rgba(45,212,191,.6); box-shadow: 0 0 14px rgba(45,212,191,.3); }
+.compassmenu {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px; border-radius: 12px; background: rgba(15,23,42,.97); border: 1px solid rgba(148,163,184,.3);
+  box-shadow: 0 10px 30px rgba(0,0,0,.5); max-width: 260px; font-size: 13px;
+}
+.compassmenu .plink { text-align: left; }
+.compasscal {
+  position: absolute; left: 50%; top: 16px; transform: translateX(-50%); z-index: 8; width: min(440px, calc(100% - 32px));
+  padding: 14px 16px; border-radius: 14px; background: rgba(15,23,42,.97); border: 1px solid rgba(45,212,191,.45);
+  box-shadow: 0 12px 34px rgba(0,0,0,.55); font-size: 13px; color: #cbd5e1;
+}
+.compasscal p { margin: 6px 0; line-height: 1.45; }
+.compasscal .compassreading { font-size: 18px; font-weight: 700; color: #5eead4; }
 .pro-map3d { cursor: grab; }
 .pro-map3d:active { cursor: grabbing; }
 /* department borders: one contour around each contiguous wing */
@@ -1372,6 +1394,19 @@ body {
 }
 /* 16px keeps iPad Safari from zooming the page into a field when it's tapped */
 .rover input, .rover select { font-size: 16px; }
+.rover-clone { padding: 8px 14px; border-bottom: 1px solid var(--edge, rgba(148,163,184,.2)); background: rgba(6, 11, 23, 0.98); }
+/* ⎘ Clone: the room to copy from, and a tick per detail it copies */
+.clonebar { flex-wrap: wrap; row-gap: 6px; }
+.clonebar .clonechk {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 99px; cursor: pointer;
+  border: 1px solid rgba(148,163,184,.3); color: #94a3b8; font-size: 12px; background: #1e293b;
+}
+.clonebar .clonechk.on { border-color: #0d9488; color: #5eead4; background: rgba(13,148,136,.2); }
+.clonebar .clonechk input { width: 16px; height: 16px; margin: 0; accent-color: #0d9488; }
+.clonebar .clonechk i { font-style: normal; color: #e2e8f0; margin-left: 2px; }
+.clonebar em { font-style: normal; font-weight: 600; }
+.clonebar .mergeok { color: #22c55e; }
+.clonebar .mergewarn { color: #f97316; }
 .rover-head {
   display: flex; align-items: center; gap: 10px; padding: 10px 14px;
   padding-top: max(10px, env(safe-area-inset-top));
