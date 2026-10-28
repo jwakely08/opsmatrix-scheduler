@@ -27,6 +27,19 @@ export type RoverCommand = "confirm" | "clear" | "cancel" | null;
 export interface RoverParse {
   draft: RoverDraft;      // ONLY the fields this utterance mentioned
   command: RoverCommand;
+  /** the name was said with a label ("room name …", "called …"), not left over */
+  nameLabeled?: boolean;
+}
+
+/**
+ * What the walker is standing in (Josh, 2026-10-28: Fairview's CAD numbers are "FV4-297" —
+ * spoken "F V 4 297", or just "297"). A spoken number lands on the room number it means.
+ */
+export interface RoverContext {
+  /** the open room's number as stored */
+  currentNumber?: string;
+  /** every room number on this floor */
+  floorNumbers?: string[];
 }
 
 // ── number words the recognizer sometimes emits instead of digits ──────────
@@ -37,12 +50,141 @@ const NUM_WORDS: Record<string, number> = {
   nineteen: 19, twenty: 20
 };
 
+const DIGIT_WORDS = new Set(["zero", "oh", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]);
+const TEENS: Record<string, number> = {
+  ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19
+};
+const TENS: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+
+/**
+ * Spoken number runs → digits, for runs of 2+ number words: "one oh two" → 102, "two ninety
+ * seven" → 297, "four twenty one" → 421, "one hundred two" → 102. A single number word stays a
+ * word ("exam room one", "two fixtures" read on their own).
+ */
+function spokenNumbers(t: string): string {
+  const words = t.trim().split(/\s+/);
+  const isNum = (w: string) => DIGIT_WORDS.has(w) || w in TEENS || w in TENS || w === "hundred";
+  const out: string[] = [];
+  for (let i = 0; i < words.length;) {
+    let j = i;
+    while (j < words.length && isNum(words[j])) j++;
+    if (j - i >= 2) {
+      let digits = "";
+      for (let k = i; k < j;) {
+        const w = words[k];
+        if (w === "hundred") {
+          // "one hundred" → 1·00; "one hundred two" → 102
+          const rest = k + 1 < j ? words[k + 1] : "";
+          digits += rest && (DIGIT_WORDS.has(rest) && rest !== "oh") ? "0" : rest ? "" : "00";
+          k++;
+        } else if (w in TENS) {
+          const unit = k + 1 < j && DIGIT_WORDS.has(words[k + 1]) && words[k + 1] !== "oh" && words[k + 1] !== "zero" ? NUM_WORDS[words[k + 1]] : null;
+          digits += String(TENS[w] + (unit ?? 0));
+          k += unit === null ? 1 : 2;
+        } else if (w in TEENS) {
+          digits += String(TEENS[w]);
+          k++;
+        } else {
+          digits += String(NUM_WORDS[w]);
+          k++;
+        }
+      }
+      out.push(digits);
+      i = j;
+    } else {
+      out.push(words[i]);
+      i++;
+    }
+  }
+  return " " + out.join(" ") + " ";
+}
+
 function normalize(text: string): string {
-  let t = " " + text.toLowerCase().replace(/[.,!?;:()"']/g, " ").replace(/\s+/g, " ").trim() + " ";
-  // spelled digit runs → digits ("one oh two" → 102), only for runs of 2+
-  t = t.replace(/((?:\b(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b ){1,}\b(?:zero|oh|one|two|three|four|five|six|seven|eight|nine)\b)/g,
-    (run) => " " + run.trim().split(/\s+/).map((w) => String(NUM_WORDS[w] ?? "")).join("") + " ");
-  return t;
+  const t = " " + text.toLowerCase().replace(/#/g, " number ").replace(/[.,!?;:()"']/g, " ").replace(/\s+/g, " ").trim() + " ";
+  return spokenNumbers(t);
+}
+
+// ── room numbers as the facility writes them ────────────────────────────────
+
+const alnum = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+const digitsOf = (s: string) => s.replace(/\D/g, "");
+
+/** the room number a spoken code means: one on this floor, the open room's own, or as said */
+function resolveNumber(letters: string, groups: string[], tail: string, ctx: RoverContext, anyRoom: boolean): string | null {
+  const said = alnum(letters + groups.join("") + tail);
+  const d = digitsOf(groups.join(""));
+  const cur = String(ctx.currentNumber ?? "").trim();
+  const curDigits = digitsOf(cur);
+  // the open room's own number, said in full or by its last digits
+  if (cur && (alnum(cur) === said || (d && (curDigits === d || (d.length >= 2 && curDigits.endsWith(d)))) && (!tail || alnum(cur).endsWith(tail)))) {
+    return cur;
+  }
+  if (!anyRoom) return null;
+  const nums = (ctx.floorNumbers ?? []).map((n) => String(n ?? "").trim()).filter(Boolean);
+  const exact = nums.filter((n) => alnum(n) === said);
+  if (exact.length === 1) return exact[0];
+  let hits = nums.filter((n) => d && (digitsOf(n) === d || (d.length >= 3 && digitsOf(n).endsWith(d))) && (!tail || alnum(n).endsWith(tail)));
+  if (hits.length > 1 && letters) hits = hits.filter((n) => alnum(n).startsWith(letters));
+  if (hits.length === 1) return hits[0];
+  // not on this floor: written the way this floor writes its numbers ("F V 4 3 1 0" → FV4-310)
+  const styled = inFloorStyle(letters, d, tail, nums);
+  if (styled) return styled;
+  // …or as said: "F V 4 297" → FV4-297, "102" → 102, "12 b" → 12B
+  const parts = groups.every((g) => /^\d$/.test(g)) ? [groups.join("")] : groups;
+  return letters + parts.join("-") + tail;
+}
+
+/** the floor's usual number shape ("FV4-297" → letters, 1 digit, dash, 3 digits), filled in */
+function inFloorStyle(letters: string, digits: string, tail: string, nums: string[]): string | null {
+  if (!nums.length || !digits) return null;
+  const shape = (n: string) => n.toUpperCase().replace(/[A-Z]/g, "L").replace(/\d/g, "D");
+  const count = new Map<string, number>();
+  for (const n of nums) count.set(shape(n), (count.get(shape(n)) ?? 0) + 1);
+  const [best] = [...count.entries()].sort((a, b) => b[1] - a[1])[0];
+  const m = /^(L*)(D+)-(D+)$/.exec(best);
+  if (!m || m[2].length + m[3].length !== digits.length || tail) return null;
+  // the letters said, or the ones this floor's numbers of that shape use
+  const own = letters || (() => {
+    const lead = new Map<string, number>();
+    for (const n of nums) if (shape(n) === best) { const l = /^[A-Z]*/.exec(n.toUpperCase())![0]; lead.set(l, (lead.get(l) ?? 0) + 1); }
+    return [...lead.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "";
+  })();
+  if (own.length !== m[1].length) return null;
+  return `${own}${digits.slice(0, m[2].length)}-${digits.slice(m[2].length)}`;
+}
+
+/**
+ * Find the spoken room numbers: a run of number pieces — letters the floor's numbers start with
+ * ("f v", "fv"), digit groups, an optional letter tag — that holds a digit.
+ */
+function codeRuns(t: string, ctx: RoverContext): { start: number; end: number; letters: string; groups: string[]; tail: string }[] {
+  const prefixes = new Set<string>();
+  for (const n of ctx.floorNumbers ?? []) {
+    const m = /^[A-Z]+/.exec(alnum(String(n ?? "")));
+    if (m) for (let i = 1; i <= m[0].length; i++) prefixes.add(m[0].slice(0, i));
+  }
+  const words = t.trim().split(/\s+/);
+  const runs: { start: number; end: number; letters: string; groups: string[]; tail: string }[] = [];
+  for (let i = 0; i < words.length; i++) {
+    let j = i, letters = "";
+    // letters in front: single letters ("f v"), or the start of the floor's own prefixes ("fv")
+    while (j < words.length && /^[a-z]{1,3}$/.test(words[j]) && prefixes.has((letters + words[j]).toUpperCase())) {
+      letters += words[j].toUpperCase();
+      j++;
+    }
+    // then the pieces that carry digits: "4", "297", "4-297", "fv4", "4e-210", "12b"
+    const groups: string[] = [];
+    while (j < words.length && /^[a-z]{0,3}\d[a-z0-9]*(?:-[a-z0-9]+)*$/.test(words[j])) {
+      groups.push(...(/^\d+(?:-\d+)+$/.test(words[j]) ? words[j].split("-") : [words[j].toUpperCase()]));
+      j++;
+    }
+    if (!groups.length) continue;
+    let tail = "";
+    if (j < words.length && /^[a-z]$/.test(words[j]) && words[j] !== "a" && words[j] !== "i") { tail = words[j].toUpperCase(); j++; }
+    runs.push({ start: i, end: j, letters, groups, tail });
+    i = j - 1;
+  }
+  return runs;
 }
 
 /** "seventeen" → 17 for a single count word */
@@ -95,7 +237,7 @@ const FILLERS = new Set([
  * draft yourself), plus any spoken command. Handles both the labeled form
  * and the terse form, including "…zero fixtures confirm" in one breath.
  */
-export function parseRoverUtterance(text: string, rules: Rules): RoverParse {
+export function parseRoverUtterance(text: string, rules: Rules, ctx: RoverContext = {}): RoverParse {
   const draft: RoverDraft = {};
   let command: RoverCommand = null;
   let t = normalize(text);
@@ -141,17 +283,26 @@ export function parseRoverUtterance(text: string, rules: Rules): RoverParse {
     }
   }
 
-  // 3 · room number — labeled first, else the first digit-bearing token
-  const labeledNum = /\b(?:room )?number ([a-z]?\d[\w-]*)\b/;
-  const mNum = labeledNum.exec(t);
-  if (mNum) {
-    draft.roomNumber = mNum[1].toUpperCase();
-    t = t.replace(labeledNum, " ");
-  } else {
-    const bare = /(?:^| )([a-z]?\d[\w-]*)(?= |$)/.exec(t);
-    if (bare) {
-      draft.roomNumber = bare[1].toUpperCase();
-      t = t.replace(bare[1], " ");
+  // 3 · room number — said after "number", or first thing in the breath ("102 office…",
+  // "F V 4 297 patient room…"), matched to this floor's own numbers. Digits further in are the
+  // name's ("exam room 2", "med room 4") unless they're the open room's own number said again.
+  {
+    const words = t.trim().split(/\s+/);
+    const runs = codeRuns(t, ctx);
+    const lead = (() => { let i = 0; while (i < words.length && FILLERS.has(words[i])) i++; return i; })();
+    let taken: { start: number; end: number; value: string } | null = null;
+    for (const r of runs) {
+      const labeled = r.start > 0 && words[r.start - 1] === "number";
+      const first = r.start === lead || (labeled && words.slice(0, r.start - 1).every((w) => FILLERS.has(w)));
+      const value = resolveNumber(r.letters, r.groups, r.tail, ctx, labeled || first);
+      if (value === null) continue;
+      taken = { start: labeled ? r.start - 1 : r.start, end: r.end, value };
+      if (labeled && words[r.start - 2] === "room") taken.start = r.start - 2;
+      break;
+    }
+    if (taken) {
+      draft.roomNumber = taken.value;
+      t = " " + [...words.slice(0, taken.start), ...words.slice(taken.end)].join(" ") + " ";
     }
   }
 
@@ -209,13 +360,22 @@ export function parseRoverUtterance(text: string, rules: Rules): RoverParse {
     }
   }
 
-  // 5 · room name — labeled phrase wins; otherwise whatever meaningful words
-  // are left over ("dr smith s office") become the name
-  const labeledName = /\broom name (.+?)(?=\broom (?:type|number)\b|$)/.exec(t);
+  // 5 · room name — labeled phrase wins ("room name …", "name is …", "called …"); otherwise the
+  // meaningful words left over ("dr smith s office"), minus the talk around them ("okay…", "so…")
+  const labeledName = /\b(?:room name|name is|named|called)\b (.+?)(?=\broom (?:type|number)\b|$)/.exec(t);
   let nameRaw = labeledName ? labeledName[1] : "";
   if (labeledName) t = t.replace(labeledName[0], " ");
   if (!nameRaw) {
-    nameRaw = t.split(/\s+/).filter((w) => w && !FILLERS.has(w)).join(" ");
+    // "room" after a name word is the name's ("Med Room", "Clean Room"); on its own it's talk
+    const left: string[] = [];
+    for (const w of t.split(/\s+/)) {
+      if (!w) continue;
+      if (!FILLERS.has(w) || (w === "room" && left.length > 0 && !TALK.has(left[left.length - 1]))) left.push(w);
+    }
+    while (left.length && TALK.has(left[0])) left.shift();
+    while (left.length && TALK.has(left[left.length - 1])) left.pop();
+    // a lone number or number word is never a name
+    if (!(left.length === 1 && (/^\d+$/.test(left[0]) || left[0] in NUM_WORDS))) nameRaw = left.join(" ");
   }
   nameRaw = nameRaw.replace(/~/g, " ").replace(/\s+s\b/g, "'s").replace(/\s+/g, " ").trim();
   if (nameRaw) {
@@ -224,14 +384,28 @@ export function parseRoverUtterance(text: string, rules: Rules): RoverParse {
       .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
   }
 
-  return { draft, command };
+  return { draft, command, ...(labeledName && nameRaw ? { nameLabeled: true } : {}) };
 }
 
-/** merge an utterance's fields onto the running draft (spoken-last wins) */
-export function mergeDraft(base: RoverDraft, add: RoverDraft): RoverDraft {
+/** talk around the data that never belongs in a room name, at either end of what's left */
+const TALK = new Set([
+  "okay", "ok", "so", "yeah", "yes", "yep", "alright", "like", "just", "well", "actually", "then",
+  "also", "now", "please", "sure", "let's", "lets", "see", "put", "change", "set", "make", "here",
+  "there", "um", "uh", "hmm", "oh", "right", "go", "got", "i", "i'm", "im", "we", "you", "to", "be",
+  // the "s" of "it's" once its apostrophe is gone
+  "s"
+]);
+
+/**
+ * Merge an utterance's fields onto the running draft (spoken-last wins). With `keepName` (a name
+ * was already said for this room), a one-word leftover — a stray word the recognizer caught —
+ * doesn't replace it; a labeled name or a longer one does.
+ */
+export function mergeDraft(base: RoverDraft, add: RoverDraft, opts?: { keepName?: boolean; nameLabeled?: boolean }): RoverDraft {
   const out = { ...base };
   if (add.roomNumber !== undefined) out.roomNumber = add.roomNumber;
-  if (add.roomName !== undefined) out.roomName = add.roomName;
+  const strayWord = opts?.keepName && !opts.nameLabeled && String(add.roomName ?? "").trim().split(/\s+/).length < 2;
+  if (add.roomName !== undefined && !strayWord) out.roomName = add.roomName;
   if (add.roomType !== undefined) out.roomType = add.roomType;
   if (add.floorType !== undefined) out.floorType = add.floorType;
   if (add.fixtureCount !== undefined) out.fixtureCount = add.fixtureCount;
