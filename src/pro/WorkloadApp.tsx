@@ -606,6 +606,9 @@ function RoomExplanation({ sp, rules }: { sp: WorkSpace; rules: Rules }) {
       {ex.cleanability === "Cleanable" && <>
         <div className="pline"><span>Minutes per clean (rules engine)</span><b>{fmt(ex.perVisitMinutes)}</b></div>
         <div className="pline"><span>Cleaning frequency</span><b>{ex.frequency ?? "—"}</b></div>
+        {ex.ownDays.length > 0 && (
+          <div className="pline"><span>On their own days</span><b>{ex.ownDays.join(" · ")}</b></div>
+        )}
         <div className="pline"><span>Weekly minutes</span><b>{ex.weeklyMinutes === null ? "cannot calculate yet" : fmt(ex.weeklyMinutes)}</b></div>
         <div className="pline"><span>Estimated FTE contribution</span><b>{ex.fte === null ? "—" : fmt(ex.fte, 3)}</b></div>
       </>}

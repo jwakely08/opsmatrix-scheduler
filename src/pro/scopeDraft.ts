@@ -2,13 +2,17 @@
 // rulebook edits a shared DRAFT, but Save commits ONLY that section — hitting
 // Save on Room types must never sneak in half-finished Space task edits.
 // The one wrinkle: a room type's "automatic tasks" chips live ON the tasks
-// (task.autoFor), so the Room types section owns autoFor while the Space
-// tasks section owns everything else about a task.
+// (task.autoFor, and how often each runs there: task.frequencyFor), so the
+// Room types section owns those while the Space tasks section owns
+// everything else about a task.
 import type { Rules } from "./rules";
 
 export type ScopeSection = "general" | "roomTypes" | "tasks" | "nonSpace" | "breaks" | "procedure";
 
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
+
+const sortedFreq = (f: Record<string, string> | undefined) =>
+  Object.entries(f ?? {}).sort(([a], [b]) => a.localeCompare(b));
 
 /** the comparable slice a section owns */
 function slice(r: Rules, section: ScopeSection): unknown {
@@ -16,9 +20,9 @@ function slice(r: Rules, section: ScopeSection): unknown {
     case "general": return r.general;
     case "roomTypes": return {
       types: r.roomTypes,
-      autoFor: r.tasks.map((t) => [t.id, [...(t.autoFor ?? [])].sort()])
+      autoFor: r.tasks.map((t) => [t.id, [...(t.autoFor ?? [])].sort(), sortedFreq(t.frequencyFor)])
     };
-    case "tasks": return r.tasks.map(({ autoFor: _a, ...rest }) => rest);
+    case "tasks": return r.tasks.map(({ autoFor: _a, frequencyFor: _f, ...rest }) => rest);
     case "nonSpace": return { defs: r.nonSpaceDefs, quals: r.nonSpaceQualifiers ?? [] };
     case "breaks": return { breaks: r.breaks ?? [], schedules: r.breakSchedules ?? [] };
     case "procedure": return r.procedure ?? null;
@@ -43,16 +47,25 @@ export function saveSection(saved: Rules, draft: Rules, section: ScopeSection): 
       // BOTH: an unsaved new/deleted task stays the Space tasks section's call
       next.tasks = next.tasks.map((t) => {
         const d = draft.tasks.find((x) => x.id === t.id);
-        return d ? { ...t, autoFor: clone(d.autoFor ?? []) } : t;
+        if (!d) return t;
+        const out = { ...t, autoFor: clone(d.autoFor ?? []) };
+        if (d.frequencyFor && Object.keys(d.frequencyFor).length) out.frequencyFor = clone(d.frequencyFor);
+        else delete out.frequencyFor;
+        return out;
       });
       break;
     }
     case "tasks":
       // rates, labels, floor-care flags, additions and deletions — but each
-      // surviving task keeps its SAVED autoFor (that's Room types' business)
+      // surviving task keeps its SAVED autoFor and per-type frequencies
+      // (that's Room types' business)
       next.tasks = draft.tasks.map((t) => {
         const s = saved.tasks.find((x) => x.id === t.id);
-        return { ...clone(t), autoFor: s ? clone(s.autoFor ?? []) : clone(t.autoFor ?? []) };
+        const out = { ...clone(t), autoFor: s ? clone(s.autoFor ?? []) : clone(t.autoFor ?? []) };
+        const freq = s ? s.frequencyFor : t.frequencyFor;
+        if (freq && Object.keys(freq).length) out.frequencyFor = clone(freq);
+        else delete out.frequencyFor;
+        return out;
       });
       break;
     case "nonSpace":
@@ -74,7 +87,8 @@ export function saveSection(saved: Rules, draft: Rules, section: ScopeSection): 
 function typeSlice(r: Rules, typeId: string): unknown {
   return {
     type: r.roomTypes.find((t) => t.id === typeId) ?? null,
-    autoFor: r.tasks.filter((t) => (t.autoFor ?? []).includes(typeId)).map((t) => t.id).sort()
+    autoFor: r.tasks.filter((t) => (t.autoFor ?? []).includes(typeId))
+      .map((t) => `${t.id}@${t.frequencyFor?.[typeId] ?? ""}`).sort()
   };
 }
 
@@ -106,6 +120,11 @@ export function saveRoomType(saved: Rules, draft: Rules, typeId: string): Rules 
     const has = (t.autoFor ?? []).includes(typeId);
     if (wants && !has) t.autoFor = [...(t.autoFor ?? []), typeId];
     if (!wants && has) t.autoFor = t.autoFor.filter((x) => x !== typeId);
+    // how often it runs on this type travels with the chip
+    const freq = wants ? dt?.frequencyFor?.[typeId] : undefined;
+    const map = { ...(t.frequencyFor ?? {}) };
+    if (freq) map[typeId] = freq; else delete map[typeId];
+    if (Object.keys(map).length) t.frequencyFor = map; else delete t.frequencyFor;
   }
   return next;
 }

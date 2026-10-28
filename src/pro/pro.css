@@ -152,6 +152,23 @@ body {
 .gcexample b { color: #e2e8f0; }
 .gcissa { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-left: auto; font-size: 12px; }
 .gcrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.gcnote { margin: 0; color: #94a3b8; font-size: 12px; }
+.ptask .chipfreq {
+  -webkit-appearance: none; appearance: none; vertical-align: middle;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0h8L4 5z' fill='%2394a3b8'/%3E%3C/svg%3E") no-repeat right 1px center;
+  color: inherit; border: none; border-left: 1px solid rgba(148,163,184,.3); border-radius: 0;
+  font-size: 11px; height: 15px; line-height: 15px; padding: 0 12px 0 6px; margin-left: 5px; width: auto; max-width: 110px;
+}
+/* Scope → set up from an intake form, and the profile it leaves */
+.intakecard .prow { margin-top: 2px; }
+.intakereview p { margin: 4px 0; }
+.intakereview details, .intakeprofile .intakeblock { margin: 4px 0; }
+.intakereview summary, .intakeprofile summary { cursor: pointer; color: #e2e8f0; }
+.intakereview ul, .intakeprofile ul { margin: 6px 0 2px; padding-left: 20px; color: #cbd5e1; font-size: 12.5px; line-height: 1.5; }
+.intakefacts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 8px 0 2px; }
+.intakefacts span { display: flex; flex-direction: column; }
+.intakefacts i { font-style: normal; color: #94a3b8; font-size: 11px; }
+.intakeblocks { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 4px 18px; }
 .gclabel { color: #94a3b8; font-size: 12px; min-width: 170px; }
 .ptask.incl { opacity: .55; cursor: default; border-style: dashed; }
 .ptask.warn { border-color: #f59e0b; color: #fbbf24; background: rgba(245,158,11,.12); }

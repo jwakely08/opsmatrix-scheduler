@@ -21,6 +21,7 @@ import {
   SpaceExplorerView, RoomListView, RoomEditor, notesForSpace, type SpacesView
 } from "./SpacesApp";
 import { mergeRooms, type MergeStores } from "./mergeRooms";
+import { IntakeSetup, IntakeProfileCard } from "./IntakeSetup";
 import { loadRoutes, saveRoutes, type RouteStore } from "./routes";
 import { loadFloorCare, saveFloorCare, type FcStore } from "./floorcare";
 import { loadStudioSets, saveStudioSet, type StudioSet } from "./studioSets";
@@ -2016,6 +2017,13 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
         <button className="pbtn small" onClick={onDuplicate}>Duplicate type</button>
         <button className="pbtn small danger" onClick={onDelete}>✕</button>
       </div>
+      {(rt.cleanedOn || rt.beyondGeneral) && (
+        <p className="gcnote">
+          {rt.cleanedOn ? `Cleaned on ${rt.cleanedOn}` : ""}
+          {rt.cleanedOn && rt.beyondGeneral ? " · " : ""}
+          {rt.beyondGeneral ? "Needs more than the general clean — add its extras below" : ""}
+        </p>
+      )}
 
       <div className="gcformula">
         <select value={f.method} disabled={!isAdmin}
@@ -2091,9 +2099,25 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
           {extras.filter((t) => (t.autoFor ?? []).includes(rt.id)).map((t) => (
             <span key={t.id} className={"ptask sm on" + (t.floorCare ? " fc" : "")}>
               {t.label}
+              {/* how often it runs on this type, when that isn't every clean (an intake's floor care) */}
+              <select className="chipfreq" value={t.frequencyFor?.[rt.id] ?? ""} aria-label={`How often: ${t.label}`}
+                onChange={(e) => editAll((r) => {
+                  const task = r.tasks.find((x) => x.id === t.id)!;
+                  const map = { ...(task.frequencyFor ?? {}) };
+                  if (e.target.value) map[rt.id] = e.target.value; else delete map[rt.id];
+                  if (Object.keys(map).length) task.frequencyFor = map; else delete task.frequencyFor;
+                })}>
+                <option value="">every clean</option>
+                {FREQUENCIES.map((x) => <option key={x} value={x}>{x}</option>)}
+              </select>
               <button className="chipx" onClick={() => editAll((r) => {
                 const task = r.tasks.find((x) => x.id === t.id)!;
                 task.autoFor = task.autoFor.filter((x) => x !== rt.id);
+                if (task.frequencyFor?.[rt.id]) {
+                  const map = { ...task.frequencyFor };
+                  delete map[rt.id];
+                  if (Object.keys(map).length) task.frequencyFor = map; else delete task.frequencyFor;
+                }
               })}>✕</button>
             </span>
           ))}
@@ -2197,6 +2221,14 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
           )}
         </p>
       )}
+
+      {isAdmin && (
+        <IntakeSetup rules={rules} onApply={(next) => {
+          onChange(next);
+          setDraft(JSON.parse(JSON.stringify(next)));
+        }} />
+      )}
+      {rules.intake && <IntakeProfileCard profile={rules.intake} />}
 
       <h3>Room types</h3>
       {draft.roomTypes.map((rt) => {
@@ -2342,6 +2374,15 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
                 <option value="">＋ skip a room type…</option>
                 {draft.roomTypes.filter((rt) => !(t.floorSkipTypes ?? []).includes(rt.id))
                   .map((rt) => <option key={rt.id} value={rt.id}>{rt.label}</option>)}
+              </select>
+              <span>how often</span>
+              <select className="chipadd" value={t.frequency ?? ""} aria-label={`How often: ${t.label}`}
+                onChange={(e) => set((r) => {
+                  const x = r.tasks.find((y) => y.id === t.id)!;
+                  if (e.target.value) x.frequency = e.target.value; else delete x.frequency;
+                })}>
+                <option value="">every clean</option>
+                {FREQUENCIES.map((f) => <option key={f} value={f}>{f}</option>)}
               </select>
             </>)}
             {taskSourceLabel(t) && <span className="gcsrc">Rate: {taskSourceLabel(t)}</span>}
