@@ -21,6 +21,7 @@ import {
   SpaceExplorerView, RoomListView, RoomEditor, notesForSpace, type SpacesView
 } from "./SpacesApp";
 import { mergeRooms, type MergeStores } from "./mergeRooms";
+import { useCloneMode, CloneBar } from "./CloneMode";
 import { IntakeSetup, IntakeProfileCard } from "./IntakeSetup";
 import { loadRoutes, saveRoutes, type RouteStore } from "./routes";
 import { loadFloorCare, saveFloorCare, type FcStore } from "./floorcare";
@@ -216,6 +217,12 @@ export function MapsApp() {
       return next;
     });
   }, []);
+
+  // ⎘ Clone (Josh, 2026-10-28): in Max Space's Map View, tap the room to copy from, tick what to
+  // copy, then every room tapped gets it — until Done (CloneMode.tsx)
+  const clone = useCloneMode(data.v7.spaces ?? [], commit, rules);
+  const stopClone = clone.stop;
+  useEffect(() => { stopClone(); }, [navToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commitRules = useCallback((next: Rules) => {
     const prev = loadRules(); // the rulebook as it stood before this change
@@ -479,6 +486,7 @@ export function MapsApp() {
               onClick={() => {
                 setDeptMode(!deptMode); setDeptPick(new Set()); setRoomSel(null);
                 setMergeMode(false); setMergeFirst(null); setMergeNote(null); setMergeUndo(null);
+                clone.stop();
               }}>
               🏷 Departments
             </button>
@@ -489,8 +497,20 @@ export function MapsApp() {
               onClick={() => {
                 setMergeMode(!mergeMode); setMergeFirst(null); setMergeNote(null); setMergeUndo(null);
                 setDeptMode(false); setDeptPick(new Set()); setRoomSel(null);
+                clone.stop();
               }}>
               ⧉ Merge
+            </button>
+          )}
+          {tab === "spaces" && spacesView === "map" && (
+            <button className={"pbtn small" + (clone.on ? " primary" : "")}
+              title="Tap the room to copy from, tick what to copy, then tap every room that should get it"
+              onClick={() => {
+                if (clone.on) clone.stop(); else clone.start();
+                setDeptMode(false); setDeptPick(new Set()); setRoomSel(null);
+                setMergeMode(false); setMergeFirst(null); setMergeNote(null); setMergeUndo(null);
+              }}>
+              ⎘ Clone
             </button>
           )}
           <Sel label="Room type" v={filters.rtype ?? ""} on={(v) => setFilters({ ...filters, rtype: v })}
@@ -567,6 +587,7 @@ export function MapsApp() {
               </span>
             );
           })()}
+          {tab === "spaces" && spacesView === "map" && clone.on && <CloneBar clone={clone} rules={rules} />}
         </div>
       )}
 
@@ -582,6 +603,7 @@ export function MapsApp() {
               onChange={buildings.length > 1 ? () => chooseBuilding(null) : undefined} />}
             spaces={spaces} shapes={shapes}
             mode={tab === "spaces" ? "spaces" : "map"}
+            compass={tab === "spaces"}
             fillFor={(sp) => {
               if (tab === "spaces") {
                 if (deptMode) {
@@ -607,7 +629,9 @@ export function MapsApp() {
               const col = scheduleColor(schedules, secondary.scheduleId);
               return col === "#64748b" ? null : col;
             } : deptMode ? (sp) => (deptPick.has(sp.id) ? "#ffffff" : null)
-              : mergeMode ? (sp) => (sp.id === mergeFirst ? "#ffffff" : null) : undefined}
+              : mergeMode ? (sp) => (sp.id === mergeFirst ? "#ffffff" : null)
+                : clone.on ? (sp) => (sp.id === clone.source?.id ? "#ffffff" : clone.pasted.has(sp.id) ? "#22c55e" : null)
+                  : undefined}
             outlines={deptBorders}
             flagFor={tab === "map" ? (sp) => {
               // ⚠ = this room isn't fully scheduled yet: its base clean or
@@ -631,6 +655,11 @@ export function MapsApp() {
               }
               // merge mode: the first tap picks the room that stays, the second merges its
               // neighbour into it (or says why it can't, keeping the first room picked)
+              // clone mode: the first tap picks the room to copy from, every tap after copies it
+              if (tab === "spaces" && clone.on) {
+                if (sp) clone.tap(sp);
+                return;
+              }
               if (tab === "spaces" && mergeMode) {
                 if (!sp) return;
                 if (!mergeFirst) { setMergeFirst(sp.id); setMergeNote(null); return; }

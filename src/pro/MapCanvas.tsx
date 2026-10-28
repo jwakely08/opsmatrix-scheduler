@@ -2,12 +2,16 @@
 // Map View, and the Floor Care / Sanitation / Policing map pickers. Pinch,
 // wheel and drag to move; tap slop is bigger for touch so real thumbs can
 // select rooms.
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { boundsOf, pointIn, type ClassicData, type ClassicPlan, type ClassicSpace } from "./classicStore";
 import { buildingArtUrl } from "./buildingArt";
 import { sortFloorsTopDown } from "./floorOrder";
 import { neonPlanUrl } from "./neonMap";
 import { Map3D, type Map3DApi } from "./Map3D";
+import {
+  FACING_WORDS, askCompass, compassWord, delta, loadFacing, loadPlanUp, mapTurn, northOnScreen, saveFacing,
+  savePlanUp, smooth, watchHeading, type MapFacing
+} from "./compass";
 
 const WALL_STROKE = 13;
 
@@ -94,7 +98,9 @@ export function BuildingBadge({ building, onChange }: {
 
 // ── the map canvas (shared by Map + Spaces tabs, and Floor Care's builder) ──
 
-export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlines, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker, keepView, follow }: {
+export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlines, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker, keepView, follow, compass }: {
+  /** offer the compass: the floor can face north, or turn with the walker (Max Space, Rover) */
+  compass?: boolean;
   /** the view is the user's from the first fit on: a resize never refits (Rover's room card
    *  opening under the map, Josh 2026-10-28: "it zooms back out… I lose track of which room") */
   keepView?: boolean;
@@ -156,12 +162,92 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
 
+  // ── which way the map faces (compass.ts; Josh, 2026-10-28): as drawn, north up, or turning
+  // with the walker like Google Maps. The pan/zoom math stays in the un-turned frame; screen
+  // points come back through `unturn`, and the drawing turns around the map's middle. ─────────
+  const building = String(plan.building ?? "").trim();
+  const [facing, setFacing] = useState<MapFacing>(loadFacing);
+  const [planUp, setPlanUp] = useState<number | null>(() => loadPlanUp(building));
+  useEffect(() => { setPlanUp(loadPlanUp(building)); }, [building]);
+  const [heading, setHeading] = useState<number | null>(null);
+  const [compassMenu, setCompassMenu] = useState(false);
+  const [calibrating, setCalibrating] = useState(false);
+  const [compassNote, setCompassNote] = useState("");
+  const facingRef = useRef(facing);
+  facingRef.current = facing;
+  const planUpRef = useRef(planUp);
+  planUpRef.current = planUp;
+  const listening = Boolean(compass) && !view3d && ((facing === "heading" && planUp !== null) || calibrating);
+  useEffect(() => {
+    if (!listening) return;
+    let eased: number | null = null, shown = NaN, raf = 0;
+    const stop = watchHeading((h) => {
+      eased = smooth(eased, h);
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (eased !== null && !(Math.abs(delta(shown, eased)) < 0.7)) {
+          shown = eased;
+          // the pivot's view change lands in the same render as the turn (React batches them)
+          pivotRef.current(mapTurn(facingRef.current, planUpRef.current, eased));
+          setHeading(eased);
+        }
+      });
+    });
+    return () => { stop(); cancelAnimationFrame(raf); };
+  }, [listening]);
+  useEffect(() => {
+    if (!calibrating || heading !== null) return;
+    const t = setTimeout(() => setCompassNote(NO_COMPASS), 3500);
+    return () => clearTimeout(t);
+  }, [calibrating, heading]);
+  const turn2d = compass ? mapTurn(facing, planUp, heading) : 0;
+  const turn = view3d ? 0 : turn2d;
+  const turnRef = useRef(turn);
+  turnRef.current = turn;
+  const [mapH, setMapH] = useState(640);
+  const centerRef = useRef({ x: 500, y: 320 });
+  centerRef.current = { x: mapW / 2, y: mapH / 2 };
+  /** a screen point (or, with `vec`, a movement) in the un-turned frame the pan/zoom math uses */
+  const unturn = (x: number, y: number, vec = false, by = -turnRef.current) => {
+    if (!by) return { x, y };
+    const a = (by * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+    const o = vec ? { x: 0, y: 0 } : centerRef.current;
+    const dx = x - o.x, dy = y - o.y;
+    return { x: o.x + dx * c - dy * s, y: o.y + dx * s + dy * c };
+  };
+  /** an un-turned point as it shows on the screen */
+  const onScreen = (x: number, y: number) => unturn(x, y, false, turnRef.current);
+  const unturnRef = useRef(unturn);
+  unturnRef.current = unturn;
+  const chooseFacing = (f: MapFacing) => {
+    setFacing(f);
+    saveFacing(f);
+    setCompassNote("");
+    if (f === "plan") { setCompassMenu(false); return; }
+    // the building's north comes first; turning with the walker needs the compass
+    if (planUp === null) { startCalibrating(); return; }
+    if (f === "heading") void askCompass().then((ok) => { if (!ok) setCompassNote(NO_COMPASS); });
+    setCompassMenu(false);
+  };
+  const startCalibrating = () => {
+    // asked inside the tap: iPad Safari only shares the compass from one
+    void askCompass().then((ok) => {
+      if (!ok) { setCompassNote(NO_COMPASS); return; }
+      setHeading(null);
+      setCompassNote("");
+      setCalibrating(true);
+      setCompassMenu(false);
+    });
+  };
+
   const zoomAt = (sx: number, sy: number, factor: number) => {
     userDrove.current = true;
+    const p = unturn(sx, sy);
     setView((v) => {
       const k2 = Math.max(0.2, Math.min(12, v.k * factor));
       const f = k2 / v.k;
-      return { k: k2, tx: sx - (sx - v.tx) * f, ty: sy - (sy - v.ty) * f };
+      return { k: k2, tx: p.x - (p.x - v.tx) * f, ty: p.y - (p.y - v.ty) * f };
     });
   };
   const zoomCenter = (factor: number) => {
@@ -188,9 +274,13 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
     const v = viewRef.current;
     const b = boundsOf(sh.pts);
     const m = 28;
-    const x0 = v.tx + b.minX * v.k, x1 = v.tx + b.maxX * v.k, y0 = v.ty + b.minY * v.k, y1 = v.ty + b.maxY * v.k;
-    if (x0 >= m && x1 <= w - m && y0 >= m && y1 <= h - m) return; // already in sight
-    const dx = w / 2 - (v.tx + sh.c.x * v.k), dy = h / 2 - (v.ty + sh.c.y * v.k);
+    // the room's corners as they show on screen (the map may be turned)
+    const corners = [[b.minX, b.minY], [b.maxX, b.minY], [b.maxX, b.maxY], [b.minX, b.maxY]]
+      .map(([x, y]) => onScreen(v.tx + x * v.k, v.ty + y * v.k));
+    const xs = corners.map((p) => p.x), ys = corners.map((p) => p.y);
+    if (Math.min(...xs) >= m && Math.max(...xs) <= w - m && Math.min(...ys) >= m && Math.max(...ys) <= h - m) return; // in sight
+    const c = onScreen(v.tx + sh.c.x * v.k, v.ty + sh.c.y * v.k);
+    const { x: dx, y: dy } = unturn(w / 2 - c.x, h / 2 - c.y, true);
     // a short glide, so the eye can follow where the room went
     cancelAnimationFrame(panAnim.current);
     const t0 = performance.now(), dur = 240;
@@ -216,19 +306,65 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
   }, [follow]);
   useEffect(() => () => cancelAnimationFrame(panAnim.current), []);
 
+  // ── a turning floor pivots on the walker — the room being worked (where they stand now), else
+  // the YOU pin, whichever is in sight (Google Maps turns around its blue dot) — so it never
+  // swings off the screen; with neither in sight it turns on the middle ──────────────────────
+  const markerRef = useRef(marker ?? null);
+  markerRef.current = marker ?? null;
+  const pivotTurn = useRef(turn2d); // the turn the view was last squared with
+  const pivot = (to: number) => {
+    const from = pivotTurn.current;
+    pivotTurn.current = to;
+    const svg = svgRef.current;
+    if (from === to || !svg || view3d) return;
+    const id = followRef.current;
+    const spots = [id ? shapesRef.current.get(id)?.c : undefined, markerRef.current]
+      .filter((p): p is { x: number; y: number } => Boolean(p));
+    if (!spots.length) return;
+    const w = svg.clientWidth, h = svg.clientHeight;
+    setView((v) => {
+      for (const p of spots) {
+        const u = { x: v.tx + p.x * v.k, y: v.ty + p.y * v.k }; // un-turned
+        const s = unturnRef.current(u.x, u.y, false, from); // where it shows now
+        if (s.x < 0 || s.y < 0 || s.x > w || s.y > h) continue;
+        const u2 = unturnRef.current(s.x, s.y, false, -to); // where it has to sit to stay put
+        return { ...v, tx: v.tx + u2.x - u.x, ty: v.ty + u2.y - u.y };
+      }
+      return v;
+    });
+  };
+  const pivotRef = useRef(pivot);
+  pivotRef.current = pivot;
+  useLayoutEffect(() => { pivotRef.current(turn2d); }, [turn2d]);
+
+  /** the whole floor in sight, centred — a turned floor needs the room its turned corners take */
+  const fitView = (w: number, h: number) => {
+    const a = (turnRef.current * Math.PI) / 180, c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+    const k = Math.min(w / (plan.w * c + plan.h * s), h / (plan.w * s + plan.h * c)) * 0.94;
+    return { k, tx: (w - plan.w * k) / 2, ty: (h - plan.h * k) / 2 };
+  };
+  // a floor nobody has moved fits again when it takes a new facing (turned, it's another shape)
+  const fittedFacing = useRef(`${facing}|${planUp}`);
+  useLayoutEffect(() => {
+    const was = fittedFacing.current;
+    fittedFacing.current = `${facing}|${planUp}`;
+    const svg = svgRef.current;
+    if (!compass || was === fittedFacing.current || !svg || view3d || userDrove.current || keepViewRef.current) return;
+    setView(fitView(svg.clientWidth || 1000, svg.clientHeight || 640));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facing, planUp]);
+
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
-    const fit = () => {
-      const w = svg.clientWidth || 1000, h = svg.clientHeight || 640;
-      const k = Math.min(w / plan.w, h / plan.h) * 0.94;
-      setView({ k, tx: (w - plan.w * k) / 2, ty: (h - plan.h * k) / 2 });
-    };
+    const fit = () => setView(fitView(svg.clientWidth || 1000, svg.clientHeight || 640));
     userDrove.current = false; // a new plan starts fitted
     fit();
     setMapW(svg.clientWidth || 1000);
+    setMapH(svg.clientHeight || 640);
     const ro = new ResizeObserver(() => {
       setMapW(svg.clientWidth || 1000);
+      setMapH(svg.clientHeight || 640);
       if (!userDrove.current && !keepViewRef.current) fit();
       if (followRef.current) ensureRef.current(followRef.current);
     });
@@ -248,11 +384,11 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
       e.preventDefault();
       userDrove.current = true;
       const r = svg.getBoundingClientRect();
-      const sx = e.clientX - r.left, sy = e.clientY - r.top;
+      const p = unturnRef.current(e.clientX - r.left, e.clientY - r.top);
       setView((v) => {
         const k2 = Math.max(0.2, Math.min(12, v.k * Math.exp(-e.deltaY * 0.0015)));
         const f = k2 / v.k;
-        return { k: k2, tx: sx - (sx - v.tx) * f, ty: sy - (sy - v.ty) * f };
+        return { k: k2, tx: p.x - (p.x - v.tx) * f, ty: p.y - (p.y - v.ty) * f };
       });
     };
     svg.addEventListener("wheel", onWheel, { passive: false });
@@ -263,8 +399,9 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
     if (drag.current.moved) return;
     const svg = svgRef.current!;
     const r = svg.getBoundingClientRect();
-    const x = (e.clientX - r.left - view.tx) / view.k;
-    const y = (e.clientY - r.top - view.ty) / view.k;
+    const p = unturn(e.clientX - r.left, e.clientY - r.top);
+    const x = (p.x - view.tx) / view.k;
+    const y = (p.y - view.ty) / view.k;
     let hit: ClassicSpace | null = null;
     let hitArea = Infinity;
     for (const sp of spaces) {
@@ -326,7 +463,8 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
           if (travel > drag.current.slop) drag.current.moved = true;
           if (drag.current.moved) {
             userDrove.current = true;
-            setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }));
+            const d = unturn(dx, dy, true);
+            setView((v) => ({ ...v, tx: v.tx + d.x, ty: v.ty + d.y }));
             drag.current.x = e.clientX; drag.current.y = e.clientY;
           }
         }}
@@ -352,6 +490,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
             </pattern>
           ))}
         </defs>
+        <g transform={turn ? `rotate(${turn} ${mapW / 2} ${mapH / 2})` : undefined}>
         <g transform={`translate(${view.tx} ${view.ty}) scale(${view.k})`}>
           {spaces.map((sp) => {
             const sh = shapes.get(sp.id);
@@ -395,7 +534,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
             );
           })}
           {marker && (
-            <g className="mapmarker" transform={`translate(${marker.x} ${marker.y}) scale(${1 / Math.max(0.4, view.k)})`}>
+            <g className="mapmarker" transform={`translate(${marker.x} ${marker.y})${turn ? ` rotate(${-turn})` : ""} scale(${1 / Math.max(0.4, view.k)})`}>
               <circle r={13} />
               <text y={5}>📍</text>
               <text className="mklabel" y={30}>{marker.label}</text>
@@ -410,13 +549,14 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
             if ((b.maxX - b.minX) * view.k < (mapW < 700 ? 24 : 44)) return null;
             const mins = Number(sp.estimatedCleaningMinutes) || 0;
             return (
-              <g key={"l" + sp.id} className="prolabel" transform={`translate(${sh.c.x} ${sh.c.y}) scale(${1 / Math.max(0.34, view.k)})`}>
+              <g key={"l" + sp.id} className="prolabel" transform={`translate(${sh.c.x} ${sh.c.y})${turn ? ` rotate(${-turn})` : ""} scale(${1 / Math.max(0.34, view.k)})`}>
                 {flagFor?.(sp) && <text className="proflag" y={-22}>{flagFor(sp)}</text>}
                 <text y={-4}>{sp.roomNumber || sp.roomName}</text>
                 <text className="sub" y={12}>{Math.round(Number(sp.squareFeet) || 0)} ft² · {mins}m</text>
               </g>
             );
           })}
+        </g>
         </g>
       </svg>
       )}
@@ -443,9 +583,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
           const svg = svgRef.current;
           if (!svg) return;
           userDrove.current = false;
-          const w = svg.clientWidth || 1000, h = svg.clientHeight || 640;
-          const k = Math.min(w / plan.w, h / plan.h) * 0.94;
-          setView({ k, tx: (w - plan.w * k) / 2, ty: (h - plan.h * k) / 2 });
+          setView(fitView(svg.clientWidth || 1000, svg.clientHeight || 640));
         }}>⤢</button>
         <button aria-label={view3d ? "Flat view" : "3D view"}
           className={"map3dbtn" + (view3d ? " on" : "")}
@@ -453,7 +591,62 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
           {view3d ? "2D" : "3D"}
         </button>
       </div>
+      {/* the compass has its own corner, top-left: the zoom stack already meets the floor list
+          when Rover's room card shortens the map */}
+      {compass && !view3d && (
+        <div className="pro-compass">
+          <button aria-label={"Which way the map faces: " + FACING_WORDS[facing]} title={FACING_WORDS[facing]}
+            className={"compassbtn" + (facing !== "plan" && planUp !== null ? " on" : "")}
+            onClick={() => { setCompassMenu((m) => !m); setCompassNote(""); }}>
+            {/* the needle points at real north once the building's north is set */}
+            <svg viewBox="0 0 20 20" width="22" height="22"
+              style={{ transform: `rotate(${northOnScreen(turn, planUp) ?? 0}deg)`, opacity: planUp === null ? 0.5 : 1 }}>
+              <path d="M10 1.5 L13.2 10 L10 8.8 L6.8 10 Z" fill="#ef4444" />
+              <path d="M10 18.5 L13.2 10 L10 11.2 L6.8 10 Z" fill="#cbd5e1" />
+            </svg>
+          </button>
+          {compassMenu && (
+            <div className="compassmenu">
+              <b>Map faces</b>
+              {(["plan", "north", "heading"] as MapFacing[]).map((f) => (
+                <button key={f} className={"pbtn small" + (facing === f ? " primary" : "")} onClick={() => chooseFacing(f)}>
+                  {FACING_WORDS[f]}
+                </button>
+              ))}
+              <button className="plink" onClick={startCalibrating}>
+                {planUp === null ? "Set north" : "Set north again"} for {building || "this building"}…
+              </button>
+              {compassNote && <p className="warntext">{compassNote}</p>}
+            </div>
+          )}
+        </div>
+      )}
+      {compass && calibrating && (
+        <div className="compasscal">
+          <b>Set north for {building || "this building"}</b>
+          <p>
+            Hold the iPad flat and point the top of the screen the way the top of this floor plan points —
+            for example, stand looking down a hallway that runs straight up the screen. Then tap Set.
+          </p>
+          <p className="compassreading">
+            {heading === null ? "Waiting for the compass…" : `Facing ${Math.round(heading)}° ${compassWord(heading)}`}
+          </p>
+          {compassNote && <p className="warntext">{compassNote}</p>}
+          <div className="prow">
+            <button className="pbtn primary" disabled={heading === null} onClick={() => {
+              if (heading === null) return;
+              savePlanUp(building, heading);
+              setPlanUp(heading);
+              setCalibrating(false);
+              if (facing === "plan") { setFacing("north"); saveFacing("north"); }
+            }}>Set</button>
+            <button className="pbtn" onClick={() => { setCalibrating(false); setCompassNote(""); }}>Cancel</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+const NO_COMPASS = "No compass reading here — North up and Turns with me need a device with a compass (an iPad or phone) and motion access allowed.";
 
