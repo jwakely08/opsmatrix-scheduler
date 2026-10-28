@@ -199,3 +199,67 @@ describe("department", () => {
     expect(mergeDraft({ department: "Imaging" }, {}).department).toBe("Imaging");
   });
 });
+
+// Josh, 2026-10-28: on Fairview's floors the CAD numbers read "FV4-297" — spoken "F V 4 297", or
+// just "297" — and the old ears took the "4" as the number and dumped the rest into the name.
+describe("numbers the facility writes, spoken the way people say them", () => {
+  const ctx = { currentNumber: "FV4-297", floorNumbers: ["FV4-296", "FV4-297", "FV4-298", "FV4-152B", "FV4-152G", "FV4-001A"] };
+  const say = (s: string) => parseRoverUtterance(s, rules, ctx);
+
+  it("'F V 4 297 patient room carpet two fixtures' — the room's own number, nothing in the name", () => {
+    const { draft } = say("F V 4 297 patient room carpet two fixtures");
+    expect(draft).toEqual({ roomNumber: "FV4-297", roomType: "Patient Room", floorType: "Carpet", fixtureCount: 2 });
+  });
+
+  it("just the last digits land on the room's number", () => {
+    expect(say("297 patient room").draft.roomNumber).toBe("FV4-297");
+    expect(say("room number two ninety seven").draft.roomNumber).toBe("FV4-297");
+    expect(say("fv4 297 office").draft).toMatchObject({ roomNumber: "FV4-297", roomType: "Office" });
+  });
+
+  it("another number on this floor, said first or labeled, is that room's number", () => {
+    expect(say("298 office").draft.roomNumber).toBe("FV4-298");
+    expect(say("room number 152 b").draft.roomNumber).toBe("FV4-152B");
+  });
+
+  it("the room's number said again later in the breath is not a name", () => {
+    const { draft } = say("patient room 297");
+    expect(draft.roomNumber).toBe("FV4-297");
+    expect(draft.roomName).toBeUndefined();
+  });
+
+  it("digits further in belong to the name, never the room number", () => {
+    expect(say("exam room 2").draft).toEqual({ roomType: "Exam Room", roomName: "Exam Room 2" });
+    expect(say("med room 4 carpet").draft).toEqual({ floorType: "Carpet", roomName: "Med Room 4" });
+  });
+
+  it("a number that isn't on this floor is kept as said", () => {
+    expect(say("room number F V 4 3 1 0").draft.roomNumber).toBe("FV4-310");
+  });
+});
+
+describe("only the room's name goes in the name", () => {
+  it("talk around the data never becomes the name", () => {
+    expect(parse("okay carpet").draft).toEqual({ floorType: "Carpet" });
+    expect(parse("so it's hard floor yeah").draft).toEqual({ floorType: "Hard floor — finished" });
+    expect(parse("okay").draft).toEqual({});
+  });
+
+  it("a lone number is never a name", () => {
+    expect(parse("two").draft.roomName).toBeUndefined();
+  });
+
+  it("'the name is …' / 'called …' label the name", () => {
+    const r = parse("the name is nurse manager office");
+    expect(r.draft.roomName).toBe("Nurse Manager Office");
+    expect(r.nameLabeled).toBe(true);
+    expect(parse("called clean supply").draft.roomName).toBe("Clean Supply");
+  });
+
+  it("a stray word can't replace a name already said for this room — a real name can", () => {
+    expect(mergeDraft({ roomName: "Nurse Office" }, { roomName: "Hello" }, { keepName: true }).roomName).toBe("Nurse Office");
+    expect(mergeDraft({ roomName: "Nurse Office" }, { roomName: "Charge Nurse Office" }, { keepName: true }).roomName).toBe("Charge Nurse Office");
+    expect(mergeDraft({ roomName: "Nurse Office" }, { roomName: "Pantry" }, { keepName: true, nameLabeled: true }).roomName).toBe("Pantry");
+    expect(mergeDraft({ roomName: "Office" }, { roomName: "Pantry" }).roomName).toBe("Pantry");
+  });
+});
