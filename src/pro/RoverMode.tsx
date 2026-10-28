@@ -27,6 +27,7 @@ import {
 import { typeIdFromLabelStrict, type Rules } from "./rules";
 import { MapCanvas, BuildingBadge } from "./MapCanvas";
 import { parseRoverUtterance, mergeDraft, type RoverDraft } from "./roverParse";
+import { useCloneMode, CloneBar } from "./CloneMode";
 
 type Shapes = Map<string, { pts: { x: number; y: number }[]; path: string; c: { x: number; y: number } }>;
 
@@ -72,6 +73,8 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
   spacesRef.current = spaces;
   // a name was already said for the open room: a stray word can't replace it
   const nameSpokenRef = useRef(false);
+  // ⎘ Clone, the same as Max Space's: copy one room's details onto every room tapped
+  const clone = useCloneMode(spaces, commit, rules);
   // the fields the walker typed or said in the open room — what leaving it saves
   const touchedRef = useRef(new Set<keyof RoverDraft>());
   const lastSavedRef = useRef("");
@@ -284,10 +287,17 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
                 "TAP A ROOM TO START"}
         </span>
         <span className="grow" />
+        <button className={"pbtn small" + (clone.on ? " on" : "")}
+          onClick={() => {
+            if (clone.on) { clone.stop(); return; }
+            closeRoom(); // the open room is saved before cloning starts
+            clone.start();
+          }}>⎘ Clone</button>
         <button className={"pbtn small" + (placingMe ? " on" : "")}
           onClick={() => setPlacingMe(!placingMe)}>📍 My location</button>
         <button className="pbtn primary" onClick={() => { saveOpen(); onExit(); }}>✓ Save &amp; Exit</button>
       </header>
+      {clone.on && <div className="rover-clone"><CloneBar clone={clone} rules={rules} /></div>}
 
       <div className="rover-map">
         <MapCanvas
@@ -299,6 +309,8 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
           // the zoom is the walker's: opening a room's card never refits the floor, and the
           // room just tapped slides into view above the card
           keepView follow={selId}
+          // north up, or turning with the walker — pivoting on the open room or the YOU pin
+          compass
           marker={mePin ? { x: mePin.x, y: mePin.y, label: "YOU" } : null}
           onCanvas={placingMe ? (pt) => { setMePin(pt); setPlacingMe(false); } : undefined}
           fillFor={(sp) =>
@@ -306,9 +318,12 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
               : spaceIncomplete(sp).length ? "#b45309"
                 : "#0d9488"}
           flagFor={(sp) => (!confirmedIds.has(sp.id) && spaceIncomplete(sp).length ? "⚠" : null)}
+          overlayFor={clone.on ? (sp) => (sp.id === clone.source?.id ? "#ffffff" : clone.pasted.has(sp.id) ? "#22c55e" : null) : undefined}
           selectedId={selId}
           onRoom={(sp) => {
             if (placingMe) return; // the location tap wins
+            // cloning: the first tap picks the room to copy from, every tap after copies it
+            if (clone.on) { if (sp) clone.tap(sp); return; }
             if (sp && sp.id === selRef.current) return; // the open room, tapped again
             // the room being left is saved first, then the next one opens
             if (!sp) { closeRoom(); return; }
