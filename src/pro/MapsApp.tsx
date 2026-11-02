@@ -54,7 +54,7 @@ import { collectWorkspace, applyWorkspace, backupFilename } from "./workspaceSto
 import {
   loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor, autoTasksForSpace, tasksAfterFloorChange,
   taskSourceLabel, FLOOR_KINDS, typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
-  isEndOfDayTask, splitEndOfDay, nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, DEFAULT_INCLUDED_TASKS, RATE_UNITS, computeMinutes,
+  isEndOfDayTask, splitEndOfDay, hasGeneralClean, nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, DEFAULT_INCLUDED_TASKS, RATE_UNITS, computeMinutes,
   gcFormula, gcMinutes, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
   issaSourceLabel, categoryFor, resetToIssa, typeIdFromLabelStrict, RULES_KEY, exampleProcedure,
   type Rules, type RoomTypeRule, type GcMethod, type GcFormula, type RateUnit,
@@ -1125,6 +1125,8 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
   const notes = notesForSpace(data, space);
   // ↻ = done on the end-of-day round, after all the rooms (set per task in Scope)
   const taskLabelOf = (t: string) => (rules.tasks.find((x) => x.id === t)?.label ?? t) + (isEndOfDayTask(rules, t) ? " ↻" : "");
+  // a type timed by its tasks alone (a corridor) has no General Clean to show or to take
+  const gc = hasGeneralClean(rules, space);
   const unClean = un.tasks.filter((t) => !isFloorCareTask(rules, t));
   const unFc = un.tasks.filter((t) => isFloorCareTask(rules, t));
 
@@ -1150,7 +1152,7 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
 
       <div className="pfield"><span>This room needs</span>
         <div className="ptasks readonly">
-          <span className="ptask locked">General Clean</span>
+          {gc ? <span className="ptask locked">General Clean</span> : <span className="ptask incl">No General Clean — tasks only</span>}
           {req.map((t) => {
             const covered = cov.some((c) => c.tasks.includes(t));
             return <span key={t} className={"ptask" + (covered ? " on" : " warn")}>
@@ -1165,9 +1167,9 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
             </span>;
           })}
         </div>
-        {(un.baseUncovered || unClean.length > 0) && (
+        {((un.baseUncovered && gc) || unClean.length > 0) && (
           <small className="warntext">
-            ⚠ Not yet on a schedule: {[un.baseUncovered ? "General Clean" : "", ...unClean.map(taskLabelOf)].filter(Boolean).join(", ")}
+            ⚠ Not yet on a schedule: {[un.baseUncovered && gc ? "General Clean" : "", ...unClean.map(taskLabelOf)].filter(Boolean).join(", ")}
           </small>
         )}
         {unFc.length > 0 && (
@@ -1212,7 +1214,7 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
               }>✕</button>
             </div>
             <div className="ptasks">
-              {c.primary && <span className="ptask locked">General Clean ✓</span>}
+              {c.primary && gc && <span className="ptask locked">General Clean ✓</span>}
               {req.map((t) => {
                 const on = c.tasks.includes(t);
                 return (
@@ -1223,7 +1225,7 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
                   </button>
                 );
               })}
-              {!c.primary && (
+              {!c.primary && gc && (
                 <button className="ptask" onClick={() =>
                   commit((d) => setCoverage(d, space.id, c.scheduleId, true, c.tasks))
                 }>+ General Clean</button>
@@ -1469,9 +1471,9 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
         )}
       </div>
 
-      <div className="pfield"><span>Tasks this room needs (General Clean is always included)</span>
+      <div className="pfield"><span>Tasks this room needs {hasGeneralClean(rules, cur) ? "(General Clean is always included)" : "(this type has no General Clean — its tasks make up its time)"}</span>
         <div className="ptasks">
-          <span className="ptask locked">General Clean</span>
+          {hasGeneralClean(rules, cur) && <span className="ptask locked">General Clean</span>}
           {rules.tasks.filter((t) => t.addable).map((t) => {
             const on = req.includes(t.id);
             const auto = autoTasks.includes(t.id);
@@ -1675,7 +1677,7 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
                     <b>{sp.roomNumber}</b>
                     <span>{routeStops
                       ? (s.sanitationId ? "Collection stop" : "Porter pass")
-                      : [c!.primary ? "General Clean" : "", ...split.now.map((t) => rules.tasks.find((x) => x.id === t)?.label ?? t)].filter(Boolean).join(" + ")
+                      : [c!.primary && hasGeneralClean(rules, sp) ? "General Clean" : "", ...split.now.map((t) => rules.tasks.find((x) => x.id === t)?.label ?? t)].filter(Boolean).join(" + ")
                         || (split.later.length ? "end-of-day round only — see below" : "no tasks picked yet")}</span>
                     <em>{routeStops ? Math.round(Number(routeStops[sp.id]) || 0) : coverageMinutes(rules, sp, { ...c!, tasks: split.now })}m</em>
                     {!routeStops && (
@@ -1885,7 +1887,9 @@ function RoomsScheduleTab({ data, rules, schedules, commit, onNewSchedule }: {
                   <td>{String(sp.roomName ?? "")}</td>
                   <td>{String(sp.department ?? "")}</td>
                   <td className="needcell">
-                    <span className={"ptask sm" + (un.baseUncovered ? " warn" : " on")}>General Clean{un.baseUncovered ? " ⚠" : ""}</span>
+                    {hasGeneralClean(rules, sp)
+                      ? <span className={"ptask sm" + (un.baseUncovered ? " warn" : " on")}>General Clean{un.baseUncovered ? " ⚠" : ""}</span>
+                      : <span className="ptask sm incl">No General Clean — tasks only</span>}
                     {req.map((t) => {
                       const covd = cov.some((c) => c.tasks.includes(t));
                       return <span key={t} className={"ptask sm" + (covd ? " on" : " warn")}>
@@ -2086,9 +2090,12 @@ function NumBox({ value, onValue, disabled }: { value: number; onValue: (n: numb
 }
 
 const METHOD_WORDS: Record<GcMethod, string> = {
-  size: "by size",
-  fixed: "fixed minutes per room",
-  both: "fixed minutes + size"
+  size: "Timed by size",
+  fixed: "Timed fixed minutes per room",
+  both: "Timed fixed minutes + size",
+  // Josh, 2026-11-02: a corridor isn't cleaned like a patient room — no General Clean, its tasks
+  // (high dusting, trash pull, spot mopping) make up its time
+  none: "No General Clean — its tasks only"
 };
 
 /**
@@ -2158,19 +2165,28 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
             const method = e.target.value as GcMethod;
             setF({
               method,
-              fixedMin: method !== "size" && !(f.fixedMin > 0) ? 10 : f.fixedMin,
-              sqftPerHour: method !== "fixed" && !(f.sqftPerHour > 0) ? (cat?.sqftPerHour ?? 2150) : f.sqftPerHour
+              fixedMin: method !== "size" && method !== "none" && !(f.fixedMin > 0) ? 10 : f.fixedMin,
+              sqftPerHour: method !== "fixed" && method !== "none" && !(f.sqftPerHour > 0) ? (cat?.sqftPerHour ?? 2150) : f.sqftPerHour
+            });
+            // with no General Clean nothing is "included": every task prices on its own. Coming
+            // back, the usual included list returns.
+            editAll((r) => {
+              const type = r.roomTypes.find((x) => x.id === rt.id)!;
+              if (method === "none") type.includedTasks = [];
+              else if (!(type.includedTasks ?? []).length) type.includedTasks = [...DEFAULT_INCLUDED_TASKS];
             });
           }}>
-          {(Object.keys(METHOD_WORDS) as GcMethod[]).map((m) => <option key={m} value={m}>Timed {METHOD_WORDS[m]}</option>)}
+          {(Object.keys(METHOD_WORDS) as GcMethod[]).map((m) => <option key={m} value={m}>{METHOD_WORDS[m]}</option>)}
         </select>
         <span className="gceq">
-          <b>General Clean =</b>
-          {f.method !== "size" && (<>
+          {f.method === "none" ? (
+            <span className="gcsrc">This type's time is its extras below (and any task a room lists) — no General Clean is printed for it.</span>
+          ) : <b>General Clean =</b>}
+          {f.method !== "size" && f.method !== "none" && (<>
             <NumBox value={f.fixedMin} disabled={!isAdmin} onValue={(n) => setF({ fixedMin: n })} /> min per room
           </>)}
           {f.method === "both" && <b>+</b>}
-          {f.method !== "fixed" && (<>
+          {f.method !== "fixed" && f.method !== "none" && (<>
             sq ft {times ? "×" : "÷"}
             <NumBox value={rateInUnit(f.sqftPerHour, f.rateUnit)} disabled={!isAdmin}
               onValue={(n) => setF({ sqftPerHour: rateFromUnit(n, f.rateUnit) })} />
@@ -2183,7 +2199,7 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
 
       <div className="gcexample">
         {sampleSqft.fromRooms ? "Your typical " : "A "}{Math.round(sampleSqft.sqft).toLocaleString()} sq ft {rt.label || "room"}
-        {" = "}<b>{(Math.round(example * 10) / 10).toLocaleString()} min</b>
+        {" = "}{f.method === "none" ? <b>its extras only</b> : <b>{(Math.round(example * 10) / 10).toLocaleString()} min</b>}
         {isAdmin && (
           <span className="gcissa">
             ISSA match
@@ -2196,7 +2212,7 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
         )}
       </div>
 
-      <div className="gcrow">
+      {f.method !== "none" && (<div className="gcrow">
         <span className="gclabel">Included in General Clean</span>
         <span className="ptasks inline">
           {draft.tasks.filter((t) => t.addable && !t.floorCare).map((t) => {
@@ -2218,7 +2234,7 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
             );
           })}
         </span>
-      </div>
+      </div>)}
 
       <div className="gcrow">
         <span className="gclabel">Extras every {rt.label || "room"} gets</span>
@@ -2330,8 +2346,9 @@ function TypeCheckBlock({ rt, draft, check }: { rt: RoomTypeRule; draft: Rules; 
           <small className="pnote">
             A room that's far bigger than the rest is usually a bay or an open area traced as one room: give it its own
             type at a corridor rate, or split it. A room with extras gets them from Scope or from its own task list.
-            {" "}{rt.label} is timed {gcFormula(draft, rt).method === "fixed" ? "by fixed minutes" : "by size"},
-            so same-size rooms get the same time; a room that still stands out carries something extra.
+            {" "}{gcFormula(draft, rt).method === "none"
+              ? `${rt.label} has no General Clean — its tasks make up the time, so two rooms with the same tasks and size get the same minutes.`
+              : `${rt.label} is timed ${gcFormula(draft, rt).method === "fixed" ? "by fixed minutes" : "by size"}, so same-size rooms get the same time; a room that still stands out carries something extra.`}
           </small>
         </div>
       )}
@@ -2959,7 +2976,7 @@ function ReportModal({ data, rules, spaces, schedules, onClose, onJump }: {
               <button key={sp.id} className="reportrow" onClick={() => onJump(sp.id)}>
                 <b>{sp.roomNumber || sp.roomName}</b>
                 <span>
-                  {[un.baseUncovered ? "General Clean" : "", ...un.tasks.map((t) =>
+                  {[un.baseUncovered && hasGeneralClean(rules, sp) ? "General Clean" : "", ...un.tasks.map((t) =>
                     (rules.tasks.find((x) => x.id === t)?.label ?? t) +
                     (isFloorCareTask(rules, t) ? " (Max Floor Care)" : ""))]
                     .filter(Boolean).join(", ")}
