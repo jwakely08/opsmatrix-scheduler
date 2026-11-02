@@ -477,12 +477,13 @@ export function gcMinutes(f: GcFormula, sqft: number): number {
  * care is never part of a General Clean. These are what a General Clean "timed by its tasks" adds
  * up, and what the printed sheet lists under General Clean.
  */
-export function includedTasksForRoom(rules: Rules, space: SpaceLike): TaskRule[] {
+export function includedTasksForRoom(rules: Rules, space: SpaceLike, includeOff = false): TaskRule[] {
   const typeId = typeIdFromLabel(rules, space.roomType ?? "");
   const kind = floorKind(space.floorType);
+  const off = new Set(includeOff ? [] : (space.stepsOff ?? []));
   return includedTasksFor(rules, typeId)
     .map((id) => rules.tasks.find((t) => t.id === id))
-    .filter((t): t is TaskRule => Boolean(t) && !t!.floorCare
+    .filter((t): t is TaskRule => Boolean(t) && !t!.floorCare && !off.has(t!.id)
       // a floor-tied step applies where the floor calls for it, and never on a type the floor rule skips
       && (!(t!.autoForFloor ?? []).length || (t!.autoForFloor!.includes(kind) && !(t!.floorSkipTypes ?? []).includes(typeId))));
 }
@@ -498,6 +499,56 @@ export function gcMinutesFor(rules: Rules, rt: RoomTypeRule, sqft: number, floor
   const f = gcFormula(rules, rt);
   if (f.method !== "tasks") return gcMinutes(f, sqft);
   return includedTaskLines(rules, { roomType: rt.label, squareFeet: sqft, floorType }).reduce((s, l) => s + l.minutes, 0);
+}
+
+/** one step of a room's General Clean, with its share of the time and whether this room does it */
+export interface GcStep { id: string; label: string; rateText: string; standalone: number; minutes: number; on: boolean }
+
+export interface GcBreakdown {
+  /** the type's whole General Clean at this size — the ISSA time (or the sum of steps on a "tasks" type) */
+  full: number;
+  fullText: string;
+  /** what is left of the whole once the steps are taken out of it: the rest of the standard clean */
+  baseline: number;
+  steps: GcStep[];
+  /** this room's General Clean time: the baseline plus the steps it does */
+  minutes: number;
+  /** the steps' own rates added to more than the whole, so each was scaled to fit it */
+  scaled: boolean;
+}
+
+/**
+ * A room's General Clean, divided up (Josh, 2026-11-02: "an algorithm with general clean times,
+ * using the tasks as qualifiers… divvy it out and come up with a baseline at the bottom, so when
+ * you add all these tasks together it comes out the same… I want to be able to take things away
+ * and put them back"). The type's ISSA time is the whole; each General Clean step takes its own
+ * share (its rate at this size); what is left is the baseline. All steps on → exactly the ISSA
+ * time. A step switched off in this room → that share comes off. When the steps' own rates add up
+ * to more than the whole, they are scaled down to fit it, so the whole still holds.
+ */
+export function gcBreakdown(rules: Rules, space: SpaceLike): GcBreakdown {
+  const sqft = Number(space.squareFeet) || 0;
+  const rt = rules.roomTypes.find((x) => x.id === typeIdFromLabel(rules, space.roomType ?? ""));
+  const f: GcFormula = rt ? gcFormula(rules, rt)
+    : { method: "size", fixedMin: 0, sqftPerHour: issaCategory("office")!.sqftPerHour, rateUnit: "sqftPerHour" };
+  const name = rt?.label ?? (String(space.roomType ?? "").trim() || "Room");
+  if (f.method === "none") return { full: 0, fullText: gcText(name, f, sqft), baseline: 0, steps: [], minutes: 0, scaled: false };
+  const all = includedTasksForRoom(rules, space, true).map((t) => ({
+    id: t.id, label: t.label,
+    rateText: t.sqftPerMin ? `1 min per ${t.sqftPerMin} sq ft` : `${t.flatMin} min`,
+    standalone: t.sqftPerMin ? sqft / t.sqftPerMin : t.flatMin
+  }));
+  const sumAll = all.reduce((s, x) => s + x.standalone, 0);
+  const full = f.method === "tasks" ? sumAll : gcMinutes(f, sqft);
+  const scale = f.method !== "tasks" && sumAll > full && sumAll > 0 ? full / sumAll : 1;
+  const baseline = f.method === "tasks" ? 0 : Math.max(0, full - sumAll);
+  const off = new Set(space.stepsOff ?? []);
+  const steps: GcStep[] = all.map((x) => ({ ...x, minutes: x.standalone * scale, on: !off.has(x.id) }));
+  const minutes = baseline + steps.filter((s) => s.on).reduce((s, x) => s + x.minutes, 0);
+  const fullText = f.method === "tasks"
+    ? `${name}: ${all.map((x) => `${x.label} ${fmtNum(x.standalone)}`).join(" + ") || "no General Clean tasks picked yet"} = ${fmtNum(full)} min`
+    : gcText(name, f, sqft);
+  return { full, fullText, baseline, steps, minutes, scaled: scale < 1 };
 }
 
 const fmtNum = (n: number, digits = 1) =>
@@ -1055,6 +1106,8 @@ export interface SpaceLike {
   fusionTasks?: string[];
   /** floor-care tasks the manager marked "does not need" for this room */
   fcNotNeeded?: string[];
+  /** General Clean steps switched off in THIS room (Josh, 2026-11-02: "take things away and put them back") */
+  stepsOff?: string[];
 }
 
 /**
@@ -1138,11 +1191,22 @@ export function computeMinutes(
   const rt = rules.roomTypes.find((x) => x.id === typeId);
 
   if (includeBase && hasGeneralClean(rules, space)) {
-    // ONE line: the room type's own formula, worked out. Floor type never
-    // changes it and there is no minimum — the time is the pure formula.
-    // (A type timed by its tasks alone has no line here at all.)
-    const g = generalCleanLine(rules, space);
-    lines.push({ label: "General Clean — " + g.text, minutes: g.minutes });
+    // the General Clean, divided up: the baseline (the rest of the standard clean) and each step the
+    // room does, at its share — all on, they add up to the type's own formula; a step off comes off
+    const b = gcBreakdown(rules, space);
+    if (!b.steps.length) {
+      // nothing to divide: the one worked line, as before
+      lines.push({ label: "General Clean — " + b.fullText, minutes: b.baseline });
+    } else if (b.baseline > 0) {
+      lines.push({
+        label: `General Clean baseline — ${b.fullText}, minus its steps below = ${fmtNum(b.baseline)} min`,
+        minutes: b.baseline
+      });
+    }
+    for (const s of b.steps) {
+      if (!s.on) continue;
+      lines.push({ label: `${s.label} — part of General Clean · ${s.rateText}${b.scaled ? " · fitted into the ISSA time" : ""}`, minutes: s.minutes });
+    }
   }
   // extras on their own lines; anything the type's General Clean already
   // includes adds nothing (requiredTasks drops it; a subset passed in is
@@ -1164,19 +1228,13 @@ export function computeMinutes(
  * 2.1 min". A room whose type is gone prices as ISSA General office.
  */
 export function generalCleanLine(rules: Rules, space: SpaceLike): { text: string; minutes: number } {
-  const sqft = Number(space.squareFeet) || 0;
-  const rt = rules.roomTypes.find((x) => x.id === typeIdFromLabel(rules, space.roomType ?? ""));
-  const f: GcFormula = rt ? gcFormula(rules, rt)
-    : { method: "size", fixedMin: 0, sqftPerHour: issaCategory("office")!.sqftPerHour, rateUnit: "sqftPerHour" };
-  const name = rt?.label ?? (String(space.roomType ?? "").trim() || "Room");
-  if (f.method === "tasks") {
-    // "Corridor: High Dusting 8.2 + Trash Pull 2 = 10.2 min" — every step shown, so it can be redone by hand
-    const lines = includedTaskLines(rules, space);
-    const minutes = lines.reduce((s, l) => s + l.minutes, 0);
-    const parts = lines.map((l) => `${l.label} ${fmtNum(l.minutes)}`).join(" + ");
-    return { text: `${name}: ${parts || "no General Clean tasks picked yet"} = ${fmtNum(minutes)} min`, minutes };
-  }
-  return { text: gcText(name, f, sqft), minutes: gcMinutes(f, sqft) };
+  // the whole worked out, then any step this room has switched off taken away
+  const b = gcBreakdown(rules, space);
+  const off = b.steps.filter((s) => !s.on);
+  const text = off.length
+    ? `${b.fullText} − ${off.map((s) => `${s.label} ${fmtNum(s.minutes)}`).join(" − ")} = ${fmtNum(b.minutes)} min`
+    : b.fullText;
+  return { text, minutes: b.minutes };
 }
 
 /**

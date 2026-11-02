@@ -6,6 +6,7 @@ import {
   coverageMinutes, scheduleMinutes, createSchedule, deleteSchedule, scheduleColor, SCHED_COLORS,
   spaceIncomplete, FLOOR_TYPES, rectifyForDisplay, pathFrom, centroidOf, boundsOf, pointIn,
   moveInSchedule, spacePriority, PRIORITIES, PRIORITY_WORD, nonSpaceTaskMinutes, stripIncludedTasks, renameRoomTypes,
+  refreshScheduleCoverage,
   type ClassicData, type ClassicSpace, type ClassicSchedule, type NonSpaceTask
 } from "./classicStore";
 import {
@@ -55,7 +56,7 @@ import {
   loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor, autoTasksForSpace, tasksAfterFloorChange,
   taskSourceLabel, FLOOR_KINDS, typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
   isEndOfDayTask, splitEndOfDay, hasGeneralClean, nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, DEFAULT_INCLUDED_TASKS, RATE_UNITS, computeMinutes,
-  gcFormula, gcMinutesFor, generalCleanChoices, followsAccountGeneralClean, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
+  gcFormula, gcMinutesFor, gcBreakdown, generalCleanChoices, followsAccountGeneralClean, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
   issaSourceLabel, categoryFor, resetToIssa, typeIdFromLabelStrict, RULES_KEY, exampleProcedure,
   type Rules, type RoomTypeRule, type GcMethod, type GcFormula, type RateUnit,
   type DutyPosition, type ProcedureStep
@@ -253,6 +254,9 @@ export function MapsApp() {
       renameRoomTypes(d.v7.spaces ?? [], prev, next);
       resolvePendingRoomTypes((d.v7.spaces ?? []) as never, next, loadAliases());
       refreshAutoTasks(d.v7.spaces ?? [], prev, next);
+      // …and the schedules that hold those rooms take the new tasks (and drop the gone ones), so the
+      // schedule's minutes move with Scope the way the room's do
+      refreshScheduleCoverage(d, next);
       for (const sp of d.v7.spaces ?? []) syncSpaceMinutes(sp, next);
     });
   }, [commit]);
@@ -633,6 +637,9 @@ export function MapsApp() {
             spaces={spaces} shapes={shapes}
             mode={tab === "spaces" ? "spaces" : "map"}
             compass={tab === "spaces"}
+            // the Schedules map labels EVS cleaning minutes — floor care is Max Floor Care's time, and
+            // counting it here made a corridor read 23m when its schedule got 11 (Josh, 2026-11-02)
+            minutesFor={tab === "map" ? (sp) => roomMinutes(rules, sp).cleaning : undefined}
             fillFor={(sp) => {
               if (tab === "spaces") {
                 if (deptMode) {
@@ -831,6 +838,8 @@ export function MapsApp() {
                 sp.spaceTasks = floorTasks;
               }
               syncSpaceMinutes(sp, rules);
+              // the schedule that has this room follows its new task list
+              refreshScheduleCoverage(d, rules, [sp.id]);
             })}
           />
         )}
@@ -1163,15 +1172,52 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
         </div>
       )}
 
-      <div className="pfield"><span>This room needs</span>
-        <div className="ptasks readonly">
-          {gc ? <span className="ptask locked">General Clean</span> : <span className="ptask incl">No General Clean — tasks only</span>}
+      <div className="pfield"><span>This room needs — tap a task to take it off this room or put it back</span>
+        <div className="ptasks">
+          {/* the General Clean's steps, each with its share of the time; off = its share comes off this room */}
+          {gc ? gcBreakdown(rules, space).steps.map((s) => (
+            <button key={"step-" + s.id} className={"ptask" + (s.on ? " on" : " off")}
+              title={s.on ? "Part of this room's General Clean — tap to leave it out here" : "Tap to put it back into this room's General Clean"}
+              onClick={() => commit((d) => {
+                const sp = (d.v7.spaces ?? []).find((x) => x.id === space.id);
+                if (!sp) return;
+                const off = new Set(sp.stepsOff ?? []);
+                if (s.on) off.add(s.id); else off.delete(s.id);
+                sp.stepsOff = [...off];
+                syncSpaceMinutes(sp, rules);
+              })}>
+              {s.label} <small>{Math.round(s.minutes * 10) / 10}m</small>
+            </button>
+          )) : <span className="ptask incl">No General Clean — tasks only</span>}
+          {/* the room's extras: on this room, and whether a schedule has them */}
           {req.map((t) => {
             const covered = cov.some((c) => c.tasks.includes(t));
-            return <span key={t} className={"ptask" + (covered ? " on" : " warn")}>
+            return <button key={t} className={"ptask" + (covered ? " on" : " warn")}
+              title="On this room — tap to take it off (the schedule that has the room follows)"
+              onClick={() => commit((d) => {
+                const sp = (d.v7.spaces ?? []).find((x) => x.id === space.id);
+                if (!sp) return;
+                sp.spaceTasks = rawSpaceTasks(rules, sp).filter((x) => x !== t);
+                syncSpaceMinutes(sp, rules);
+                refreshScheduleCoverage(d, rules, [sp.id]);
+              })}>
               {taskLabelOf(t)}{covered ? "" : " ⚠"}
-            </span>;
+            </button>;
           })}
+          {/* tasks the room could take on */}
+          {rules.tasks.filter((t) => t.addable && !t.floorCare && !req.includes(t.id)
+            && !includedTasksFor(rules, typeIdFromLabel(rules, space.roomType ?? "")).includes(t.id)).map((t) => (
+            <button key={"add-" + t.id} className="ptask dim" title="Tap to add it to this room (the schedule that has the room takes it)"
+              onClick={() => commit((d) => {
+                const sp = (d.v7.spaces ?? []).find((x) => x.id === space.id);
+                if (!sp) return;
+                sp.spaceTasks = [...rawSpaceTasks(rules, sp), t.id];
+                syncSpaceMinutes(sp, rules);
+                refreshScheduleCoverage(d, rules, [sp.id]);
+              })}>
+              + {t.label}
+            </button>
+          ))}
           {fcReq.map((t) => {
             const covered = cov.some((c) => c.tasks.includes(t));
             return <span key={t} className={"ptask fc" + (covered ? " on" : " warn")}
@@ -1513,9 +1559,14 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
       {/* why these minutes (Josh, 2026-11-02): the engine's own lines, floor care told apart */}
       {(() => {
         const m = roomMinutes(rules, cur);
+        const b = gcBreakdown(rules, cur);
         return (
           <div className="pfield whyminutes">
             <span>Why {m.cleaning} min</span>
+            {/* a small room: the steps' own rates come to more than the ISSA time, so they share it */}
+            {b.scaled && b.minutes > 0 && (
+              <div className="whyline note"><span>General Clean — {b.fullText} · its steps below share that time</span></div>
+            )}
             {m.lines.filter((l) => !l.floorCare).map((l, i) => (
               <div key={i} className="whyline"><span>{l.label}</span><b>{Math.round(l.minutes * 10) / 10} min</b></div>
             ))}
@@ -2247,11 +2298,11 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
               );
             })}
             {followsAccountGeneralClean(rt)
-              ? <span className="gcsrc">the account's list (General Clean — what it includes, above)</span>
+              ? <span className="gcsrc">same as the account's General Clean list (set above)</span>
               : <>
-                <span className="gcsrc">this type's own list</span>
+                <span className="gcsrc">changed for this type only — it differs from the account's list</span>
                 <button className="pbtn small" onClick={() => editAll((r) => { delete r.roomTypes.find((x) => x.id === rt.id)!.includedTasks; })}>
-                  Use the account's list
+                  Use the account's list instead
                 </button>
               </>}
           </span>
@@ -2355,7 +2406,9 @@ function TypeCheckBlock({ rt, draft, check }: { rt: RoomTypeRule; draft: Rules; 
       </p>
       {check.unusual.length > 0 && (
         <button className="plink" onClick={() => setOpen(!open)}>
-          {open ? "Hide" : "Show"} the {check.unusual.length} {check.unusual.length === 1 ? "room that stands" : "rooms that stand"} out
+          {check.unusual.length === 1
+            ? `1 room's time or size doesn't match the rest — ${open ? "hide it" : "show it"}`
+            : `${check.unusual.length} rooms' time or size doesn't match the rest — ${open ? "hide them" : "show them"}`}
         </button>
       )}
       {open && (

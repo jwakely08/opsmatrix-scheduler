@@ -7,7 +7,7 @@
 // separate document, so Classic's save effect can never clobber them.
 import React, { useMemo, useRef, useState } from "react";
 import {
-  syncSpaceMinutes, spaceIncomplete, spacePriority, deleteSpace, duplicateSpace,
+  syncSpaceMinutes, refreshScheduleCoverage, spaceIncomplete, spacePriority, deleteSpace, duplicateSpace,
   deleteBuilding, buildingFootprint,
   FLOOR_TYPES, PRIORITIES, PRIORITY_NUM, PRIORITY_WORD,
   type ClassicData, type ClassicSpace, type Priority
@@ -117,6 +117,8 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
       syncSpaceMinutes(next, rules);
       if (at >= 0) list[at] = { ...list[at], ...next };
       else list.push(next);
+      // a schedule that has this room follows its new tasks (Josh, 2026-11-02: "the cleaning time should have changed")
+      refreshScheduleCoverage(d, rules, [next.id]);
     });
     onClose();
   };
@@ -335,6 +337,7 @@ function RoomTable({ data, rules, rows, showDept, commit, onEdit }: {
                       if (!t) return;
                       t.cleanability = e.target.checked ? "Cleanable" : "Non-cleanable";
                       syncSpaceMinutes(t, rules);
+                      refreshScheduleCoverage(d, rules, [t.id]);
                     })} />
                 </td>
                 <td className="rowacts">

@@ -261,13 +261,14 @@ describe("the schedules workbook (raw data to re-create the schedule elsewhere)"
     expect(rows[0]).toEqual([...TASK_MINUTES_HEADERS]);
     const stop1 = rows.filter((r) => r[1] === 1);
     const names = stop1.map((r) => String(r[3]));
-    expect(names).toContain("General Clean");
-    expect(names).toContain("High Dusting");
-    // 180 sqft exam room: general = 180 at ISSA clinical 2,150/hr = 5.0m,
-    // high dusting = 180/120 = 1.5m
-    const gc = stop1.find((r) => r[3] === "General Clean")!;
+    // the General Clean is written as its steps, each with its share of the ISSA time
+    expect(names).not.toContain("General Clean");
+    expect(names).toEqual(expect.arrayContaining(["Trash Pull", "Vacuuming", "High Dusting"]));
+    // 180 sqft exam room on carpet: general = 180 at ISSA clinical 2,150/hr = 5.0m, shared by
+    // trash pull + vacuuming; high dusting (an extra) = 180/120 = 1.5m
+    const gc = stop1.filter((r) => r[3] === "Trash Pull" || r[3] === "Vacuuming").reduce((a, r) => a + Number(r[4]), 0);
     const hd = stop1.find((r) => r[3] === "High Dusting")!;
-    expect(gc[4]).toBe(5);
+    expect(gc).toBeCloseTo(5, 1);
     expect(hd[4]).toBe(1.5);
     // and the task rows sum to the stop's total (top-up row included if any)
     const stops = sheetByName(d).get("Room Stops")!;
@@ -317,6 +318,6 @@ describe("the schedules workbook — the end-of-day round", () => {
     ]);
     // and the per-task minutes follow each visit
     const tasks = sheets.get("Task Minutes")!.slice(1);
-    expect(tasks.map((r) => [r[3], r[4]])).toEqual([["General Clean", 5], ["2nd Trash Pull", 2]]);
+    expect(tasks.map((r) => [r[3], r[4]])).toEqual([["Trash Pull", 1.7], ["Vacuuming", 3.3], ["2nd Trash Pull", 2]]);
   });
 });

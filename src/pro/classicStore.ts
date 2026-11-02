@@ -14,7 +14,7 @@
 import {
   computeMinutes, requiredTasks, toClassicRoomTasks, fromClassicRoomTasks,
   loadRules, autoTasksFor, tasksAfterFloorChange, typeIdFromLabel, typeIdFromLabelStrict, includedConflicts,
-  ISSA_HELPER_TASK, type Rules
+  isFloorCareTask, ISSA_HELPER_TASK, type Rules
 } from "./rules";
 import { resolvePendingRoomTypes, loadAliases } from "./roomListImport";
 
@@ -52,6 +52,8 @@ export interface ClassicSpace {
   vacuumDaysPerWeek?: number;
   /** how urgent this room is — set during Max Space validation, prints on the schedule */
   priority?: Priority;
+  /** General Clean steps switched off in this room — their share of the time comes off (rules.gcBreakdown) */
+  stepsOff?: string[];
   updatedAt?: string;
   [k: string]: unknown;
 }
@@ -301,6 +303,44 @@ export function refreshAutoTasks(spaces: ClassicSpace[], prev: Rules, next: Rule
     const nextAuto = autoTasksFor(next, typeIdFromLabel(next, label), sp.floorType);
     if (!sameSet(sp.spaceTasks, nextAuto)) {
       sp.spaceTasks = nextAuto;
+      changed++;
+    }
+  }
+  return changed;
+}
+
+/**
+ * Keep every cleaning schedule's coverage in step with what its rooms need NOW (Josh, 2026-11-02:
+ * "I made the changes in Scope… the cleaning time should have changed, but it didn't"). A schedule
+ * took its copy of a room's tasks the moment the room was tapped on; Scope changes and room edits
+ * since then changed the room, not the copy. So: a schedule drops a task the room no longer
+ * carries (or that its General Clean now includes), and the schedule that OWNS the room — the one
+ * with its base clean, else the first that has it — picks up any cleaning task nobody covers yet.
+ * Floor care is never touched: it is Max Floor Care's, and its schedules are left alone. Limit it
+ * to `spaceIds` after one room's edit; run it over everything after a Scope change. Returns how
+ * many schedule stops changed.
+ */
+export function refreshScheduleCoverage(data: ClassicData, rules: Rules, spaceIds?: string[]): number {
+  const only = spaceIds ? new Set(spaceIds) : null;
+  const scheds = (data.v7.schedules ?? []).filter((s) => !s.projectNoteId && !s.routeOnly && !s.floorCareId);
+  let changed = 0;
+  for (const sp of data.v7.spaces ?? []) {
+    if (only && !only.has(sp.id)) continue;
+    const covs = scheds
+      .filter((s) => (s.spaceOrder ?? []).includes(sp.id))
+      .map((s) => ({ s, ...fromClassicRoomTasks(s.roomTasks?.[sp.id]) }));
+    if (!covs.length) continue;
+    const need = requiredTasks(rules, sp).filter((t) => !isFloorCareTask(rules, t));
+    const owner = covs.find((c) => c.primary) ?? covs[0];
+    const covered = new Set(covs.flatMap((c) => c.tasks));
+    for (const c of covs) {
+      const keep = c.tasks.filter((t) => need.includes(t));
+      const take = c === owner ? need.filter((t) => !covered.has(t)) : [];
+      const next = [...keep, ...take];
+      const same = next.length === c.tasks.length && next.every((t) => c.tasks.includes(t));
+      if (same) continue;
+      // the owner keeps the room even with nothing left to do; a helper schedule with nothing left lets it go
+      setCoverage(data, sp.id, c.s.id, c.primary, next, c === owner);
       changed++;
     }
   }

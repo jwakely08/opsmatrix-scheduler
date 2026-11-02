@@ -2,7 +2,7 @@
 // room to copy from, tick what to copy, then every room tapped gets those details — saved on the
 // spot — until Done. The ticks are remembered for next time, and Undo steps back one room at a time.
 import React, { useState } from "react";
-import { PRIORITY_NUM, spacePriority, type ClassicData, type ClassicSpace } from "./classicStore";
+import { PRIORITY_NUM, refreshScheduleCoverage, spacePriority, type ClassicData, type ClassicSpace } from "./classicStore";
 import { spaceCleanability, type Rules } from "./rules";
 import {
   CLONE_FIELDS, DEFAULT_CLONE_FIELDS, cloneInto, restoreRoom, snapshotRoom, type CloneField, type RoomSnapshot
@@ -58,7 +58,11 @@ export function useCloneMode(spaces: ClassicSpace[], commit: (mut: (d: ClassicDa
       const before = snapshotRoom(sp);
       commit((d) => {
         const t = (d.v7.spaces ?? []).find((s) => s.id === sp.id);
-        if (t) cloneInto(t, from, chosen, rules);
+        if (t) {
+          cloneInto(t, from, chosen, rules);
+          // a schedule that has this room follows its new task list
+          refreshScheduleCoverage(d, rules, [t.id]);
+        }
       });
       setHistory((h) => [...h, { id: sp.id, label: roomLabel(sp), before }]);
       setPasted((p) => new Set(p).add(sp.id));
