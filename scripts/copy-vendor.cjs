@@ -17,7 +17,11 @@ const FILES = [
   ["node_modules/react/umd/react.production.min.js", "react.production.min.js"],
   ["node_modules/react-dom/umd/react-dom.production.min.js", "react-dom.production.min.js"],
   // tailwindcss@2.2.19, pinned under the npm alias "tailwindcss-v2"
-  ["node_modules/tailwindcss-v2/dist/tailwind.min.css", "tailwind.min.css"]
+  ["node_modules/tailwindcss-v2/dist/tailwind.min.css", "tailwind.min.css"],
+  // "Save as PDF" on the printed schedule (src/pro/pdfExport.ts): the preview's pages drawn to canvas
+  // and written into a PDF, loaded only when asked for — the iPad's home-screen app has no print dialog
+  ["node_modules/html2canvas/dist/html2canvas.min.js", "html2canvas.min.js"],
+  ["node_modules/jspdf/dist/jspdf.umd.min.js", "jspdf.umd.min.js"]
 ];
 
 fs.mkdirSync(OUT, { recursive: true });

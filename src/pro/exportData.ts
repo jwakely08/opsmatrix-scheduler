@@ -223,7 +223,7 @@ const r1 = (n: number) => Math.round(n * 10) / 10;
  */
 export const CLIENT_SCHEDULE_HEADERS = [
   "Stop #", "Room Number", "Room Name", "Room Type", "Square Feet", "Cleaning Tasks", "Priority", "Est. Minutes",
-  "Schedule", "Shift", "Hours", "Unit", "Building"
+  "Schedule #", "Schedule", "Shift", "Hours", "Building", "Floor", "Department"
 ] as const;
 export const UNREPORTED = "—";
 
@@ -233,16 +233,18 @@ export function clientScheduleRows(
   const doc = buildScheduleDoc(data, rules, sched);
   const byId = new Map((data.v7.spaces ?? []).map((sp) => [sp.id, sp]));
   const rows: Cell[][] = [[...CLIENT_SCHEDULE_HEADERS]];
-  const schedule = [doc.num, doc.name].filter(Boolean).join(" · ");
   const hours = `${doc.shiftStart} – ${doc.shiftEnd}`;
-  const building = [doc.building, doc.floor].filter(Boolean).join(" · ");
-  // the rooms in cleaning order, then the end-of-day round's return visits (↻ with the room's own stop number)
+  // the rooms in cleaning order, then the end-of-day round's return visits (↻ with the room's own stop
+  // number). Building, floor and department are the ROOM's own (Josh: "separate it out by floor and by
+  // department"), so a sheet sorts cleanly by any of them.
   for (const r of [...doc.rows, ...(doc.round?.rows ?? [])]) {
+    const sp = byId.get(r.spaceId);
     rows.push([
       r.round ? `↻ ${r.order}` : r.order, txt(r.roomNumber), txt(r.roomName), txt(r.roomType),
-      Math.round(Number(byId.get(r.spaceId)?.squareFeet) || 0) || "",
+      Math.round(Number(sp?.squareFeet) || 0) || "",
       r.tasks.join(" + "), r.priority, opts?.includeMinutes ? r.minutes : UNREPORTED,
-      schedule, txt(doc.shift), hours, txt(doc.unit || doc.name), building
+      txt(doc.num), txt(doc.name), txt(doc.shift), hours,
+      txt(sp?.building) || txt(doc.building), txt(sp?.floor) || txt(doc.floor), txt(sp?.department)
     ]);
   }
   return rows;

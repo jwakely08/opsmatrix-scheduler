@@ -339,15 +339,16 @@ describe("the client schedule sheet (Josh, 2026-11-02: his columns, in schedule 
     const { d, s, r2 } = withRound();
     const rows = clientScheduleRows(d, r2, s);
     expect(rows[0]).toEqual([...CLIENT_SCHEDULE_HEADERS]);
-    expect(rows[0]).toEqual(["Stop #", "Room Number", "Room Name", "Room Type", "Square Feet", "Cleaning Tasks", "Priority", "Est. Minutes", "Schedule", "Shift", "Hours", "Unit", "Building"]);
+    expect(rows[0]).toEqual(["Stop #", "Room Number", "Room Name", "Room Type", "Square Feet", "Cleaning Tasks", "Priority", "Est. Minutes", "Schedule #", "Schedule", "Shift", "Hours", "Building", "Floor", "Department"]);
     expect(rows.slice(1).map((r) => [r[0], r[1]])).toEqual([[1, "E2-2040"], ["↻ 1", "E2-2040"]]);
     expect(rows[1].slice(2, 7)).toEqual(["Med Room", "Exam Room", 180, "Trash Pull + Vacuuming", "Medium"]);
     expect(rows[2][5]).toBe("2nd Trash Pull");
-    expect(String(rows[1][8])).toMatch(/EVS 1$/);
-    expect(rows[1][9]).toBe("1st Shift");
-    expect(String(rows[1][10])).toMatch(/M – .*M$/);          // "7:00 AM – 3:00 PM"
-    expect(rows[1][11]).toBe("EVS 1");                        // the unit is the schedule's name
-    expect(String(rows[1][12])).toMatch(/^HOSPITAL-E/);
+    expect(String(rows[1][8])).toMatch(/^\d+$/);              // the schedule's number, on its own
+    expect(rows[1][9]).toBe("EVS 1");                         // …and its name
+    expect(rows[1][10]).toBe("1st Shift");
+    expect(String(rows[1][11])).toMatch(/M – .*M$/);          // "7:00 AM – 3:00 PM"
+    // the room's own building, floor and department — not the schedule's
+    expect(rows[1].slice(12)).toEqual(["HOSPITAL-E", "02", "EVS"]);
   });
 
   it("the estimated minutes read — until asked for", () => {
