@@ -52,13 +52,22 @@ describe("checkType — a room type's rooms side by side", () => {
     expect(c.unusual[0].reasons[0]).toBe("1,879 sq ft — 8× the typical 245 sq ft"); // median of 240…248 + the bay = 244.5
   });
 
-  it("a room with extras stands out by its extras, and a tiny one by its size", () => {
+  it("a room with a task added by hand stands out by that task, and a tiny one by its size", () => {
     const rooms = [...typical, room("hd", 240, "Patient Room", { spaceTasks: ["high-dusting"] }), room("tiny", 40)];
     const c = checkType(rules, rooms, "patient-room");
     const hd = c.unusual.find((u) => u.id === "hd")!;
-    expect(hd.reasons).toEqual(["+2 min of extras: High Dusting"]);
+    expect(hd.reasons).toEqual(["+2 min: added by hand — High Dusting"]);
     const tiny = c.unusual.find((u) => u.id === "tiny")!;
     expect(tiny.reasons[0]).toMatch(/^40 sq ft — well under the typical 239 sq ft/);
+  });
+
+  it("a room missing one of the type's usual tasks says so", () => {
+    const r = defaultRules();
+    r.tasks.find((t) => t.id === "high-dusting")!.autoFor.push("exam-room");
+    const rooms = [...Array.from({ length: 8 }, (_, i) => room("e" + i, 300, "Exam Room", { spaceTasks: ["high-dusting"] })), room("bare", 300, "Exam Room", { spaceTasks: [] })];
+    const c = checkType(r, rooms, "exam-room");
+    expect(c.unusual.map((u) => u.id)).toEqual(["bare"]);
+    expect(c.unusual[0].reasons).toEqual(["-3 min: without the usual High Dusting"]); // 300/120 = 2.5 → 3
   });
 
   it("counts the floor crew's time separately and never calls it unusual", () => {
@@ -67,6 +76,18 @@ describe("checkType — a room type's rooms side by side", () => {
     expect(c.unusual).toEqual([]);
     expect(c.floorCareRooms).toBe(8);
     expect(c.floorCareMinutes).toBe(8 * 6); // 500/200 = 2.5 + 500/150 = 3.3 → 6 each
+  });
+
+  it("a type with no General Clean: its automatic tasks are the expected time, so nothing stands out", () => {
+    const r = defaultRules();
+    const corridor = r.roomTypes.find((t) => t.id === "corridor")!;
+    corridor.method = "none"; corridor.includedTasks = [];
+    r.tasks.find((t) => t.id === "high-dusting")!.autoFor.push("corridor");
+    r.tasks.find((t) => t.id === "trash-pull")!.autoFor.push("corridor");
+    const rooms = Array.from({ length: 10 }, (_, i) => room("c" + i, 400 + i * 20, "Corridor", { spaceTasks: ["auto-scrub", "dust-mop", "high-dusting", "trash-pull"] }));
+    const c = checkType(r, rooms, "corridor");
+    expect(c.unusual).toEqual([]);
+    expect(c.minutes!.median).toBe(6); // 490/120 = 4.1 + 2 → 6
   });
 
   it("an unknown type or no rooms gives an empty check", () => {
