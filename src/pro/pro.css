@@ -1609,3 +1609,21 @@ input[type="checkbox"], input[type="radio"] {
 .schedround .pnote b { color: #5eead4; }
 .schedroom.round b { color: #5eead4; }
 .schedroom.round .ordnum { background: rgba(13,148,136,.25); color: #5eead4; }
+
+/* ✉ Help from Claude: the switch on the Scope page, the code, what came in, and the banner everywhere */
+.handoffcode { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0; }
+.handoffcode span { color: #94a3b8; font-size: 13px; }
+.handoffcode b { font-family: Consolas, "SF Mono", monospace; font-size: 24px; letter-spacing: 2px; color: #5eead4; user-select: all; }
+.handoffchanges {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0; padding: 10px 14px; border-radius: 12px;
+  background: rgba(13,148,136,.14); border: 1px solid rgba(45,212,191,.45); font-size: 13px; color: #e2e8f0;
+}
+.handoffchanges > div { flex: 1; min-width: 220px; }
+.handoffchanges i { color: #cbd5e1; }
+.handoffchanges .warntext { margin-top: 4px; }
+.handoffacts { display: inline-flex; gap: 8px; flex: none; }
+.handoffbanner { padding: 8px 16px 0; }
+.handoffbanner .handoffchanges { margin: 0; box-shadow: 0 6px 24px rgba(13,148,136,.25); }
+.handoffchip { border-color: rgba(45,212,191,.6) !important; color: #5eead4 !important; }
+.handoffcard .prow { align-items: center; gap: 12px; }
+.handoffcard .prow small { margin: 0; }

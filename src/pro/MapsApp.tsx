@@ -23,6 +23,7 @@ import {
 import { mergeRooms, type MergeStores } from "./mergeRooms";
 import { useCloneMode, CloneBar } from "./CloneMode";
 import { useRenameMode, RenameBar } from "./RenameMode";
+import { useHandoff, HandoffCard, HandoffBanner, type HandoffControl } from "./HandoffCard";
 import { IntakeSetup, IntakeProfileCard } from "./IntakeSetup";
 import { loadRoutes, saveRoutes, type RouteStore } from "./routes";
 import { loadFloorCare, saveFloorCare, type FcStore } from "./floorcare";
@@ -236,6 +237,10 @@ export function MapsApp() {
   const rename = useRenameMode({ floorSpaces: spaces, buildingSpaces, rules, commit });
   const stopRename = rename.stop;
   useEffect(() => { stopRename(); }, [navToken]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // "Help from Claude" (Josh, 2026-11-02): the switch lives on the Scope page, but the engine runs
+  // on every hub page so Claude's changes arrive wherever Josh happens to be (HandoffCard.tsx)
+  const handoff = useHandoff();
 
   const commitRules = useCallback((next: Rules) => {
     const prev = loadRules(); // the rulebook as it stood before this change
@@ -473,7 +478,12 @@ export function MapsApp() {
         {(tab === "map" || tab === "rooms" || tab === "schedules") && (
           <button className="pbtn" onClick={() => setReport(true)}>⚠ Unassigned Tasks</button>
         )}
+        {handoff.on && tab !== "scope" && (
+          <button className="pbtn small handoffchip" title="This device is sharing its data with Claude — Scope → Help from Claude"
+            onClick={() => go("hub:scope")}>✉ Claude: on</button>
+        )}
       </header>
+      <HandoffBanner h={handoff} />
 
       {onMapView && !needsBuilding && (
         <div className="pro-filters">
@@ -843,7 +853,8 @@ export function MapsApp() {
         )}
 
         {tab === "scope" && (
-          <ScopeTab rules={rules} onChange={commitRules} onCleanIncluded={cleanIncluded} data={data} isAdmin={canEditFormula(role)} />
+          <ScopeTab rules={rules} onChange={commitRules} onCleanIncluded={cleanIncluded} data={data} isAdmin={canEditFormula(role)}
+            handoff={handoff} />
         )}
 
         {tab === "workload" && (
@@ -2255,12 +2266,14 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
   );
 }
 
-function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
+function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin, handoff }: {
   rules: Rules;
   onChange: (r: Rules) => void;
   onCleanIncluded: () => void;
   data: ClassicData;
   isAdmin: boolean;
+  /** the "Help from Claude" switch — its engine lives in MapsApp */
+  handoff: HandoffControl;
 }) {
   const [draft, setDraft] = useState<Rules>(() => JSON.parse(JSON.stringify(rules)));
   const [newType, setNewType] = useState({ label: "", freq: "7x / week", cat: "office" });
@@ -2790,6 +2803,7 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
       )}
 
       <BackupCard />
+      <HandoffCard h={handoff} />
     </div>
   );
 }
