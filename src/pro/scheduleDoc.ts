@@ -65,7 +65,7 @@ export interface DocBreak {
   minutes: number;
   /** this break falls after this many rooms (index into rows) */
   afterRow: number;
-  /** unpaid: it lengthens the day rather than coming out of the paid shift */
+  /** unpaid: not paid time — it still comes out of the shift's hours (the day never stretches) */
   unpaid: boolean;
 }
 
@@ -129,14 +129,14 @@ export interface ScheduleDoc {
     shiftDutyMinutes: number;
     /** rooms + non-space work + every break: the whole day, start to finish */
     totalMinutes: number;
-    /** the whole day the worker is there: paid shift + unpaid breaks */
+    /** the whole day the worker is there: the shift record's hours (every break falls inside) */
     shiftMinutes: number;
     breakMinutes: number;
     paidBreakMinutes: number;
     unpaidBreakMinutes: number;
     /** rooms + non-space work + paid breaks — what the shift pays for */
     paidMinutes: number;
-    /** the paid shift itself (the shift record's hours) */
+    /** the paid part of the shift: its hours less the unpaid breaks */
     paidShiftMinutes: number;
     overShift: boolean;
     priority: Record<Priority, number>;
@@ -179,26 +179,29 @@ interface ClassicShift { id?: string; name?: string; start?: string; end?: strin
 export interface ShiftHours {
   name: string;
   start: number;
-  /** when the day ends — after any unpaid breaks, when rules were given */
+  /** when the day ends — the shift record's own end; no break moves it */
   end: number;
-  /** the paid shift, in minutes (the shift record's own hours) */
+  /** the shift record's hours, in minutes: the whole day the worker is there */
+  spanMinutes: number;
+  /** the paid part of it: the shift's hours less its unpaid breaks */
   paidMinutes: number;
-  /** unpaid break minutes this schedule takes, added on to the day */
+  /** unpaid break minutes this schedule takes — inside the shift, not added on */
   unpaidMinutes: number;
 }
 
 /**
- * The hours this schedule works. The shift record is the PAID shift; with
- * the account's rules, unpaid breaks are added on to the end of the day —
- * 1st Shift 7:00 AM – 3:00 PM with a 30-minute unpaid lunch runs to 3:30 PM.
+ * The hours this schedule works: the shift record, as set in Scope, is the whole day. Every break,
+ * paid or unpaid, comes out of those hours (Josh, 2026-11-02: "first shift is set from 7 AM to 3:30 PM;
+ * regardless if a break is paid or unpaid it takes out of that shift — it doesn't add an extra 30
+ * minutes"). Unpaid only means the time isn't paid; it no longer lengthens the day.
  */
 export function shiftFor(data: ClassicData, sched: ClassicSchedule, rules?: Rules): ShiftHours {
-  const paid = paidShiftFor(data, sched);
-  const paidMinutes = shiftSpan(paid.start, paid.end);
+  const record = paidShiftFor(data, sched);
+  const spanMinutes = shiftSpan(record.start, record.end);
   const unpaidMinutes = rules
-    ? resolveBreaks(rules, sched, paid).filter((b) => b.unpaid).reduce((s, b) => s + b.minutes, 0)
+    ? resolveBreaks(rules, sched, record).filter((b) => b.unpaid).reduce((s, b) => s + b.minutes, 0)
     : 0;
-  return { ...paid, end: (paid.end + unpaidMinutes) % 1440, paidMinutes, unpaidMinutes };
+  return { ...record, spanMinutes, paidMinutes: spanMinutes - unpaidMinutes, unpaidMinutes };
 }
 
 /** the shift record this schedule runs on, by name, with sane fallbacks */
@@ -256,18 +259,23 @@ export function resolveBreaks(
 }
 
 /**
- * How much work one schedule can hold (Josh, 2026-10-12): the paid shift
- * (targetHours, 8 by default) less its paid breaks. Non-space duties count
- * as work against it, like rooms; unpaid breaks don't touch it.
+ * How much work one schedule can hold: the shift record's hours (set in Scope) less EVERY break it
+ * takes, paid or unpaid (Josh, 2026-11-02: "the shift configuration sets the parameters for what the
+ * shift operates in"). Non-space duties count as work against it, like rooms. `paidMinutes` is the
+ * paid part of the shift (its hours less the unpaid breaks) — for payroll, not for the clock.
  */
 export function scheduleCapacity(data: ClassicData, rules: Rules, sched: ClassicSchedule): {
-  paidMinutes: number; paidBreakMinutes: number; unpaidBreakMinutes: number; workMinutes: number;
+  shiftMinutes: number; paidMinutes: number; paidBreakMinutes: number; unpaidBreakMinutes: number; workMinutes: number;
 } {
-  const paidMinutes = (Number(sched.targetHours) || 8) * 60;
-  const breaks = resolveBreaks(rules, sched, paidShiftFor(data, sched));
+  const record = paidShiftFor(data, sched);
+  const shiftMinutes = shiftSpan(record.start, record.end);
+  const breaks = resolveBreaks(rules, sched, record);
   const paidBreakMinutes = breaks.filter((b) => !b.unpaid).reduce((s, b) => s + b.minutes, 0);
   const unpaidBreakMinutes = breaks.filter((b) => b.unpaid).reduce((s, b) => s + b.minutes, 0);
-  return { paidMinutes, paidBreakMinutes, unpaidBreakMinutes, workMinutes: paidMinutes - paidBreakMinutes };
+  return {
+    shiftMinutes, paidMinutes: shiftMinutes - unpaidBreakMinutes, paidBreakMinutes, unpaidBreakMinutes,
+    workMinutes: shiftMinutes - paidBreakMinutes - unpaidBreakMinutes
+  };
 }
 
 /** the account breaks that would apply, for showing in the schedule editor */
@@ -320,10 +328,9 @@ export function buildScheduleDoc(
   const spaces = data.v7.spaces ?? [];
   const shift = shiftFor(data, sched, rules);
 
-  // the whole day: the paid shift plus any unpaid breaks
-  const span = shift.paidMinutes + shift.unpaidMinutes;
-  // breaks belong to the paid shift's hours — the same ones shiftFor added up
-  const pending = resolveBreaks(rules, sched, { start: shift.start, end: shift.start + shift.paidMinutes });
+  // the whole day: the shift record's hours — every break falls inside them
+  const span = shift.spanMinutes;
+  const pending = resolveBreaks(rules, sched, { start: shift.start, end: shift.end });
 
   const rows: DocRow[] = [];
   const breaks: DocBreak[] = [];

@@ -414,33 +414,37 @@ function unpaidLunch() {
   return r;
 }
 
-describe("unpaid breaks (Josh, 2026-10-12)", () => {
-  it("adds an unpaid lunch on to the end of the paid shift", () => {
+describe("breaks come out of the shift's hours (Josh, 2026-11-02 — supersedes the 2026-10-12 'unpaid adds on' rule)", () => {
+  it("an unpaid lunch no longer lengthens the day: the shift record's end is the end", () => {
     const data = fixture();
     const sched = data.v7.schedules![0];
+    // the fixture's 1st Shift is 7:00 AM – 3:00 PM: 480 min, of which 450 are paid with an unpaid lunch
     expect(shiftFor(data, sched, unpaidLunch())).toMatchObject({
-      start: 420, end: 930, paidMinutes: 480, unpaidMinutes: 30
+      start: 420, end: 900, spanMinutes: 480, paidMinutes: 450, unpaidMinutes: 30
     });
-    // paid breaks don't move the end of the day
-    expect(shiftFor(data, sched, RULES_BREAKS)).toMatchObject({ end: 900, unpaidMinutes: 0 });
-    // a schedule that skips lunch, or makes it paid, ends at 3:00 again
+    // all paid: the whole shift is paid
+    expect(shiftFor(data, sched, RULES_BREAKS)).toMatchObject({ end: 900, spanMinutes: 480, paidMinutes: 480, unpaidMinutes: 0 });
+    // a schedule that makes lunch paid, or skips it: still 3:00, all paid
     sched.breaks = [{ id: "lunch", unpaid: false }];
-    expect(shiftFor(data, sched, unpaidLunch()).end).toBe(900);
+    expect(shiftFor(data, sched, unpaidLunch())).toMatchObject({ end: 900, paidMinutes: 480 });
     sched.breaks = [{ id: "lunch", off: true }];
-    expect(shiftFor(data, sched, unpaidLunch()).end).toBe(900);
+    expect(shiftFor(data, sched, unpaidLunch())).toMatchObject({ end: 900, paidMinutes: 480 });
   });
 
-  it("wraps past midnight on a 3rd shift", () => {
+  it("a 3rd shift crossing midnight ends when its record says, unpaid lunch or not", () => {
     const data = fixture();
     data.v7.schedules![0].shift = "3rd Shift";
     data.v7.shifts = [{ id: "sh3", name: "3rd Shift", start: "11:00 PM", end: "7:00 AM", active: true }];
     const rules = { ...RULES, breaks: [{ id: "n", label: "Lunch", minutes: 30, start: "3:00 AM", unpaid: true }] };
-    expect(formatClock(shiftFor(data, data.v7.schedules![0], rules).end)).toBe("7:30 AM");
+    const s = shiftFor(data, data.v7.schedules![0], rules);
+    expect(formatClock(s.end)).toBe("7:00 AM");
+    expect(s).toMatchObject({ spanMinutes: 480, paidMinutes: 450, unpaidMinutes: 30 });
   });
 
-  it("runs Josh's day: 8 paid hours with an unpaid lunch is 7:00 AM – 3:30 PM", () => {
+  it("runs Josh's day: the shift set 7:00 AM – 3:30 PM holds the rooms, the duties and every break — and ends at 3:30", () => {
     const data = fixture();
     const sched = data.v7.schedules![0];
+    data.v7.shifts = [{ id: "sh1", name: "1st Shift", start: "7:00 AM", end: "3:30 PM", active: true }];
     // 420 room minutes, as a route carries them
     Object.assign(sched, { routeOnly: true, spaceOrder: ["sp-101", "sp-102", "sp-c1"],
       routeStopMinutes: { "sp-101": 140, "sp-102": 140, "sp-c1": 140 } });
@@ -453,21 +457,29 @@ describe("unpaid breaks (Josh, 2026-10-12)", () => {
     ]);
     expect(doc.breaks.find((b) => b.label === "Lunch")).toMatchObject({ unpaid: true });
     expect(doc.endDuties[0]).toMatchObject({ startTime: "3:15 PM", endTime: "3:30 PM" });
+    expect(doc.dayEnd).toBe("3:30 PM");
     expect(doc.totals).toMatchObject({
       roomMinutes: 420, shiftDutyMinutes: 30, paidBreakMinutes: 30, unpaidBreakMinutes: 30,
       paidMinutes: 480, paidShiftMinutes: 480, shiftMinutes: 510, totalMinutes: 510, overShift: false
     });
+    // the same day with lunch paid: nothing moves on the clock, only the paid figure changes
+    const paid = buildScheduleDoc(data, RULES_BREAKS, sched, { date: DATE });
+    expect([paid.shiftStart, paid.shiftEnd, paid.dayEnd]).toEqual(["7:00 AM", "3:30 PM", "3:30 PM"]);
+    expect(paid.totals).toMatchObject({ paidMinutes: 510, paidShiftMinutes: 510, shiftMinutes: 510 });
   });
 
-  it("sizes a schedule's room work as the paid shift less its paid breaks", () => {
+  it("sizes a schedule's room work as the shift's hours less every break, paid or unpaid", () => {
     const data = fixture();
     const sched = data.v7.schedules![0];
     expect(scheduleCapacity(data, RULES_BREAKS, sched)).toEqual({
-      paidMinutes: 480, paidBreakMinutes: 60, unpaidBreakMinutes: 0, workMinutes: 420
+      shiftMinutes: 480, paidMinutes: 480, paidBreakMinutes: 60, unpaidBreakMinutes: 0, workMinutes: 420
     });
     expect(scheduleCapacity(data, unpaidLunch(), sched)).toEqual({
-      paidMinutes: 480, paidBreakMinutes: 30, unpaidBreakMinutes: 30, workMinutes: 450
+      shiftMinutes: 480, paidMinutes: 450, paidBreakMinutes: 30, unpaidBreakMinutes: 30, workMinutes: 420
     });
+    // Josh's real shift record, 7:00 – 3:30: 510 min, 60 of breaks, 450 for the rooms
+    data.v7.shifts = [{ id: "sh1", name: "1st Shift", start: "7:00 AM", end: "3:30 PM", active: true }];
+    expect(scheduleCapacity(data, unpaidLunch(), sched)).toMatchObject({ shiftMinutes: 510, paidMinutes: 480, workMinutes: 450 });
   });
 
   it("works out productive minutes from Scope: 480 − paid breaks − start/end duties", () => {

@@ -1652,3 +1652,6 @@ input[type="checkbox"], input[type="radio"] {
 .ptask.dim { opacity: .6; border-style: dashed; }
 .ptask small { font-size: 10.5px; color: #94a3b8; margin-left: 3px; }
 .whyminutes .whyline.note { color: #94a3b8; font-style: italic; }
+/* the Schedules tab's export switch: the client sheet's minutes, off until a contract is signed */
+.pro-list .exportopt { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 12px; color: #cbd5e1; font-size: 13px; }
+.pro-list .exportopt small { color: #94a3b8; font-size: 12px; }

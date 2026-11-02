@@ -193,7 +193,7 @@ describe("new importer column smarts", () => {
 
 // ── the schedules export: a raw workbook another system can re-create ─────
 import {
-  schedulesWorkbookSheets, SCHEDULES_SHEET_HEADERS, STOPS_SHEET_HEADERS,
+  schedulesWorkbookSheets, clientScheduleRows, CLIENT_SCHEDULE_HEADERS, SCHEDULES_SHEET_HEADERS, STOPS_SHEET_HEADERS,
   TASK_MINUTES_HEADERS, BREAKS_HEADERS
 } from "./exportData";
 import { createSchedule } from "./classicStore";
@@ -319,5 +319,40 @@ describe("the schedules workbook — the end-of-day round", () => {
     // and the per-task minutes follow each visit
     const tasks = sheets.get("Task Minutes")!.slice(1);
     expect(tasks.map((r) => [r[3], r[4]])).toEqual([["Trash Pull", 1.7], ["Vacuuming", 3.3], ["2nd Trash Pull", 2]]);
+  });
+});
+
+describe("the client schedule sheet (Josh, 2026-11-02: his columns, in schedule order, minutes unreported)", () => {
+  const withRound = () => {
+    const d = fixture();
+    const s = createSchedule(d, "EVS 1", "1st Shift", "");
+    s.spaceOrder = ["sp-manual"];
+    s.roomTasks = { "sp-manual": ["general-cleaning", "trash-2"] };
+    const r2 = {
+      ...rules,
+      tasks: [...rules.tasks, { id: "trash-2", label: "2nd Trash Pull", sqftPerMin: null, flatMin: 2, autoFor: [], addable: true, when: "end-of-day" as const }]
+    };
+    return { d, s, r2 };
+  };
+
+  it("exactly the columns asked for, the rooms in cleaning order, the round's return visit after them", () => {
+    const { d, s, r2 } = withRound();
+    const rows = clientScheduleRows(d, r2, s);
+    expect(rows[0]).toEqual([...CLIENT_SCHEDULE_HEADERS]);
+    expect(rows[0]).toEqual(["Stop #", "Room Number", "Room Name", "Room Type", "Square Feet", "Cleaning Tasks", "Priority", "Est. Minutes", "Schedule", "Shift", "Hours", "Unit", "Building"]);
+    expect(rows.slice(1).map((r) => [r[0], r[1]])).toEqual([[1, "E2-2040"], ["↻ 1", "E2-2040"]]);
+    expect(rows[1].slice(2, 7)).toEqual(["Med Room", "Exam Room", 180, "Trash Pull + Vacuuming", "Medium"]);
+    expect(rows[2][5]).toBe("2nd Trash Pull");
+    expect(String(rows[1][8])).toMatch(/EVS 1$/);
+    expect(rows[1][9]).toBe("1st Shift");
+    expect(String(rows[1][10])).toMatch(/M – .*M$/);          // "7:00 AM – 3:00 PM"
+    expect(rows[1][11]).toBe("EVS 1");                        // the unit is the schedule's name
+    expect(String(rows[1][12])).toMatch(/^HOSPITAL-E/);
+  });
+
+  it("the estimated minutes read — until asked for", () => {
+    const { d, s, r2 } = withRound();
+    expect(clientScheduleRows(d, r2, s).slice(1).map((r) => r[7])).toEqual(["—", "—"]);
+    expect(clientScheduleRows(d, r2, s, { includeMinutes: true }).slice(1).map((r) => r[7])).toEqual([5, 2]);
   });
 });
