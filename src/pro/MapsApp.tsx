@@ -23,6 +23,7 @@ import {
 import { mergeRooms, type MergeStores } from "./mergeRooms";
 import { useCloneMode, CloneBar } from "./CloneMode";
 import { useRenameMode, RenamePanel } from "./RenameMode";
+import { EMPTY_CHECK, checkAllTypes, roomMinutes, type TypeCheck } from "./roomTypeCheck";
 import { IntakeSetup, IntakeProfileCard } from "./IntakeSetup";
 import { loadRoutes, saveRoutes, type RouteStore } from "./routes";
 import { loadFloorCare, saveFloorCare, type FcStore } from "./floorcare";
@@ -1494,6 +1495,30 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
         <small>• = automatic for this room type or floor type. ↻ = done on the end-of-day round, after all the rooms. Who does each task is decided on the Map tab — different tasks can go to different schedules.</small>
       </div>
 
+      {/* why these minutes (Josh, 2026-11-02): the engine's own lines, floor care told apart */}
+      {(() => {
+        const m = roomMinutes(rules, cur);
+        return (
+          <div className="pfield whyminutes">
+            <span>Why {m.cleaning} min</span>
+            {m.lines.filter((l) => !l.floorCare).map((l, i) => (
+              <div key={i} className="whyline"><span>{l.label}</span><b>{Math.round(l.minutes * 10) / 10} min</b></div>
+            ))}
+            {m.lines.some((l) => l.floorCare) && (
+              <>
+                <div className="whyline fc"><span>🧽 Floor care — Max Floor Care's time, not on EVS schedules (the map label counts it)</span><b>+{m.floorCare}</b></div>
+                {m.lines.filter((l) => l.floorCare).map((l, i) => (
+                  <div key={"fc" + i} className="whyline fc sub"><span>{l.label}</span><b>{Math.round(l.minutes * 10) / 10} min</b></div>
+                ))}
+              </>
+            )}
+            {Number(cur.fixtureCount) > 0 && (
+              <small className="pnote">{Number(cur.fixtureCount)} fixture{Number(cur.fixtureCount) === 1 ? "" : "s"} — fixtures don't add time yet; the type's formula is by size and extras.</small>
+            )}
+          </div>
+        );
+      })()}
+
       <button className="pbtn primary wide" disabled={!dirty} onClick={save}>
         {dirty ? "💾 Save room" : "✓ Saved"}
       </button>
@@ -2073,7 +2098,7 @@ const METHOD_WORDS: Record<GcMethod, string> = {
  * already includes, the automatic extras, and its own Save. A room that
  * differs gets its own type: Duplicate, rename, adjust.
  */
-function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts, dirty, nameTaken, autoFocusName,
+function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts, check, dirty, nameTaken, autoFocusName,
   onSave, onDuplicate, onDelete, onCleanIncluded }: {
   rt: RoomTypeRule;
   draft: Rules;
@@ -2082,6 +2107,8 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
   isAdmin: boolean;
   sampleSqft: { sqft: number; fromRooms: boolean };
   conflicts: number;
+  /** this type's rooms side by side — sizes, minutes, the ones that stand out (roomTypeCheck.ts) */
+  check: TypeCheck;
   dirty: boolean;
   nameTaken: boolean;
   autoFocusName: boolean;
@@ -2238,6 +2265,8 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
         </span>
       </div>
 
+      <TypeCheckBlock rt={rt} draft={draft} check={check} />
+
       {conflicts > 0 && (
         <p className="warntext">
           ⚠ {conflicts} {conflicts === 1 ? "room still lists" : "rooms still list"} a task this General Clean includes — it adds no time there.{" "}
@@ -2250,6 +2279,60 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
           <button className="pbtn primary" disabled={!rt.label.trim() || nameTaken} onClick={onSave}>
             Save {rt.label.trim() || "room type"}
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Check the numbers" on a room type's card (Josh, 2026-11-02): how this type's rooms run — size,
+ * minutes, the rate that implies — and the rooms that stand out, each with its reason, so a 52-minute
+ * "nurses station" explains itself (1,879 sq ft, 8× the typical) before anyone changes a rate.
+ */
+function TypeCheckBlock({ rt, draft, check }: { rt: RoomTypeRule; draft: Rules; check: TypeCheck }) {
+  const [open, setOpen] = useState(false);
+  const [all, setAll] = useState(false);
+  if (!check.rooms || !check.sqft || !check.minutes) {
+    return <p className="pnote typecheck">No rooms of this type yet.</p>;
+  }
+  const n = (x: number) => Math.round(x).toLocaleString("en-US");
+  const range = (a: number, b: number) => (Math.round(a) === Math.round(b) ? n(a) : `${n(a)}–${n(b)}`);
+  const shown = all ? check.unusual : check.unusual.slice(0, 6);
+  return (
+    <div className="typecheck">
+      <p className="pnote">
+        <b>{check.rooms.toLocaleString("en-US")}</b> {check.rooms === 1 ? "room" : "rooms"} of this type ·
+        {" "}typical <b>{n(check.sqft.median)} sq ft → {n(check.minutes.median)} min</b>
+        {" "}· sizes {range(check.sqft.min, check.sqft.max)} sq ft · times {range(check.minutes.min, check.minutes.max)} min
+        {check.perHundred !== null && <> · about {check.perHundred} min per 100 sq ft</>}
+        {check.floorCareRooms > 0 && (
+          <> · {check.floorCareRooms} also carry floor-care tasks ({n(check.floorCareMinutes)} min in all — Max Floor Care's time, counted in the map label but not here)</>
+        )}
+      </p>
+      {check.unusual.length > 0 && (
+        <button className="plink" onClick={() => setOpen(!open)}>
+          {open ? "Hide" : "Show"} the {check.unusual.length} {check.unusual.length === 1 ? "room that stands" : "rooms that stand"} out
+        </button>
+      )}
+      {open && (
+        <div className="typecheck-list">
+          {shown.map((u) => (
+            <div key={u.id} className="typecheck-row">
+              <b>{u.roomNumber || u.roomName || "—"}</b>
+              <span>{n(u.sqft)} sq ft · {u.minutes} min{u.floorCare ? ` (+${u.floorCare} floor care)` : ""}</span>
+              <em>{u.reasons.join(" · ")}</em>
+            </div>
+          ))}
+          {check.unusual.length > 6 && (
+            <button className="plink" onClick={() => setAll(!all)}>{all ? "Show fewer" : `Show all ${check.unusual.length}`}</button>
+          )}
+          <small className="pnote">
+            A room that's far bigger than the rest is usually a bay or an open area traced as one room: give it its own
+            type at a corridor rate, or split it. A room with extras gets them from Scope or from its own task list.
+            {" "}{rt.label} is timed {gcFormula(draft, rt).method === "fixed" ? "by fixed minutes" : "by size"},
+            so same-size rooms get the same time; a room that still stands out carries something extra.
+          </small>
         </div>
       )}
     </div>
@@ -2292,7 +2375,9 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
       const m = s.length >> 1;
       median.set(tid, s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2);
     }
-    return { median, conflicts };
+    // every type's rooms side by side, for the "check the numbers" block on its card
+    const checks = checkAllTypes(rules, data.v7.spaces ?? []);
+    return { median, conflicts, checks };
   }, [data, rules]);
 
   const SectionSave = ({ sec }: { sec: ScopeSection }) => {
@@ -2341,6 +2426,7 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
             editAll={set}
             sampleSqft={median ? { sqft: median, fromRooms: true } : { sqft: 150, fromRooms: false }}
             conflicts={byType.conflicts.get(rt.id) ?? 0}
+            check={byType.checks.get(rt.id) ?? EMPTY_CHECK}
             dirty={roomTypeDirty(rules, draft, rt.id)}
             nameTaken={nameTaken}
             autoFocusName={focusType === rt.id}
