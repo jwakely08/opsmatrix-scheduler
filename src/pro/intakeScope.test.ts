@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { IntakeError, intakeFrequency, intakeToScope, readIntake, type IntakeData } from "./intakeScope";
-import { computeMinutes, defaultRules, freqPerWeek, weeklyMinutes, type Rules } from "./rules";
+import { computeMinutes, defaultRules, freqPerWeek, includedTasksFor, weeklyMinutes, type Rules } from "./rules";
 
 // a made-up hospital, answered the way the Rediscover Clean intake saves its answers
 const intake: IntakeData = {
@@ -144,7 +144,9 @@ describe("intakeToScope — rates, general clean, procedure", () => {
 
   it("the general clean covers what the facility said it does", () => {
     const { rules } = setup();
-    expect([...type(rules, "office").includedTasks!].sort()).toEqual(["damp-mop", "high-dusting", "trash-pull", "vacuum"]);
+    // the facility's list is the account's; every type follows it
+    expect([...(rules.general.includedTasks ?? [])].sort()).toEqual(["damp-mop", "high-dusting", "trash-pull", "vacuum"]);
+    expect([...includedTasksFor(rules, "office")].sort()).toEqual(["damp-mop", "high-dusting", "trash-pull", "vacuum"]);
     expect(computeMinutes(rules, { roomType: "Office", squareFeet: 300, spaceTasks: ["high-dusting"] }).lines).toHaveLength(1);
   });
 

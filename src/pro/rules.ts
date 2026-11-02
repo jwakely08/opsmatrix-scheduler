@@ -282,6 +282,17 @@ export interface Rules {
   version: number;
   general: {
     /**
+     * WHAT A GENERAL CLEAN IS (Josh, 2026-11-02: "an overall rule for general
+     * clean — I insert all the tasks that will be associated in a general
+     * clean"): the hospital's standard steps, one list for the whole account.
+     * A room type that has a General Clean gets every step here (a floor-tied
+     * step only where the floor calls for it), the schedule prints the steps,
+     * and the type's General Clean time covers them all — a step here adds no
+     * time of its own. Absent on an older rulebook: migrateRules fills it in
+     * from the room types' lists.
+     */
+    includedTasks?: string[];
+    /**
      * RETIRED 2026-10-12 — the old per-floor-type General Clean rates and
      * the mop/vacuum toggles. Nothing prices from them any more (each room
      * type has its own formula and included-tasks list); kept so saved
@@ -367,7 +378,8 @@ function issaType(id: string, label: string, frequency: string, extra?: Partial<
   const cat = issaCategory(ISSA_TYPE_CATEGORY[id])!;
   return {
     id, label, frequency, method: "size", fixedMin: 0, sqftPerHour: cat.sqftPerHour, rateUnit: "sqftPerHour",
-    issaCategory: cat.id, includedTasks: [...DEFAULT_INCLUDED_TASKS], ...extra, builtIn: true
+    // no list of its own: it follows the account's General Clean (rules.general.includedTasks)
+    issaCategory: cat.id, ...extra, builtIn: true
   };
 }
 
@@ -470,7 +482,9 @@ export function includedTasksForRoom(rules: Rules, space: SpaceLike): TaskRule[]
   const kind = floorKind(space.floorType);
   return includedTasksFor(rules, typeId)
     .map((id) => rules.tasks.find((t) => t.id === id))
-    .filter((t): t is TaskRule => Boolean(t) && !t!.floorCare && (!(t!.autoForFloor ?? []).length || t!.autoForFloor!.includes(kind)));
+    .filter((t): t is TaskRule => Boolean(t) && !t!.floorCare
+      // a floor-tied step applies where the floor calls for it, and never on a type the floor rule skips
+      && (!(t!.autoForFloor ?? []).length || (t!.autoForFloor!.includes(kind) && !(t!.floorSkipTypes ?? []).includes(typeId))));
 }
 
 /** each included task's own minutes for a room of `sqft` (its rate, or its flat minutes) */
@@ -550,11 +564,25 @@ export function resetToIssa(rules: Rules, rt: RoomTypeRule, categoryId?: string)
   rt.rateUnit = "sqftPerHour";
 }
 
-/** tasks a type's General Clean already covers — nothing, for a type with no General Clean */
+/**
+ * The steps a type's General Clean covers: the type's own list when it has adjusted one, else the
+ * account's General Clean list (rules.general.includedTasks — what every type follows unless it
+ * says otherwise); nothing for a type with no General Clean (à la carte).
+ */
 export function includedTasksFor(rules: Rules, typeId: string): string[] {
   const rt = rules.roomTypes.find((x) => x.id === typeId);
   if (rt && gcFormula(rules, rt).method === "none") return [];
-  return rt?.includedTasks ?? defaultIncluded(rules);
+  return rt?.includedTasks ?? rules.general.includedTasks ?? defaultIncluded(rules);
+}
+
+/** does this type follow the account's General Clean list (no list of its own)? */
+export function followsAccountGeneralClean(rt: RoomTypeRule): boolean {
+  return !Array.isArray(rt.includedTasks);
+}
+
+/** every task that can be a General Clean step: cleaning work, not the floor crew's */
+export function generalCleanChoices(rules: Rules): TaskRule[] {
+  return rules.tasks.filter((t) => t.addable && !t.floorCare);
 }
 
 function defaultIncluded(rules: Rules): string[] {
@@ -584,8 +612,31 @@ export function migrateRules(rules: Rules): Rules {
       rt.rateUnit = f.rateUnit;
       if (cat && !rt.issaCategory) rt.issaCategory = cat.id;
     }
-    if (!Array.isArray(rt.includedTasks)) rt.includedTasks = defaultIncluded(rules);
+    // a type with no list of its own follows the account's (filled in just below on an old rulebook)
     delete rt.qualifierMin;
+  }
+  // ONE General Clean list for the account (2026-11-02): an older rulebook kept a list per type —
+  // the list most types share becomes the account's, and the types that had exactly it now simply
+  // follow it (a type with a list of its own keeps it), so nothing re-prices
+  if (!Array.isArray(rules.general.includedTasks)) {
+    const key = (list: string[]) => [...list].sort().join("|");
+    const tally = new Map<string, { list: string[]; n: number }>();
+    for (const rt of rules.roomTypes) {
+      if (gcFormula(rules, rt).method === "none") continue;
+      const list = rt.includedTasks ?? defaultIncluded(rules);
+      const e = tally.get(key(list));
+      if (e) e.n++; else tally.set(key(list), { list: [...list], n: 1 });
+    }
+    const top = [...tally.values()].sort((a, b) => b.n - a.n)[0];
+    rules.general.includedTasks = top ? top.list : defaultIncluded(rules);
+    for (const rt of rules.roomTypes) {
+      if (Array.isArray(rt.includedTasks) && key(rt.includedTasks) === key(rules.general.includedTasks)) delete rt.includedTasks;
+    }
+  }
+  // the standard steps every account can pick from (Josh, 2026-11-02: spot mopping for corridors,
+  // surface wiping in the general clean) — starting rates, editable like any task
+  for (const t of STANDARD_TASKS) {
+    if (!rules.tasks.some((x) => x.id === t.id)) rules.tasks.push({ ...t, autoFor: [] });
   }
   if (hadHelpers) {
     rules.tasks = rules.tasks.filter((t) => !ISSA_HELPER_TASK.test(t.id));
@@ -610,6 +661,16 @@ export const FREQUENCIES = [
 
 export const RULES_KEY = "opsmatrix_fusion_rules";
 
+/**
+ * Steps added 2026-11-02 for every account, old or new: spot mopping (a corridor's à la carte
+ * floor touch-up, not the floor crew's full mop) and surface wiping (a General Clean step). The
+ * rates are starting points — ISSA has no single figure for either — and edit like any task.
+ */
+export const STANDARD_TASKS: TaskRule[] = [
+  { id: "spot-mop", label: "Spot Mopping", sqftPerMin: 300, flatMin: 0, autoFor: [], addable: true, builtIn: true },
+  { id: "surface-wipe", label: "Surface Wiping", sqftPerMin: 250, flatMin: 0, autoFor: [], addable: true, builtIn: true }
+];
+
 function floorRule(id: string): { autoForFloor: FloorKind[]; floorSkipTypes: string[] } {
   const d = FLOOR_TASK_DEFAULTS[id];
   return { autoForFloor: [...d.autoForFloor], floorSkipTypes: [...d.floorSkipTypes] };
@@ -626,7 +687,9 @@ export function defaultRules(): Rules {
     version: 2,
     general: {
       hardSqftPerMin: 33, carpetSqftPerMin: 40, mopIncluded: true, vacuumIncluded: true,
-      minMinutes: 3, productiveMinutes: 420, shiftsPerWeekPerFte: 5
+      minMinutes: 3, productiveMinutes: 420, shiftsPerWeekPerFte: 5,
+      // the hospital's General Clean steps, one list for the account (Josh, 2026-11-02)
+      includedTasks: [...DEFAULT_INCLUDED_TASKS]
     },
     tasks: [
       // floor-tech work (Max Floor Care owns scheduling these)
@@ -645,7 +708,8 @@ export function defaultRules(): Rules {
       // and hallways skipped, their floors are the floor crew's). Rates: ISSA
       // 540 (FLOOR_TASK_SOURCES).
       { id: "damp-mop", label: "Mopping", sqftPerMin: 68.67, flatMin: 0, autoFor: [], ...floorRule("damp-mop"), addable: true, builtIn: true },
-      { id: "vacuum", label: "Vacuuming", sqftPerMin: 47.62, flatMin: 0, autoFor: [], ...floorRule("vacuum"), addable: true, builtIn: true }
+      { id: "vacuum", label: "Vacuuming", sqftPerMin: 47.62, flatMin: 0, autoFor: [], ...floorRule("vacuum"), addable: true, builtIn: true },
+      ...STANDARD_TASKS.map((t) => ({ ...t, autoFor: [] }))
     ],
     // each type's General Clean formula — ISSA midpoints by default (2026-10-12)
     roomTypes: [
@@ -730,7 +794,9 @@ export function loadRules(): Rules {
     // ones the account deleted on purpose (the tombstones saveRules stamps)
     const rules: Rules = {
       version: Number(parsed.version) || 1,
-      general: { ...def.general, ...(parsed.general ?? {}) },
+      // the account's General Clean list is never pre-filled from the defaults: a saved rulebook
+      // without one gets it worked out from its room types in migrateRules
+      general: { ...def.general, includedTasks: undefined, ...(parsed.general ?? {}) },
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : def.tasks,
       roomTypes: Array.isArray(parsed.roomTypes) ? parsed.roomTypes : def.roomTypes,
       nonSpaceDefs: def.nonSpaceDefs,

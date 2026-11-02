@@ -55,7 +55,7 @@ import {
   loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor, autoTasksForSpace, tasksAfterFloorChange,
   taskSourceLabel, FLOOR_KINDS, typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
   isEndOfDayTask, splitEndOfDay, hasGeneralClean, nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, DEFAULT_INCLUDED_TASKS, RATE_UNITS, computeMinutes,
-  gcFormula, gcMinutesFor, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
+  gcFormula, gcMinutesFor, generalCleanChoices, followsAccountGeneralClean, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
   issaSourceLabel, categoryFor, resetToIssa, typeIdFromLabelStrict, RULES_KEY, exampleProcedure,
   type Rules, type RoomTypeRule, type GcMethod, type GcFormula, type RateUnit,
   type DutyPosition, type ProcedureStep
@@ -2110,7 +2110,7 @@ const METHOD_WORDS: Record<GcMethod, string> = {
   tasks: "Timed by its tasks — the General Clean list below",
   // Josh, 2026-11-02: a corridor isn't cleaned like a patient room — no General Clean, its tasks
   // (high dusting, trash pull, spot mopping) make up its time
-  none: "No General Clean — its tasks only"
+  none: "No General Clean — à la carte (the extras below are the whole job)"
 };
 
 /**
@@ -2183,13 +2183,6 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
               fixedMin: method !== "size" && method !== "none" && !(f.fixedMin > 0) ? 10 : f.fixedMin,
               sqftPerHour: method !== "fixed" && method !== "none" && !(f.sqftPerHour > 0) ? (cat?.sqftPerHour ?? 2150) : f.sqftPerHour
             });
-            // with no General Clean nothing is "included": every task prices on its own. Coming
-            // back, the usual included list returns.
-            editAll((r) => {
-              const type = r.roomTypes.find((x) => x.id === rt.id)!;
-              if (method === "none") type.includedTasks = [];
-              else if (!(type.includedTasks ?? []).length) type.includedTasks = [...DEFAULT_INCLUDED_TASKS];
-            });
           }}>
           {(Object.keys(METHOD_WORDS) as GcMethod[]).map((m) => <option key={m} value={m}>{METHOD_WORDS[m]}</option>)}
         </select>
@@ -2197,7 +2190,7 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
           {f.method === "none" ? (
             <span className="gcsrc">This type's time is its extras below (and any task a room lists) — no General Clean is printed for it.</span>
           ) : f.method === "tasks" ? (
-            <span className="gcsrc">General Clean = the sum of the tasks ticked below, each at its own rate. The sheet prints "General Clean" and lists them.</span>
+            <span className="gcsrc">General Clean = the sum of its steps (the account's list), each at its own rate.</span>
           ) : <b>General Clean =</b>}
           {f.method !== "size" && f.method !== "none" && f.method !== "tasks" && (<>
             <NumBox value={f.fixedMin} disabled={!isAdmin} onValue={(n) => setF({ fixedMin: n })} /> min per room
@@ -2229,29 +2222,46 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
         )}
       </div>
 
-      {f.method !== "none" && (<div className="gcrow">
-        <span className="gclabel">{f.method === "tasks" ? "General Clean's tasks (each adds its own time)" : "Included in General Clean"}</span>
-        <span className="ptasks inline">
-          {draft.tasks.filter((t) => t.addable && !t.floorCare).map((t) => {
-            const on = included.includes(t.id);
-            return (
-              <button key={t.id} className={"ptask sm" + (on ? " on" : "")} disabled={!isAdmin}
-                onClick={() => editAll((r) => {
-                  const type = r.roomTypes.find((x) => x.id === rt.id)!;
-                  const list = includedTasksFor(r, rt.id);
-                  type.includedTasks = on ? list.filter((x) => x !== t.id) : [...list, t.id];
-                  // included work can't also be an automatic extra here
-                  if (!on) {
-                    const task = r.tasks.find((x) => x.id === t.id)!;
-                    task.autoFor = task.autoFor.filter((x) => x !== rt.id);
-                  }
-                })}>
-                {on ? "✓ " : ""}{t.label}
-              </button>
-            );
-          })}
-        </span>
-      </div>)}
+      {f.method !== "none" ? (
+        <div className="gcrow">
+          <span className="gclabel">{f.method === "tasks" ? "General Clean's steps, each at its own time" : "General Clean includes"}</span>
+          <span className="ptasks inline">
+            {generalCleanChoices(draft).map((t) => {
+              const on = included.includes(t.id);
+              return (
+                <button key={t.id} className={"ptask sm" + (on ? " on" : "")} disabled={!isAdmin}
+                  title={on ? "Part of this type's General Clean — tap to take it out" : "Tap to make it part of this type's General Clean"}
+                  onClick={() => editAll((r) => {
+                    // the type now has a list of its own, starting from what it followed
+                    const type = r.roomTypes.find((x) => x.id === rt.id)!;
+                    const list = includedTasksFor(r, rt.id);
+                    type.includedTasks = on ? list.filter((x) => x !== t.id) : [...list, t.id];
+                    // a step can't also be an automatic extra here
+                    if (!on) {
+                      const task = r.tasks.find((x) => x.id === t.id)!;
+                      task.autoFor = task.autoFor.filter((x) => x !== rt.id);
+                    }
+                  })}>
+                  {on ? "✓ " : ""}{t.label}
+                </button>
+              );
+            })}
+            {followsAccountGeneralClean(rt)
+              ? <span className="gcsrc">the account's list (General Clean — what it includes, above)</span>
+              : <>
+                <span className="gcsrc">this type's own list</span>
+                <button className="pbtn small" onClick={() => editAll((r) => { delete r.roomTypes.find((x) => x.id === rt.id)!.includedTasks; })}>
+                  Use the account's list
+                </button>
+              </>}
+          </span>
+        </div>
+      ) : (
+        <div className="gcrow">
+          <span className="gclabel">À la carte</span>
+          <span className="gcsrc">No General Clean here: the extras below are the whole job, each at its own time, and the schedule lists them.</span>
+        </div>
+      )}
 
       <div className="gcrow">
         <span className="gclabel">Extras every {rt.label || "room"} gets</span>
@@ -2450,6 +2460,50 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
         }} />
       )}
       {rules.intake && <IntakeProfileCard profile={rules.intake} />}
+
+      {/* WHAT A GENERAL CLEAN IS (Josh, 2026-11-02): one list for the account. A room type that has
+          General Clean gets every step; the schedule prints the steps; the type's General Clean time
+          covers them all. Corridors and the like go à la carte instead (no General Clean, extras only). */}
+      <h3>General Clean — what it includes</h3>
+      <div className="prule-block gcglobal">
+        <p className="pnote">
+          The hospital's standard clean, as one list. Every room type that has a General Clean gets these steps —
+          mopping on hard floors, vacuuming on carpet — and the printed schedule lists them instead of the words
+          "General Clean". One General Clean time per room (the room type's formula) covers them all, so a step
+          ticked here adds no time of its own; a task left unticked adds its own time wherever a room or room
+          type carries it.
+        </p>
+        <div className="ptasks inline">
+          {generalCleanChoices(draft).map((t) => {
+            const list = draft.general.includedTasks ?? [];
+            const on = list.includes(t.id);
+            return (
+              <button key={t.id} className={"ptask" + (on ? " on" : "")}
+                onClick={() => set((r) => {
+                  const cur = r.general.includedTasks ?? [];
+                  r.general.includedTasks = on ? cur.filter((x) => x !== t.id) : [...cur, t.id];
+                  // a General Clean step is never also an automatic extra on a type that has General Clean
+                  if (!on) {
+                    const task = r.tasks.find((x) => x.id === t.id)!;
+                    task.autoFor = task.autoFor.filter((typeId) => {
+                      const rt = r.roomTypes.find((x) => x.id === typeId);
+                      return rt ? gcFormula(r, rt).method === "none" : true;
+                    });
+                  }
+                })}>
+                {on ? "✓ " : ""}{t.label}
+              </button>
+            );
+          })}
+        </div>
+        <small className="pnote">
+          {(draft.general.includedTasks ?? []).length
+            ? `A General Clean here is: ${generalCleanChoices(draft).filter((t) => (draft.general.includedTasks ?? []).includes(t.id)).map((t) => t.label).join(" · ")}.`
+            : "Nothing is ticked — a General Clean would print as just the words."}
+          {" "}Missing a step? Add it under Space tasks below, then tick it here.
+        </small>
+        <SectionSave sec="general" />
+      </div>
 
       <h3>Room types</h3>
       {draft.roomTypes.map((rt) => {
