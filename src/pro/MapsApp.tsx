@@ -35,6 +35,7 @@ import { sectionDirty, saveSection, roomTypeDirty, saveRoomType, type ScopeSecti
 import { downloadClientSchedule, type ClientExportInput } from "./clientSchedule";
 import { downloadTemplateExport } from "./templateExport";
 import { clientScheduleRows } from "./exportData";
+import { pagesToPdf, handOffPdf, inStandaloneApp, preferShareSheet } from "./pdfExport";
 import { loadTemplates, b64ToBytes, type ClientTemplate } from "./templateStore";
 import { fetchAccountRole, canEditFormula, type AccountRole } from "./accountRole";
 import { cloudConfigured } from "./cloudConfig";
@@ -197,6 +198,10 @@ export function MapsApp() {
   const [report, setReport] = useState(false);
   const [planId, setPlanId] = useState<string | null>(null);
   const [printId, setPrintId] = useState<string | null>(null);
+  // ONE switch for the proprietary details (times, priority, minutes) — shown on the Schedules tab and
+  // again in the print preview, both the same stored flag
+  const [proprietary, setProprietaryState] = useState(() => readFlag(PROPRIETARY_KEY));
+  const setProprietary = (on: boolean) => { setProprietaryState(on); writeFlag(PROPRIETARY_KEY, on); };
   // Rover Mode (Josh's final launch feature): full-screen voice validation
   const [roverOn, setRoverOn] = useState(false);
 
@@ -868,7 +873,7 @@ export function MapsApp() {
 
         {tab === "schedules" && (
           <SchedulesTab data={data} rules={rules} schedules={schedules} employees={employees}
-            commit={commit} onPrint={setPrintId}
+            commit={commit} onPrint={setPrintId} proprietary={proprietary} onProprietary={setProprietary}
             onOpenOnMap={(id) => { setSchedSel(id); go("hub:map"); }} />
         )}
 
@@ -912,7 +917,7 @@ export function MapsApp() {
 
       {printId && (
         <PrintPreview data={data} rules={rules} scheduleId={printId}
-          onClose={() => setPrintId(null)} />
+          onClose={() => setPrintId(null)} proprietary={proprietary} onProprietary={setProprietary} />
       )}
 
       {roverOn && plan && (
@@ -928,19 +933,48 @@ export function MapsApp() {
 
 // ── print preview: see the schedule exactly as it prints, then print it ─────
 
-function PrintPreview({ data, rules, scheduleId, onClose }: {
+function PrintPreview({ data, rules, scheduleId, onClose, proprietary, onProprietary }: {
   data: ClassicData;
   rules: Rules;
   scheduleId: string;
   onClose: () => void;
+  proprietary: boolean;
+  onProprietary: (on: boolean) => void;
 }) {
   const sched = (data.v7.schedules ?? []).find((s) => s.id === scheduleId);
   const doc = useMemo(
     () => (sched ? buildScheduleDoc(data, rules, sched) : null),
     [data, rules, sched]
   );
-  // times, priority and minutes are on the sheet only when the Schedules tab's proprietary switch is on
-  const proprietary = readFlag(PROPRIETARY_KEY);
+  // "Save as PDF" builds the file itself — the home-screen app on the iPad has no print dialog (Josh,
+  // 2026-11-02: "the button doesn't do anything"). Two taps on purpose: build, then hand over — the share
+  // sheet only opens straight from a tap, and the build takes a moment.
+  const [pdf, setPdf] = useState<{ blob: Blob; name: string } | null>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfMsg, setPdfMsg] = useState("");
+  const standalone = inStandaloneApp();
+  const sharing = preferShareSheet();
+  useEffect(() => { setPdf(null); setPdfMsg(""); }, [proprietary, scheduleId]); // a changed sheet needs a fresh PDF
+  const makePdf = async () => {
+    if (!doc) return;
+    const pages = [...document.querySelectorAll<HTMLElement>(".printwrap .printpage")];
+    if (!pages.length) return;
+    setPdfBusy(true); setPdfMsg("Making the PDF…"); setPdf(null);
+    try {
+      const blob = await pagesToPdf(pages);
+      setPdf({ blob, name: `Schedule ${doc.num} ${doc.name}.pdf`.replace(/[\\/?*[\]:]/g, " ") });
+      setPdfMsg(sharing ? "PDF ready — tap again to print it or save it" : "PDF ready");
+    } catch (e) {
+      setPdfMsg("The PDF hit a snag: " + (e as Error).message);
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+  const givePdf = async () => {
+    if (!pdf) return;
+    const how = await handOffPdf(pdf.blob, pdf.name);
+    setPdfMsg(how === "downloaded" ? `✓ ${pdf.name} downloaded` : "");
+  };
 
   // the floor plan this schedule's rooms actually live on
   const plan = useMemo(() => {
@@ -974,11 +1008,21 @@ function PrintPreview({ data, rules, scheduleId, onClose }: {
           This is exactly what prints. Two pages: the room list, and your area on the floor plan.
         </span>
         <span className="grow" />
-        {/* Josh, 2026-11-02: one checkbox on the Schedules tab decides whether the proprietary details go out */}
-        <span className="hint printopt">
-          Proprietary details (times, priority, minutes): <b>{proprietary ? "included" : "kept back"}</b> — the checkbox on the Schedules tab changes it
-        </span>
-        <button className="pbtn primary" onClick={() => window.print()}>🖨 Print / Save as PDF</button>
+        {/* Josh, 2026-11-02: the one proprietary switch, right here where the sheet is printed (the same
+            checkbox sits on the Schedules tab) */}
+        <label className="checkline printopt" title="On: the clock times, the priority column and the estimated minutes print. Off: they stay off the sheet.">
+          <input type="checkbox" checked={proprietary} onChange={(e) => onProprietary(e.target.checked)} />
+          <span>Include proprietary details (times, priority, minutes)</span>
+        </label>
+        {!standalone && <button className="pbtn" onClick={() => window.print()}>🖨 Print</button>}
+        {pdf
+          ? <button className="pbtn primary pdfready" onClick={() => { void givePdf(); }}>
+              {sharing ? "📤 Print or save the PDF" : "⬇ Download the PDF"}
+            </button>
+          : <button className="pbtn primary" disabled={pdfBusy} onClick={() => { void makePdf(); }}>
+              {pdfBusy ? "Making the PDF…" : "⬇ Save as PDF"}
+            </button>}
+        {pdfMsg && <span className="hint pdfmsg">{pdfMsg}</span>}
       </div>
       <PrintSchedule doc={doc} plan={plan} spaces={data.v7.spaces ?? []}
         showMinutes={proprietary} showTimes={proprietary} showPriority={proprietary} />
@@ -1609,7 +1653,7 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
 
 // ── Schedules tab: the list view, bidirectional with the map ────────────────
 
-function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, onPrint }: {
+function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, onPrint, proprietary, onProprietary }: {
   data: ClassicData;
   rules: Rules;
   schedules: ClassicSchedule[];
@@ -1617,6 +1661,9 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
   commit: (mut: (d: ClassicData) => void) => void;
   onOpenOnMap: (id: string) => void;
   onPrint: (id: string) => void;
+  /** the proprietary details (times, priority, minutes) go out when this is on */
+  proprietary: boolean;
+  onProprietary: (on: boolean) => void;
 }) {
   const [draft, setDraft] = useState({ name: "", shift: "1st Shift", employeeId: "", color: "" });
   const spaces = data.v7.spaces ?? [];
@@ -1647,7 +1694,6 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
   // The client schedule export (Josh, 2026-11-02): a plain Excel sheet — the rooms in cleaning order
   // with room number, name, type, the cleaning tasks, priority, schedule, shift, hours, unit and
   // building. The estimated minutes stay unreported ("—") unless the proprietary switch above is on.
-  const [proprietary, setProprietary] = useState(() => readFlag(PROPRIETARY_KEY));
   const exportClient = async (s: ClassicSchedule) => {
     try {
       const XLSX = await loadSheetJs();
@@ -1708,8 +1754,7 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
           not checked, it won't be — we don't change everything, we just give the option" */}
       <label className="checkline exportopt"
         title="Off: the printed sheet shows no clock times, priority or minutes, and the client export's Est. Minutes column reads —. On: all of it goes out.">
-        <input type="checkbox" checked={proprietary}
-          onChange={(e) => { setProprietary(e.target.checked); writeFlag(PROPRIETARY_KEY, e.target.checked); }} />
+        <input type="checkbox" checked={proprietary} onChange={(e) => onProprietary(e.target.checked)} />
         <span>Include proprietary details when printing or exporting — times, priority, estimated minutes</span>
         <small>{proprietary ? "on — the printed sheet and the client export carry them" : "off — kept back until a contract is signed"}</small>
       </label>
