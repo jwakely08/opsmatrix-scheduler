@@ -92,7 +92,7 @@ const FLOOR_TASK_DEFAULTS: Record<string, { autoForFloor: FloorKind[]; floorSkip
  * How a room type builds its General Clean time (Josh, 2026-10-12):
  * by size (sq ft ÷ rate), a fixed number of minutes per room, or both.
  */
-export type GcMethod = "size" | "fixed" | "both" | "none";
+export type GcMethod = "size" | "fixed" | "both" | "tasks" | "none";
 
 /** the unit a rate is TYPED in — a hospital's numbers go in exactly as given */
 export type RateUnit = "sqftPerHour" | "sqftPerMin" | "minPer100" | "minPer1000";
@@ -104,10 +104,13 @@ export interface RoomTypeRule {
    * The room type's General Clean formula — General Clean ACTIVATES it.
    * Floor type never changes it, and nothing else adds to it: a room that
    * needs more gets an extra task, a room that differs gets its own type.
-   * "none" (Josh, 2026-11-02: "you're not going to clean a corridor like a
-   * patient room") = this type has NO General Clean — its time is its tasks
-   * alone (high dusting, trash pull, spot mopping on a corridor), nothing is
-   * "included", and schedules never print General Clean for it.
+   * "tasks" (Josh, 2026-11-02: "General Clean is a category that includes all
+   * those tasks… I should be able to customize per room type what tasks I
+   * want associated with it") = the General Clean is its included list and
+   * its time is the SUM of those tasks' own rates — a corridor's General
+   * Clean of high dusting + trash pull + spot mopping prices as exactly that.
+   * "none" = this type has NO General Clean — its time is its extras alone,
+   * nothing is "included", and schedules never print General Clean for it.
    * Optional only because rules saved before 2026-10-12 lack it; loadRules
    * fills it in (gcFormula reads an unmigrated type the same way).
    */
@@ -449,10 +452,38 @@ export function gcFormula(rules: Rules, rt: RoomTypeRule): GcFormula {
 
 /** minutes the formula gives a room of `sqft` — unrounded, so audits reproduce */
 export function gcMinutes(f: GcFormula, sqft: number): number {
-  if (f.method === "none") return 0;
+  // "tasks" needs the type's task list — gcMinutesFor has it; "none" is simply nothing
+  if (f.method === "none" || f.method === "tasks") return 0;
   const fixed = f.method === "size" ? 0 : f.fixedMin;
   const size = f.method === "fixed" || !(f.sqftPerHour > 0) ? 0 : (Number(sqft) || 0) * 60 / f.sqftPerHour;
   return fixed + size;
+}
+
+/**
+ * The tasks a type's General Clean includes, as they apply to ONE room: a task tied to a floor
+ * (vacuuming to carpet, mopping to hard floors) only counts where the floor calls for it, and floor
+ * care is never part of a General Clean. These are what a General Clean "timed by its tasks" adds
+ * up, and what the printed sheet lists under General Clean.
+ */
+export function includedTasksForRoom(rules: Rules, space: SpaceLike): TaskRule[] {
+  const typeId = typeIdFromLabel(rules, space.roomType ?? "");
+  const kind = floorKind(space.floorType);
+  return includedTasksFor(rules, typeId)
+    .map((id) => rules.tasks.find((t) => t.id === id))
+    .filter((t): t is TaskRule => Boolean(t) && !t!.floorCare && (!(t!.autoForFloor ?? []).length || t!.autoForFloor!.includes(kind)));
+}
+
+/** each included task's own minutes for a room of `sqft` (its rate, or its flat minutes) */
+export function includedTaskLines(rules: Rules, space: SpaceLike): MinuteLine[] {
+  const sqft = Number(space.squareFeet) || 0;
+  return includedTasksForRoom(rules, space).map((t) => ({ label: t.label, minutes: t.sqftPerMin ? sqft / t.sqftPerMin : t.flatMin }));
+}
+
+/** General Clean minutes for a type at a size, whatever its method — "tasks" sums its included list */
+export function gcMinutesFor(rules: Rules, rt: RoomTypeRule, sqft: number, floorType?: string): number {
+  const f = gcFormula(rules, rt);
+  if (f.method !== "tasks") return gcMinutes(f, sqft);
+  return includedTaskLines(rules, { roomType: rt.label, squareFeet: sqft, floorType }).reduce((s, l) => s + l.minutes, 0);
 }
 
 const fmtNum = (n: number, digits = 1) =>
@@ -475,6 +506,7 @@ export function gcText(typeLabel: string, f: GcFormula, sqft: number): string {
   const total = fmtNum(gcMinutes(f, sqft));
   const size = `${fmtNum(Number(sqft) || 0)} sq ft ${timesUnit(f) ? "×" : "÷"} ${rateText(f)}`;
   if (f.method === "none") return `${typeLabel}: no General Clean — its tasks make up the time`;
+  if (f.method === "tasks") return `${typeLabel}: the sum of its General Clean tasks`;
   if (f.method === "fixed") return `${typeLabel}: ${fmtNum(f.fixedMin)} min`;
   if (f.method === "size") return `${typeLabel}: ${size} = ${total} min`;
   return `${typeLabel}: ${fmtNum(f.fixedMin)} min + ${size} = ${total} min`;
@@ -484,6 +516,7 @@ export function gcText(typeLabel: string, f: GcFormula, sqft: number): string {
 export function gcFormulaText(f: GcFormula): string {
   const size = `sq ft ${timesUnit(f) ? "×" : "÷"} ${rateText(f)}`;
   if (f.method === "none") return "no General Clean — tasks only";
+  if (f.method === "tasks") return "the sum of its General Clean tasks";
   if (f.method === "fixed") return `${fmtNum(f.fixedMin)} min per room`;
   if (f.method === "size") return size;
   return `${fmtNum(f.fixedMin)} min + ${size}`;
@@ -1070,6 +1103,13 @@ export function generalCleanLine(rules: Rules, space: SpaceLike): { text: string
   const f: GcFormula = rt ? gcFormula(rules, rt)
     : { method: "size", fixedMin: 0, sqftPerHour: issaCategory("office")!.sqftPerHour, rateUnit: "sqftPerHour" };
   const name = rt?.label ?? (String(space.roomType ?? "").trim() || "Room");
+  if (f.method === "tasks") {
+    // "Corridor: High Dusting 8.2 + Trash Pull 2 = 10.2 min" — every step shown, so it can be redone by hand
+    const lines = includedTaskLines(rules, space);
+    const minutes = lines.reduce((s, l) => s + l.minutes, 0);
+    const parts = lines.map((l) => `${l.label} ${fmtNum(l.minutes)}`).join(" + ");
+    return { text: `${name}: ${parts || "no General Clean tasks picked yet"} = ${fmtNum(minutes)} min`, minutes };
+  }
   return { text: gcText(name, f, sqft), minutes: gcMinutes(f, sqft) };
 }
 

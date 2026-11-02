@@ -85,6 +85,12 @@
 .c-task2 { }
 .c-pri { width: 58px; text-align: center; }
 .c-min { width: 50px; text-align: right; font-weight: 700; white-space: nowrap; }
+/* the General Clean's steps, as this room needs them, under its chip */
+.tincl { display: block; font-size: 7.4pt; color: #5b6b7a; line-height: 1.25; margin: 1px 0 3px 2px; }
+/* "Show minutes" off: every minute figure goes, the times and the rooms stay */
+.printdoc .pnomin { display: none; }
+.printdoc.nominutes .c-min, .printdoc.nominutes .pmin { display: none; }
+.printdoc.nominutes .pnomin { display: inline; }
 .c-done { width: 32px; text-align: center; }
 .c-done i { display: inline-block; width: 13px; height: 13px; border: 1.5px solid #9aa5b1; border-radius: 3px; }
 

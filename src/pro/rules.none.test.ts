@@ -3,8 +3,8 @@
 // should just be high dusting and trash pull and spot mopping").
 import { describe, it, expect } from "vitest";
 import {
-  computeMinutes, defaultRules, gcFormula, gcFormulaText, gcMinutes, gcText, hasGeneralClean, includedTasksFor,
-  requiredTasks, type Rules
+  computeMinutes, defaultRules, gcFormula, gcFormulaText, gcMinutes, gcMinutesFor, gcText, hasGeneralClean,
+  includedTasksFor, includedTasksForRoom, requiredTasks, type Rules
 } from "./rules";
 import { buildScheduleDoc } from "./scheduleDoc";
 import { setCoverage, type ClassicData } from "./classicStore";
@@ -70,5 +70,67 @@ describe("a room type with no General Clean", () => {
     expect(doc.rows[0].tasks).toEqual(["High Dusting", "Trash Pull", "Spot Mopping"]);
     expect(doc.rows[0].generalClean).toBeUndefined();
     expect(doc.rows[0].minutes).toBe(16);
+  });
+});
+
+describe("a General Clean timed by its tasks (Josh: 'General Clean is a category that includes all those tasks')", () => {
+  function bundleRules(): Rules {
+    const r = defaultRules();
+    const corridor = r.roomTypes.find((t) => t.id === "corridor")!;
+    corridor.method = "tasks";
+    corridor.includedTasks = ["high-dusting", "trash-pull", "spot-mop"];
+    r.tasks.push({ id: "spot-mop", label: "Spot Mopping", sqftPerMin: 300, flatMin: 0, autoFor: [], addable: true });
+    r.breaks = [];
+    return r;
+  }
+
+  it("adds up the included tasks at their own rates, worked out step by step", () => {
+    const rules = bundleRules();
+    const m = computeMinutes(rules, { ...corridor, spaceTasks: [] });
+    // high dusting 1,200/120 = 10 + trash pull 2 + spot mopping 1,200/300 = 4 → 16
+    expect(m.total).toBe(16);
+    expect(m.lines).toHaveLength(1);
+    expect(m.lines[0].label).toBe("General Clean — Corridor: High Dusting 10 + Trash Pull 2 + Spot Mopping 4 = 16 min");
+    expect(hasGeneralClean(rules, corridor)).toBe(true);
+    const f = gcFormula(rules, rules.roomTypes.find((t) => t.id === "corridor")!);
+    expect(gcFormulaText(f)).toBe("the sum of its General Clean tasks");
+    expect(gcMinutesFor(rules, rules.roomTypes.find((t) => t.id === "corridor")!, 1200)).toBe(16);
+  });
+
+  it("a floor-tied step only counts where the floor calls for it", () => {
+    const rules = bundleRules();
+    const patient = rules.roomTypes.find((t) => t.id === "patient-room")!;
+    patient.method = "tasks"; // trash pull, mopping, vacuuming — the default list
+    const hard = { roomType: "Patient Room", floorType: "Hard floor — finished", squareFeet: 240 };
+    const carpet = { roomType: "Patient Room", floorType: "Carpet", squareFeet: 240 };
+    expect(includedTasksForRoom(rules, hard).map((t) => t.id)).toEqual(["trash-pull", "damp-mop"]);
+    expect(includedTasksForRoom(rules, carpet).map((t) => t.id)).toEqual(["trash-pull", "vacuum"]);
+    // 2 + 240/68.67 = 5.5 → 5 on hard floor; 2 + 240/47.62 = 7.0 → 7 on carpet
+    expect(computeMinutes(rules, hard).total).toBe(5);
+    expect(computeMinutes(rules, carpet).total).toBe(7);
+  });
+
+  it("prints General Clean with its steps listed under it", () => {
+    const rules = bundleRules();
+    const data: ClassicData = {
+      v7: {
+        spaces: [
+          { ...corridor, spaceTasks: [] },
+          { id: "p1", roomNumber: "101", roomName: "", roomType: "Patient Room", floorType: "Hard floor — finished", squareFeet: 240, spaceTasks: ["high-dusting"] }
+        ],
+        schedules: [{ id: "s", num: "101", name: "East", shift: "1st Shift", color: "#22c55e", targetHours: 8, spaceOrder: [], roomTasks: {} }],
+        employees: [], shifts: [{ id: "sh1", name: "1st Shift", start: "7:00 AM", end: "3:00 PM", active: true }]
+      },
+      plans: [], nonSpace: []
+    };
+    setCoverage(data, "c1", "s", true, []);
+    setCoverage(data, "p1", "s", true, ["high-dusting"]);
+    const doc = buildScheduleDoc(data, rules, data.v7.schedules![0], { date: new Date(2026, 10, 2) });
+    expect(doc.rows[0].tasks).toEqual(["General Clean"]);
+    expect(doc.rows[0].generalCleanTasks).toEqual(["High Dusting", "Trash Pull", "Spot Mopping"]);
+    expect(doc.rows[0].generalClean).toBe("Corridor: High Dusting 10 + Trash Pull 2 + Spot Mopping 4 = 16 min");
+    // a size-timed type lists the steps its General Clean stands for too — the ones this floor needs
+    expect(doc.rows[1].tasks).toEqual(["General Clean", "High Dusting"]);
+    expect(doc.rows[1].generalCleanTasks).toEqual(["Trash Pull", "Mopping"]);
   });
 });
