@@ -247,7 +247,7 @@ describe("the schedules workbook (raw data to re-create the schedule elsewhere)"
     expect(r1x[2]).toBe(1);                        // stop # follows tap order
     expect(r1x[5]).toBe("E2-2040");                // first-tapped room first
     expect(r2x[5]).toBe("E1-1000");
-    expect(String(r1x[13])).toMatch(/General Clean/);
+    expect(String(r1x[13])).toMatch(/Trash Pull/); // the General Clean prints as its steps
     expect(String(r1x[13])).toMatch(/High Dusting/);
     expect(r1x[9]).toBe("EVS");                    // department
     expect(typeof r1x[14]).toBe("number");         // minutes
@@ -312,7 +312,7 @@ describe("the schedules workbook — the end-of-day round", () => {
     const stops = sheets.get("Room Stops")!;
     expect(stops[0][stops[0].length - 1]).toBe("Visit");
     expect(stops.slice(1).map((r) => [r[2], r[13], r[14], r[15]])).toEqual([
-      [1, "General Clean", 5, "Clean"],
+      [1, "Trash Pull + Vacuuming", 5, "Clean"],
       [1, "2nd Trash Pull", 2, "End-of-day round"]
     ]);
     // and the per-task minutes follow each visit

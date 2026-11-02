@@ -49,7 +49,9 @@ describe("ISSA defaults", () => {
       expect(cat, rt.id).toBeDefined();
       expect(gcFormula(r, rt), rt.id).toEqual({ method: "size", fixedMin: 0, sqftPerHour: cat!.sqftPerHour, rateUnit: "sqftPerHour" });
       expect(issaSourceLabel(r, rt)).toBe(`ISSA ${cat!.label}`);
-      expect(rt.includedTasks).toEqual(["trash-pull", "damp-mop", "vacuum"]);
+      // every type follows the account's General Clean list — trash, mop, vacuum to start
+      expect(rt.includedTasks).toBeUndefined();
+      expect(includedTasksFor(r, rt.id)).toEqual(["trash-pull", "damp-mop", "vacuum"]);
     }
     const cat = (id: string) => type(r, id).issaCategory;
     expect(["exam-room", "emergency-room", "patient-room", "procedure-room", "operating-room", "nurses-station"].map(cat))
@@ -186,6 +188,7 @@ describe("Included in General Clean", () => {
 function preFormulaSave(): Rules {
   const r = defaultRules();
   r.version = 1;
+  delete r.general.includedTasks; // the account's General Clean list didn't exist yet
   r.roomTypes = r.roomTypes
     .filter((rt) => !["conference-room", "nurses-station", "break-room", "lab", "clean-utility"].includes(rt.id))
     .map((rt) => ({ id: rt.id, label: rt.label, frequency: rt.frequency, cleanability: rt.cleanability, builtIn: true,
@@ -207,8 +210,10 @@ describe("migrating saved rules", () => {
       .toBe("General Clean — Simulation Room: 2 min + 330 sq ft ÷ 33 sq ft/min = 12 min");
     for (const rt of r.roomTypes) {
       expect(rt.qualifierMin, rt.id).toBeUndefined();
-      expect(rt.includedTasks, rt.id).toEqual(["trash-pull", "damp-mop", "vacuum"]);
+      // the list every type shared became the account's; the types now follow it
+      expect(includedTasksFor(r, rt.id), rt.id).toEqual(["trash-pull", "damp-mop", "vacuum"]);
     }
+    expect(r.general.includedTasks).toEqual(["trash-pull", "damp-mop", "vacuum"]);
     expect(type(r, "conference-room").sqftPerHour).toBe(3500); // new built-ins arrive at ISSA
   });
 
@@ -216,7 +221,7 @@ describe("migrating saved rules", () => {
     const saved = preFormulaSave();
     saved.general.mopIncluded = false;
     store.set(RULES_KEY, JSON.stringify(saved));
-    expect(type(loadRules(), "office").includedTasks).toEqual(["trash-pull", "vacuum"]);
+    expect(includedTasksFor(loadRules(), "office")).toEqual(["trash-pull", "vacuum"]);
   });
 
   it("an unmigrated type prices the same as its migrated self", () => {

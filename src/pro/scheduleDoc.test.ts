@@ -106,9 +106,9 @@ describe("buildScheduleDoc", () => {
     setCoverage(data, "sp-c1", "sched-a", true, ["auto-scrub", "dust-mop"]);
 
     const doc = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
-    expect(doc.rows[0].tasks).toEqual(["General Clean"]);
-    expect(doc.rows[1].tasks).toEqual(["General Clean", "High Dusting"]);
-    expect(doc.rows[2].tasks).toEqual(["General Clean", "Machine Scrubbing", "Dust Mopping"]);
+    expect(doc.rows[0].tasks).toEqual(["Trash Pull", "Mopping"]); // the General Clean prints as its steps
+    expect(doc.rows[1].tasks).toEqual(["Trash Pull", "Mopping", "High Dusting"]);
+    expect(doc.rows[2].tasks).toEqual(["Trash Pull", "Machine Scrubbing", "Dust Mopping"]); // no mopping on a corridor
   });
 
   it("prints only the tasks THIS schedule covers when a room is shared", () => {
@@ -123,7 +123,7 @@ describe("buildScheduleDoc", () => {
 
     const a = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
     const b = buildScheduleDoc(data, RULES, data.v7.schedules![1], { date: DATE });
-    expect(a.rows[0].tasks).toEqual(["General Clean"]);
+    expect(a.rows[0].tasks).toEqual(["Trash Pull", "Mopping"]);
     expect(b.rows[0].tasks).toEqual(["High Dusting"]);
     // and the minutes split the same way — no double-counting the base clean
     expect(a.rows[0].minutes).toBe(11);
@@ -141,7 +141,7 @@ describe("buildScheduleDoc", () => {
     expect(doc.rows[1]).toMatchObject({ startTime: "7:11 AM", minutes: 11 });
     expect(doc.totals.roomMinutes).toBe(22);
     // the sheet prints ONE General Clean line, worked out
-    expect(doc.rows[0].tasks).toEqual(["General Clean"]);
+    expect(doc.rows[0].tasks).toEqual(["Trash Pull", "Mopping"]); // the General Clean prints as its steps
     expect(doc.rows[0].generalClean).toBe("Patient Room: 400 sq ft ÷ 2,150 sq ft/hr = 11.2 min");
   });
 
@@ -257,8 +257,10 @@ describe("buildScheduleDoc", () => {
     setCoverage(data, "sp-c1", "sched-a", true, ["auto-scrub", "dust-mop"]);
 
     const doc = buildScheduleDoc(data, RULES, data.v7.schedules![0], { date: DATE });
+    // the General Clean counts as its steps: trash on all three, mopping on the two patient rooms (not the corridor)
     expect(doc.totals.taskCounts).toEqual([
-      { label: "General Clean", count: 3 },
+      { label: "Trash Pull", count: 3 },
+      { label: "Mopping", count: 2 },
       { label: "Dust Mopping", count: 1 },
       { label: "High Dusting", count: 1 },
       { label: "Machine Scrubbing", count: 1 }
@@ -513,7 +515,7 @@ describe("the end-of-day round", () => {
     const doc = buildScheduleDoc(data, ROUND_RULES, data.v7.schedules![0], { date: DATE });
 
     // the run itself: the rooms, without the round's task
-    expect(doc.rows.map((r) => r.tasks)).toEqual([["General Clean"], ["General Clean", "High Dusting"]]);
+    expect(doc.rows.map((r) => r.tasks)).toEqual([["Trash Pull", "Mopping"], ["Trash Pull", "Mopping", "High Dusting"]]);
     expect(doc.rows.map((r) => r.minutes)).toEqual([11, 14]);
     expect(doc.roomsEnd).toBe("7:25 AM");
     // the round: the same rooms in the same order, wearing their own stop numbers, ending at 3:00
@@ -544,7 +546,7 @@ describe("the end-of-day round", () => {
     // EVS 101's sheet knows nothing of it
     const a = buildScheduleDoc(data, ROUND_RULES, data.v7.schedules![0], { date: DATE });
     expect(a.round).toBeNull();
-    expect(a.rows[0].tasks).toEqual(["General Clean"]);
+    expect(a.rows[0].tasks).toEqual(["Trash Pull", "Mopping"]);
   });
 
   it("comes after the breaks that fall before it, and before the end-of-shift duties", () => {
