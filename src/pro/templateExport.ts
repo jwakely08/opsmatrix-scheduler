@@ -31,7 +31,7 @@ export function planTemplatePages(map: TemplateMap, input: ClientExportInput): {
     if (ref) head.push(patch(ref));
   };
   put(map.positionCell, (r) => ({ ref: r, text: input.scheduleName }));
-  put(map.orgCell, (r) => ({ ref: r, text: input.orgName }));
+  if (input.orgName) put(map.orgCell, (r) => ({ ref: r, text: input.orgName })); // blank = the template's own text stands
   const days = daysLabel(input.days);
   if (days) put(map.daysCell, (r) => ({ ref: r, text: days }));
   const { hoursStart: start, hoursEnd: end } = input;
