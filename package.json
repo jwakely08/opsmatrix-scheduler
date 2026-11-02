@@ -16,6 +16,8 @@
     "@sentry/browser": "^10.71.0",
     "@supabase/supabase-js": "^2.112.4",
     "clipper-lib": "^6.4.2",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.2",
     "pdfjs-dist": "^4.10.38",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
