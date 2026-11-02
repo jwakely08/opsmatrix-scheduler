@@ -216,6 +216,38 @@ const r1 = (n: number) => Math.round(n * 10) / 10;
  * Everything comes from buildScheduleDoc + computeMinutes — the same
  * engine as the map and the printed sheet, so the file matches the screen.
  */
+/**
+ * The client's plain schedule sheet (Josh, 2026-11-02): "room number, room name, room type, the cleaning
+ * tasks, priority, schedule name, shift, hours, unit, building — all in order of the schedule". The
+ * estimated minutes stay unreported ("—") unless asked for — proprietary until a contract is signed.
+ */
+export const CLIENT_SCHEDULE_HEADERS = [
+  "Stop #", "Room Number", "Room Name", "Room Type", "Square Feet", "Cleaning Tasks", "Priority", "Est. Minutes",
+  "Schedule", "Shift", "Hours", "Unit", "Building"
+] as const;
+export const UNREPORTED = "—";
+
+export function clientScheduleRows(
+  data: ClassicData, rules: Rules, sched: Parameters<typeof buildScheduleDoc>[2], opts?: { includeMinutes?: boolean }
+): Cell[][] {
+  const doc = buildScheduleDoc(data, rules, sched);
+  const byId = new Map((data.v7.spaces ?? []).map((sp) => [sp.id, sp]));
+  const rows: Cell[][] = [[...CLIENT_SCHEDULE_HEADERS]];
+  const schedule = [doc.num, doc.name].filter(Boolean).join(" · ");
+  const hours = `${doc.shiftStart} – ${doc.shiftEnd}`;
+  const building = [doc.building, doc.floor].filter(Boolean).join(" · ");
+  // the rooms in cleaning order, then the end-of-day round's return visits (↻ with the room's own stop number)
+  for (const r of [...doc.rows, ...(doc.round?.rows ?? [])]) {
+    rows.push([
+      r.round ? `↻ ${r.order}` : r.order, txt(r.roomNumber), txt(r.roomName), txt(r.roomType),
+      Math.round(Number(byId.get(r.spaceId)?.squareFeet) || 0) || "",
+      r.tasks.join(" + "), r.priority, opts?.includeMinutes ? r.minutes : UNREPORTED,
+      schedule, txt(doc.shift), hours, txt(doc.unit || doc.name), building
+    ]);
+  }
+  return rows;
+}
+
 export function schedulesWorkbookSheets(data: ClassicData, rules: Rules): NamedSheet[] {
   const spaces = data.v7.spaces ?? [];
   const byId = new Map(spaces.map((sp) => [sp.id, sp]));

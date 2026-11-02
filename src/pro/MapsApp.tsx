@@ -34,6 +34,7 @@ import { CalibrationEditorHome } from "./PlanStudio";
 import { sectionDirty, saveSection, roomTypeDirty, saveRoomType, type ScopeSection } from "./scopeDraft";
 import { downloadClientSchedule, type ClientExportInput } from "./clientSchedule";
 import { downloadTemplateExport } from "./templateExport";
+import { clientScheduleRows } from "./exportData";
 import { loadTemplates, b64ToBytes, type ClientTemplate } from "./templateStore";
 import { fetchAccountRole, canEditFormula, type AccountRole } from "./accountRole";
 import { cloudConfigured } from "./cloudConfig";
@@ -50,7 +51,7 @@ import {
   attachPlanToRooms, resolvePendingRoomTypes, loadAliases,
   importRoomListIntoStorage, type ImportSummary
 } from "./roomListImport";
-import { fileToSheets, isSpreadsheet } from "./sheetFile";
+import { fileToSheets, isSpreadsheet, loadSheetJs } from "./sheetFile";
 import { collectWorkspace, applyWorkspace, backupFilename } from "./workspaceStore";
 import {
   loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor, autoTasksForSpace, tasksAfterFloorChange,
@@ -72,7 +73,12 @@ function dimColor(hex: string): string {
   return "#" + m.slice(1).map((h, i) => Math.round((parseInt(h, 16) + rest[i]) / 2).toString(16).padStart(2, "0")).join("");
 }
 /** the print preview's "Show minutes" choice, remembered per device (Josh, 2026-11-02) */
-const PRINT_MINUTES_KEY = "om_print_minutes";
+// Josh, 2026-11-02: the clock times, the priority column and the estimated minutes are proprietary until
+// a contract is signed. ONE checkbox on the Schedules tab ("include proprietary details") lets them out —
+// on the printed sheet and in the client Excel export alike; off by default, remembered per device.
+const PROPRIETARY_KEY = "om_proprietary";
+const readFlag = (key: string): boolean => { try { return localStorage.getItem(key) === "1"; } catch { return false; } };
+const writeFlag = (key: string, on: boolean) => { try { localStorage.setItem(key, on ? "1" : "0"); } catch { /* storage off */ } };
 const RED = "#dc2626";
 
 function uid(p: string) { return p + "-" + Math.random().toString(36).slice(2, 9); }
@@ -574,7 +580,7 @@ export function MapsApp() {
                 ✏ Editing <b style={{ color: String(schedSelected.color) }}>{schedSelected.num} {schedSelected.name}</b> —
                 click rooms to add/remove · other schedules show lighter in their colors
                 <em className={"schedlivemins" + (liveMins > liveTarget ? " over" : "")}>{liveMins}m of {liveTarget}m</em>
-                <HoursBar minutes={liveMins + liveCap.paidBreakMinutes} />
+                <HoursBar minutes={liveMins + liveCap.paidBreakMinutes + liveCap.unpaidBreakMinutes} />
                 <button className="pbtn small primary" onClick={() => setSchedSel(null)}>Done</button>
               </span>
             );
@@ -933,9 +939,8 @@ function PrintPreview({ data, rules, scheduleId, onClose }: {
     () => (sched ? buildScheduleDoc(data, rules, sched) : null),
     [data, rules, sched]
   );
-  const [showMinutes, setShowMinutes] = useState(() => {
-    try { return localStorage.getItem(PRINT_MINUTES_KEY) !== "0"; } catch { return true; }
-  });
+  // times, priority and minutes are on the sheet only when the Schedules tab's proprietary switch is on
+  const proprietary = readFlag(PROPRIETARY_KEY);
 
   // the floor plan this schedule's rooms actually live on
   const plan = useMemo(() => {
@@ -969,17 +974,14 @@ function PrintPreview({ data, rules, scheduleId, onClose }: {
           This is exactly what prints. Two pages: the room list, and your area on the floor plan.
         </span>
         <span className="grow" />
-        {/* Josh, 2026-11-02: "I don't want to post how long it takes… toggle that on and off when I print" */}
-        <label className="checkline printopt" title="Off: the sheet shows the order and the times, but no minutes">
-          <input type="checkbox" checked={showMinutes} onChange={(e) => {
-            setShowMinutes(e.target.checked);
-            try { localStorage.setItem(PRINT_MINUTES_KEY, e.target.checked ? "1" : "0"); } catch { /* storage off */ }
-          }} />
-          <span>Show minutes</span>
-        </label>
+        {/* Josh, 2026-11-02: one checkbox on the Schedules tab decides whether the proprietary details go out */}
+        <span className="hint printopt">
+          Proprietary details (times, priority, minutes): <b>{proprietary ? "included" : "kept back"}</b> — the checkbox on the Schedules tab changes it
+        </span>
         <button className="pbtn primary" onClick={() => window.print()}>🖨 Print / Save as PDF</button>
       </div>
-      <PrintSchedule doc={doc} plan={plan} spaces={data.v7.spaces ?? []} showMinutes={showMinutes} />
+      <PrintSchedule doc={doc} plan={plan} spaces={data.v7.spaces ?? []}
+        showMinutes={proprietary} showTimes={proprietary} showPriority={proprietary} />
     </div>,
     document.body
   );
@@ -1642,9 +1644,28 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
           .filter(Boolean).join(" — "))
     };
   };
-  const exportClient = (s: ClassicSchedule, members: ClassicSpace[]) => {
+  // The client schedule export (Josh, 2026-11-02): a plain Excel sheet — the rooms in cleaning order
+  // with room number, name, type, the cleaning tasks, priority, schedule, shift, hours, unit and
+  // building. The estimated minutes stay unreported ("—") unless the proprietary switch above is on.
+  const [proprietary, setProprietary] = useState(() => readFlag(PROPRIETARY_KEY));
+  const exportClient = async (s: ClassicSchedule) => {
+    try {
+      const XLSX = await loadSheetJs();
+      const rows = clientScheduleRows(data, rules, s, { includeMinutes: proprietary });
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws["!cols"] = rows[0].map((_, i) => ({ wch: Math.min(60, Math.max(8, ...rows.map((r) => String(r[i] ?? "").length)) + 2) }));
+      XLSX.utils.book_append_sheet(wb, ws, "Schedule");
+      const name = `${[s.num, s.name].filter(Boolean).join(" ")} — client schedule.xlsx`.replace(/[\\/?*[\]:]/g, " ");
+      XLSX.writeFile(wb, name);
+    } catch (e) {
+      alert("The client schedule export hit a snag: " + (e as Error).message);
+    }
+  };
+  // the older path: the bundled sample template, filled in (kept for accounts that used it)
+  const exportSampleTemplate = (s: ClassicSchedule, members: ClassicSpace[]) => {
     downloadClientSchedule(exportInput(s, members))
-      .catch((e) => alert("The client schedule export hit a snag: " + (e as Error).message));
+      .catch((e) => alert("The sample template export hit a snag: " + (e as Error).message));
   };
   const exportViaTemplate = (t: ClientTemplate, s: ClassicSchedule, members: ClassicSpace[]) => {
     downloadTemplateExport(b64ToBytes(t.dataB64), t.map, exportInput(s, members), t.label)
@@ -1683,6 +1704,16 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
         }}>Create schedule</button>
       </div>
 
+      {/* Josh, 2026-11-02: "a check box that allows proprietary timing information to be exported; if it's
+          not checked, it won't be — we don't change everything, we just give the option" */}
+      <label className="checkline exportopt"
+        title="Off: the printed sheet shows no clock times, priority or minutes, and the client export's Est. Minutes column reads —. On: all of it goes out.">
+        <input type="checkbox" checked={proprietary}
+          onChange={(e) => { setProprietary(e.target.checked); writeFlag(PROPRIETARY_KEY, e.target.checked); }} />
+        <span>Include proprietary details when printing or exporting — times, priority, estimated minutes</span>
+        <small>{proprietary ? "on — the printed sheet and the client export carry them" : "off — kept back until a contract is signed"}</small>
+      </label>
+
       {schedules.map((s) => {
         const mins = Math.round(scheduleMinutes(data, rules, s));
         // paid shift less paid breaks; the bar shows paid hours (work + paid breaks)
@@ -1699,19 +1730,22 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
               <b>{s.num} · {s.name}</b>
               <span>{s.shift} · {s.employee || "unassigned"}</span>
               <em className={mins > target ? "over" : ""}
-                title={`${cap.paidMinutes} paid min − ${cap.paidBreakMinutes} min paid breaks${cap.unpaidBreakMinutes ? ` (+ ${cap.unpaidBreakMinutes} min unpaid, added to the day)` : ""}`}>
+                title={`${cap.shiftMinutes} min shift − ${cap.paidBreakMinutes + cap.unpaidBreakMinutes} min breaks${cap.unpaidBreakMinutes ? ` (${cap.unpaidBreakMinutes} unpaid — still inside the shift)` : ""} = ${target} min for rooms`}>
                 {mins}m of {target}m
               </em>
-              <HoursBar minutes={mins + cap.paidBreakMinutes} />
+              <HoursBar minutes={mins + cap.paidBreakMinutes + cap.unpaidBreakMinutes} />
               <span className="schedacts">
                 <button className="pbtn small primary" onClick={() => onPrint(s.id)}>🖨 Print schedule</button>
+                <button className="pbtn small"
+                  title="A plain Excel sheet: the rooms in cleaning order with their tasks, priority, schedule, shift, hours, unit and building"
+                  onClick={() => { void exportClient(s); }}>⬇ Client schedule export</button>
                 {templates.length ? templates.map((t) => (
                   <button key={t.id} className="pbtn small"
                     title={`Fill the "${t.label}" template with this schedule`}
                     onClick={() => exportViaTemplate(t, s, members)}>⬇ {t.label}</button>
                 )) : (
-                  <button className="pbtn small" title="Fill the client's Excel template with this schedule"
-                    onClick={() => exportClient(s, members)}>⬇ Client schedule export</button>
+                  <button className="pbtn small ghost" title="Fill the sample client template with this schedule"
+                    onClick={() => exportSampleTemplate(s, members)}>⬇ Fill sample template</button>
                 )}
                 {s.floorCareId ? (
                   <a className="pbtn small" href={"./maps.html#floorcare?fc=" + s.floorCareId}>Edit in Floor Care</a>
@@ -2945,8 +2979,9 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
             onChange={(e) => set((r) => { r.breaks.find((x) => x.id === b.id)!.start = e.target.value; })} /></span>
           <span>for <input type="number" min={0} value={b.minutes} style={{ width: 64 }}
             onChange={(e) => set((r) => { r.breaks.find((x) => x.id === b.id)!.minutes = Number(e.target.value) || 0; })} /> min</span>
-          {/* unpaid breaks lengthen the day instead of coming out of the paid shift */}
-          <label className="checkline" title="Unpaid: added on to the shift (8 paid hours + an unpaid 30-min lunch = 7:00 AM – 3:30 PM)">
+          {/* unpaid = not paid time; it still comes out of the shift's hours (Josh, 2026-11-02: the shift set
+              in Scope is the whole day — a break never adds time on to the end) */}
+          <label className="checkline" title="Unpaid: not paid time. It still comes out of the shift's hours — the shift set above is the whole day, nothing is added on">
             <input type="checkbox" checked={Boolean(b.unpaid)}
               onChange={(e) => set((r) => { r.breaks.find((x) => x.id === b.id)!.unpaid = e.target.checked; })} />
             <span>Unpaid</span>

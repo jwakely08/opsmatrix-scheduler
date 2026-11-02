@@ -18,15 +18,19 @@ import { shiftDutyPhrase, type ScheduleDoc, type DocDuty, type DocRow } from "./
 
 const PRIORITY_CLASS: Record<Priority, string> = { High: "hi", Medium: "med", Low: "lo" };
 
-export function PrintSchedule({ doc, plan, spaces, showMinutes = true }: {
+export function PrintSchedule({ doc, plan, spaces, showMinutes = true, showTimes = true, showPriority = true }: {
   doc: ScheduleDoc;
   plan: ClassicPlan | null;
   spaces: ClassicSpace[];
   /** Josh, 2026-11-02: "I don't want to post how long it takes… toggle that on and off when I print" */
   showMinutes?: boolean;
+  /** Josh, later that day: the clock times through the day and the priority column stay off the sheet
+   *  too, for proprietary reasons, until a contract is signed — the preview's switches bring them back */
+  showTimes?: boolean;
+  showPriority?: boolean;
 }) {
   return (
-    <div className={"printdoc" + (showMinutes ? "" : " nominutes")}>
+    <div className={"printdoc" + (showMinutes ? "" : " nominutes") + (showTimes ? "" : " notimes") + (showPriority ? "" : " nopriority")}>
       <PageOne doc={doc} />
       {plan && <PageTwo doc={doc} plan={plan} spaces={spaces} />}
     </div>
@@ -95,6 +99,7 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
       <SectionBar
         title={hasDuties ? "YOUR SHIFT — IN ORDER" : "ROOM CLEANING — IN ORDER"}
         right={`${doc.shiftStart} – ${runEnd}`}
+        time
       />
 
       <table className="prooms">
@@ -121,7 +126,7 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
                 ? (
                   <tr className="pround" key="round">
                     <td colSpan={9}>
-                      ↻ {item.round.label.toUpperCase()} — BACK THROUGH YOUR ROOMS · {item.round.startTime} – {item.round.endTime}<span className="pmin"> · {item.round.minutes} MIN</span>
+                      ↻ {item.round.label.toUpperCase()} — BACK THROUGH YOUR ROOMS<span className="ptime"> · {item.round.startTime} – {item.round.endTime}</span><span className="pmin"> · {item.round.minutes} MIN</span>
                     </td>
                   </tr>
                 )
@@ -218,11 +223,12 @@ function DutyRow({ d }: { d: DocDuty }) {
   );
 }
 
-function SectionBar({ title, right, duties }: { title: string; right: string; duties?: boolean }) {
+function SectionBar({ title, right, duties, time }: { title: string; right: string; duties?: boolean; time?: boolean }) {
   return (
     <div className={"psection" + (duties ? " duties" : "")}>
       <span>{title}</span>
-      <em>{right}</em>
+      {/* a clock range (how long the run takes) goes with the "Show times" switch */}
+      <em className={time ? "ptime" : undefined}>{right}</em>
     </div>
   );
 }
