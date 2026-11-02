@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  applyRename, looksRough, mappedPrefix, planRename, renameGroups, renderName, splitNumber, undoRename
+  LETTER_ENDINGS, applyRename, looksRough, mappedPrefix, planRename, renameGroups, renderName, splitNumber,
+  typeKey, typeShort, undoRename
 } from "./renameRooms";
 import type { ClassicData, ClassicSpace } from "./classicStore";
 
@@ -149,5 +150,45 @@ describe("letters + number + name (Josh, 2026-11-02: FPKb → PKT, then the numb
     const again = planRename(data.v7.spaces!, "{prefix}{num} {name}", rules);
     expect(again.changes).toEqual([]);
     expect(again.same).toBe(3);
+  });
+});
+
+describe("the ending after the letters and number (Josh, 2026-11-02: '…the option to add the room type abbreviation')", () => {
+  const rules = [{ from: "FPKb", to: "PKT" }];
+  const abbr = { "patient room": "PT RM", "restroom": "TLT" };
+
+  it("shortens the room type through the table, or uses the type itself when the table has nothing", () => {
+    expect(typeShort(room("a", "FPKb-101", "x", "Patient Room"), abbr)).toBe("PT RM");
+    expect(typeShort(room("a", "FPKb-101", "x", "Restroom"), { restroom: "  TLT " })).toBe("TLT");
+    expect(typeShort(room("a", "FPKb-101", "x", "Corridor"), abbr)).toBe("Corridor");
+    expect(typeShort(room("a", "FPKb-101", "x", "Other"), abbr)).toBe("");
+    expect(typeKey("  Patient   Room ")).toBe("patient room");
+  });
+
+  it("builds every ending from the same letters and number", () => {
+    const sp = room("b1", "FPKb-101", "TLT", "Restroom");
+    const by = (id: string) => LETTER_ENDINGS.find((e) => e.id === id)!.pattern;
+    expect(renderName(by("name"), sp, 1, rules, abbr)).toBe("PKT101 TLT");
+    expect(renderName(by("typeabbr"), sp, 1, rules, abbr)).toBe("PKT101 TLT");
+    expect(renderName(by("type"), sp, 1, rules, abbr)).toBe("PKT101 Restroom");
+    expect(renderName(by("none"), sp, 1, rules, abbr)).toBe("PKT101");
+    expect(renderName(by("typeabbr"), room("p", "FPKb-120", "PAT. RM.", "Patient Room"), 1, rules, abbr)).toBe("PKT120 PT RM");
+  });
+
+  it("plans the shortened type: rooms with no type are left alone, and a second run changes nothing", () => {
+    const picked = [
+      room("p1", "FPKb-120", "PAT. RM.", "Patient Room"),
+      room("t1", "FPKb-101", "TLT", "Restroom"),
+      room("o1", "FPKb-130", "PK102PK103", "Other")
+    ];
+    const plan = planRename(picked, "{prefix}{num} {typeabbr}", rules, abbr);
+    expect(plan.changes).toEqual([
+      { id: "t1", from: "TLT", to: "PKT101 TLT" },
+      { id: "p1", from: "PAT. RM.", to: "PKT120 PT RM" }
+    ]);
+    expect(plan.noType).toBe(1);
+    const data: ClassicData = { v7: { spaces: picked }, plans: [], nonSpace: [] };
+    applyRename(data, plan.changes);
+    expect(planRename(data.v7.spaces!, "{prefix}{num} {typeabbr}", rules, abbr).changes).toEqual([]);
   });
 });

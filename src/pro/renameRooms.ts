@@ -25,9 +25,32 @@ export const NAME_PRESETS: { id: string; label: string; pattern: string }[] = [
   { id: "type-number", label: "The room's type + its number", pattern: "{type} {number}" },
   // Josh, 2026-11-02: "change the room number letter abbreviations to a specific value — FPKb to
   // PKT — then the number value, then whatever is already there for room name (TLT for a restroom)"
-  { id: "letters", label: "New letters + number + the name it has now", pattern: "{prefix}{num} {name}" },
+  { id: "letters", label: "New letters + number + an ending you choose", pattern: "{prefix}{num} {name}" },
   { id: "custom", label: "My own pattern…", pattern: "" }
 ];
+
+/**
+ * What follows the letters and number (Josh, 2026-11-02: "creating my own letter value, then adopting
+ * the numerical value from the room number, and then having the option to add the room type
+ * abbreviation, creating one room name")
+ */
+export const LETTER_ENDINGS: { id: "name" | "typeabbr" | "type" | "none"; label: string; pattern: string }[] = [
+  { id: "name", label: "the name it has now", pattern: "{prefix}{num} {name}" },
+  { id: "typeabbr", label: "the room type, shortened", pattern: "{prefix}{num} {typeabbr}" },
+  { id: "type", label: "the room type in full", pattern: "{prefix}{num} {type}" },
+  { id: "none", label: "nothing", pattern: "{prefix}{num}" }
+];
+
+/** short forms for room types, keyed by typeKey(label): { "patient room": "PT RM", "restroom": "TLT" } */
+export type TypeAbbr = Record<string, string>;
+export const typeKey = (label: unknown) => String(label ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+
+/** the room type's short form from the table, or the type itself when the table has none for it */
+export function typeShort(sp: ClassicSpace, abbr: TypeAbbr = {}): string {
+  const t = typeWord(sp);
+  if (!t) return "";
+  return String(abbr[typeKey(t)] ?? "").replace(/\s+/g, " ").trim() || t;
+}
 
 /** one row of the letters table: the letters a room number starts with → the letters the name gets */
 export interface LetterRule { from: string; to: string }
@@ -55,7 +78,7 @@ export function mappedPrefix(prefix: string, rules: LetterRule[]): string | null
   return hit ? hit.to.trim() : null;
 }
 
-export const PLACEHOLDERS = "{type} {number} {prefix} {num} {name} {n} {floor} {dept}";
+export const PLACEHOLDERS = "{type} {typeabbr} {number} {prefix} {num} {name} {n} {floor} {dept}";
 
 /** a room-number-like token the drawing leaves behind: "102", "4E-102", "PK102", "B2" */
 const CODE = /[A-Z]{0,4}[-.]?\d{1,5}[A-Z]?/gi;
@@ -87,9 +110,10 @@ export function typeWord(sp: ClassicSpace): string {
 /**
  * Fill a pattern for one room; {n} is the room's place in the renamed set, counted from 1. {prefix}
  * and {num} are the room number's two halves ({prefix} run through the letters rules), {name} the
- * name as it stands. Null when {prefix} is wanted and no rule covers this room's letters.
+ * name as it stands, {typeabbr} the room type's short form from the table. Null when {prefix} is
+ * wanted and no rule covers this room's letters.
  */
-export function renderName(pattern: string, sp: ClassicSpace, n: number, rules: LetterRule[] = []): string | null {
+export function renderName(pattern: string, sp: ClassicSpace, n: number, rules: LetterRule[] = [], abbr: TypeAbbr = {}): string | null {
   const { prefix, num } = splitNumber(sp.roomNumber);
   let letters = prefix;
   if (/\{prefix\}/i.test(pattern)) {
@@ -98,6 +122,7 @@ export function renderName(pattern: string, sp: ClassicSpace, n: number, rules: 
     letters = m;
   }
   return pattern
+    .replace(/\{typeabbr\}/gi, typeShort(sp, abbr))
     .replace(/\{type\}/gi, typeWord(sp))
     .replace(/\{number\}/gi, String(sp.roomNumber ?? "").trim())
     .replace(/\{prefix\}/gi, letters)
@@ -115,22 +140,22 @@ export function renderName(pattern: string, sp: ClassicSpace, n: number, rules: 
  * whose name says "soiled" keeps it unless the new name says so too (Max Sanitation's routes find
  * their soiled utility rooms by that word).
  */
-export function planRename(picked: ClassicSpace[], pattern: string, rules: LetterRule[] = []): RenamePlan {
+export function planRename(picked: ClassicSpace[], pattern: string, rules: LetterRule[] = [], abbr: TypeAbbr = {}): RenamePlan {
   const sorted = [...picked].sort((a, b) => natural(String(a.roomNumber ?? ""), String(b.roomNumber ?? "")));
-  const usesType = /\{type\}/i.test(pattern);
+  const usesType = /\{type\}|\{typeabbr\}/i.test(pattern);
   const usesName = /\{name\}/i.test(pattern);
   const changes: RenameChange[] = [];
   let noType = 0, same = 0, soiled = 0, noRule = 0, k = 0;
   for (const sp of sorted) {
     if (usesType && !typeWord(sp)) { noType++; continue; }
     const from = String(sp.roomName ?? "");
-    const to = renderName(pattern, sp, k + 1, rules);
+    const to = renderName(pattern, sp, k + 1, rules, abbr);
     if (to === null) { noRule++; continue; }
     if (!to || to === from.trim()) { same++; k++; continue; }
     // a pattern that keeps the old name must not pile up on a second run: "PKT101 TLT" already
     // starts with what the pattern puts in front, so it's done
     if (usesName) {
-      const head = renderName(pattern.replace(/\{name\}/gi, ""), sp, k + 1, rules) ?? "";
+      const head = renderName(pattern.replace(/\{name\}/gi, ""), sp, k + 1, rules, abbr) ?? "";
       if (head && from.replace(/\s+/g, " ").trim().toLowerCase().startsWith(head.toLowerCase())) { same++; k++; continue; }
     }
     if (/soil/i.test(from) && !/soil/i.test(to) && !/soil/i.test(String(sp.roomType ?? ""))) { soiled++; continue; }
