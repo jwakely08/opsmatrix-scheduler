@@ -55,7 +55,7 @@ import {
   loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor, autoTasksForSpace, tasksAfterFloorChange,
   taskSourceLabel, FLOOR_KINDS, typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
   isEndOfDayTask, splitEndOfDay, hasGeneralClean, nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, DEFAULT_INCLUDED_TASKS, RATE_UNITS, computeMinutes,
-  gcFormula, gcMinutes, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
+  gcFormula, gcMinutesFor, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
   issaSourceLabel, categoryFor, resetToIssa, typeIdFromLabelStrict, RULES_KEY, exampleProcedure,
   type Rules, type RoomTypeRule, type GcMethod, type GcFormula, type RateUnit,
   type DutyPosition, type ProcedureStep
@@ -63,6 +63,8 @@ import {
 
 const WALL_STROKE = 13;
 const GRAY = "#517299"; // unscheduled: holo slate-blue, not dead gray
+/** the print preview's "Show minutes" choice, remembered per device (Josh, 2026-11-02) */
+const PRINT_MINUTES_KEY = "om_print_minutes";
 const RED = "#dc2626";
 
 function uid(p: string) { return p + "-" + Math.random().toString(36).slice(2, 9); }
@@ -911,6 +913,9 @@ function PrintPreview({ data, rules, scheduleId, onClose }: {
     () => (sched ? buildScheduleDoc(data, rules, sched) : null),
     [data, rules, sched]
   );
+  const [showMinutes, setShowMinutes] = useState(() => {
+    try { return localStorage.getItem(PRINT_MINUTES_KEY) !== "0"; } catch { return true; }
+  });
 
   // the floor plan this schedule's rooms actually live on
   const plan = useMemo(() => {
@@ -944,9 +949,17 @@ function PrintPreview({ data, rules, scheduleId, onClose }: {
           This is exactly what prints. Two pages: the room list, and your area on the floor plan.
         </span>
         <span className="grow" />
+        {/* Josh, 2026-11-02: "I don't want to post how long it takes… toggle that on and off when I print" */}
+        <label className="checkline printopt" title="Off: the sheet shows the order and the times, but no minutes">
+          <input type="checkbox" checked={showMinutes} onChange={(e) => {
+            setShowMinutes(e.target.checked);
+            try { localStorage.setItem(PRINT_MINUTES_KEY, e.target.checked ? "1" : "0"); } catch { /* storage off */ }
+          }} />
+          <span>Show minutes</span>
+        </label>
         <button className="pbtn primary" onClick={() => window.print()}>🖨 Print / Save as PDF</button>
       </div>
-      <PrintSchedule doc={doc} plan={plan} spaces={data.v7.spaces ?? []} />
+      <PrintSchedule doc={doc} plan={plan} spaces={data.v7.spaces ?? []} showMinutes={showMinutes} />
     </div>,
     document.body
   );
@@ -2093,6 +2106,8 @@ const METHOD_WORDS: Record<GcMethod, string> = {
   size: "Timed by size",
   fixed: "Timed fixed minutes per room",
   both: "Timed fixed minutes + size",
+  // Josh, 2026-11-02: General Clean is the hospital's list of steps — time it by those steps
+  tasks: "Timed by its tasks — the General Clean list below",
   // Josh, 2026-11-02: a corridor isn't cleaned like a patient room — no General Clean, its tasks
   // (high dusting, trash pull, spot mopping) make up its time
   none: "No General Clean — its tasks only"
@@ -2136,7 +2151,7 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
     t.method = next.method; t.fixedMin = next.fixedMin; t.sqftPerHour = next.sqftPerHour; t.rateUnit = next.rateUnit;
     delete t.qualifierMin;
   });
-  const example = gcMinutes(f, sampleSqft.sqft);
+  const example = gcMinutesFor(draft, rt, sampleSqft.sqft);
   const extras = draft.tasks.filter((t) => t.addable && !included.includes(t.id));
   return (
     <div className="gccard">
@@ -2181,12 +2196,14 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
         <span className="gceq">
           {f.method === "none" ? (
             <span className="gcsrc">This type's time is its extras below (and any task a room lists) — no General Clean is printed for it.</span>
+          ) : f.method === "tasks" ? (
+            <span className="gcsrc">General Clean = the sum of the tasks ticked below, each at its own rate. The sheet prints "General Clean" and lists them.</span>
           ) : <b>General Clean =</b>}
-          {f.method !== "size" && f.method !== "none" && (<>
+          {f.method !== "size" && f.method !== "none" && f.method !== "tasks" && (<>
             <NumBox value={f.fixedMin} disabled={!isAdmin} onValue={(n) => setF({ fixedMin: n })} /> min per room
           </>)}
           {f.method === "both" && <b>+</b>}
-          {f.method !== "fixed" && f.method !== "none" && (<>
+          {f.method !== "fixed" && f.method !== "none" && f.method !== "tasks" && (<>
             sq ft {times ? "×" : "÷"}
             <NumBox value={rateInUnit(f.sqftPerHour, f.rateUnit)} disabled={!isAdmin}
               onValue={(n) => setF({ sqftPerHour: rateFromUnit(n, f.rateUnit) })} />
@@ -2213,7 +2230,7 @@ function RoomTypeCard({ rt, draft, edit, editAll, isAdmin, sampleSqft, conflicts
       </div>
 
       {f.method !== "none" && (<div className="gcrow">
-        <span className="gclabel">Included in General Clean</span>
+        <span className="gclabel">{f.method === "tasks" ? "General Clean's tasks (each adds its own time)" : "Included in General Clean"}</span>
         <span className="ptasks inline">
           {draft.tasks.filter((t) => t.addable && !t.floorCare).map((t) => {
             const on = included.includes(t.id);
@@ -2348,7 +2365,9 @@ function TypeCheckBlock({ rt, draft, check }: { rt: RoomTypeRule; draft: Rules; 
             type at a corridor rate, or split it. A room with extras gets them from Scope or from its own task list.
             {" "}{gcFormula(draft, rt).method === "none"
               ? `${rt.label} has no General Clean — its tasks make up the time, so two rooms with the same tasks and size get the same minutes.`
-              : `${rt.label} is timed ${gcFormula(draft, rt).method === "fixed" ? "by fixed minutes" : "by size"}, so same-size rooms get the same time; a room that still stands out carries something extra.`}
+              : gcFormula(draft, rt).method === "tasks"
+                ? `${rt.label}'s General Clean is the sum of its tasks, so two rooms of the same size and floor get the same minutes.`
+                : `${rt.label} is timed ${gcFormula(draft, rt).method === "fixed" ? "by fixed minutes" : "by size"}, so same-size rooms get the same time; a room that still stands out carries something extra.`}
           </small>
         </div>
       )}

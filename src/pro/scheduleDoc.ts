@@ -22,8 +22,8 @@ import {
   type ClassicData, type ClassicSchedule, type ClassicSpace, type NonSpaceTask, type Priority
 } from "./classicStore";
 import {
-  computeMinutes, generalCleanLine, hasGeneralClean, includedTasksFor, splitEndOfDay, typeIdFromLabel,
-  type Rules, type BreakRule, type DutyPosition, type ProcedureStep
+  computeMinutes, generalCleanLine, hasGeneralClean, includedTasksFor, includedTasksForRoom, splitEndOfDay,
+  typeIdFromLabel, type Rules, type BreakRule, type DutyPosition, type ProcedureStep
 } from "./rules";
 
 export interface DocRow {
@@ -41,6 +41,12 @@ export interface DocRow {
    * "Office: 152 sq ft ÷ 4,250 sq ft/hr = 2.1 min" — printed beside it
    */
   generalClean?: string;
+  /**
+   * The steps the room type's General Clean includes, as they apply to this room (Josh, 2026-11-02:
+   * "General Clean is a category that includes all those tasks… those tasks should show up on the
+   * schedule") — printed under the General Clean chip
+   */
+  generalCleanTasks?: string[];
   priority: Priority;
   minutes: number;
   /** a return visit in the end-of-day round (order = the room's own stop number, so it's found on the map) */
@@ -433,7 +439,10 @@ export function buildScheduleDoc(
         primary: cov.primary && hasGeneralClean(rules, sp),
         tasks: now.filter((t) => !includedTasksFor(rules, typeIdFromLabel(rules, String(sp.roomType ?? ""))).includes(t))
       }) : ["Route stop"],
-      ...(cov?.primary && hasGeneralClean(rules, sp) ? { generalClean: generalCleanLine(rules, sp).text } : {}),
+      ...(cov?.primary && hasGeneralClean(rules, sp) ? {
+        generalClean: generalCleanLine(rules, sp).text,
+        generalCleanTasks: includedTasksForRoom(rules, sp).map((t) => t.label)
+      } : {}),
       priority: spacePriority(sp),
       minutes
     };

@@ -18,13 +18,15 @@ import { shiftDutyPhrase, type ScheduleDoc, type DocDuty, type DocRow } from "./
 
 const PRIORITY_CLASS: Record<Priority, string> = { High: "hi", Medium: "med", Low: "lo" };
 
-export function PrintSchedule({ doc, plan, spaces }: {
+export function PrintSchedule({ doc, plan, spaces, showMinutes = true }: {
   doc: ScheduleDoc;
   plan: ClassicPlan | null;
   spaces: ClassicSpace[];
+  /** Josh, 2026-11-02: "I don't want to post how long it takes… toggle that on and off when I print" */
+  showMinutes?: boolean;
 }) {
   return (
-    <div className="printdoc">
+    <div className={"printdoc" + (showMinutes ? "" : " nominutes")}>
       <PageOne doc={doc} />
       {plan && <PageTwo doc={doc} plan={plan} spaces={spaces} />}
     </div>
@@ -118,14 +120,14 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
                 ? (
                   <tr className="pround" key="round">
                     <td colSpan={9}>
-                      ↻ {item.round.label.toUpperCase()} — BACK THROUGH YOUR ROOMS · {item.round.startTime} – {item.round.endTime} · {item.round.minutes} MIN
+                      ↻ {item.round.label.toUpperCase()} — BACK THROUGH YOUR ROOMS · {item.round.startTime} – {item.round.endTime}<span className="pmin"> · {item.round.minutes} MIN</span>
                     </td>
                   </tr>
                 )
               : (
                 <tr className="plunch" key={"b" + item.brk.id + i}>
                   <td colSpan={9}>
-                    {item.brk.label.toUpperCase()} · {item.brk.startTime} – {item.brk.endTime} · {item.brk.minutes} MIN{item.brk.unpaid ? " · UNPAID" : ""}
+                    {item.brk.label.toUpperCase()} · {item.brk.startTime} – {item.brk.endTime}<span className="pmin"> · {item.brk.minutes} MIN</span>{item.brk.unpaid ? " · UNPAID" : ""}
                   </td>
                 </tr>
               ))}
@@ -157,7 +159,7 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
                     <span>Rooms: {t.linkedRooms.join(", ")}</span>
                   )}
                 </div>
-                <em>{hours(t.minutes)}</em>
+                <em className="pmin">{hours(t.minutes)}</em>
               </div>
             ))}
           </div>
@@ -186,7 +188,15 @@ function RoomRow({ r }: { r: DocRow }) {
       <td className="c-type">{r.roomType || "—"}</td>
       <td className="c-task">
         {r.tasks.length
-          ? r.tasks.map((t, i) => <span key={i} className="tchip">{t}</span>)
+          ? r.tasks.map((t, i) => (
+            <React.Fragment key={i}>
+              <span className="tchip">{t}</span>
+              {/* the steps the General Clean stands for, as this room needs them */}
+              {t === "General Clean" && r.generalCleanTasks && r.generalCleanTasks.length > 0 && (
+                <span className="tincl">{r.generalCleanTasks.join(" · ")}</span>
+              )}
+            </React.Fragment>
+          ))
           : <span className="tnone">No tasks assigned yet — see supervisor</span>}
       </td>
       <td className="c-pri"><span className={"pri " + PRIORITY_CLASS[r.priority]}>{r.priority.toUpperCase()}</span></td>
@@ -233,26 +243,27 @@ function SummaryStrip({ doc }: { doc: ScheduleDoc }) {
       <span><b>{t.rooms}</b> rooms</span>
       {t.priority.High > 0 && <span><b>{t.priority.High}</b> high priority</span>}
       {shiftDuties.length > 0 && (
-        <span><b>{hours(t.shiftDutyMinutes)}</b> {shiftDutyPhrase(shiftDuties.map((d) => d.name))}</span>
+        <span className="pmin"><b>{hours(t.shiftDutyMinutes)}</b> {shiftDutyPhrase(shiftDuties.map((d) => d.name))}</span>
       )}
       {doc.nonSpace.length > 0 && <span><b>{doc.nonSpace.length}</b> ongoing duties</span>}
       {doc.round && <span><b>{doc.round.rows.length}</b> end-of-day stops</span>}
       {unpaid.length ? (
         <>
-          {t.paidBreakMinutes > 0 && <span><b>{t.paidBreakMinutes} min</b> paid breaks</span>}
-          <span><b>{t.unpaidBreakMinutes} min</b> {unpaidPhrase(unpaid.map((b) => b.label))}</span>
+          {t.paidBreakMinutes > 0 && <span className="pmin"><b>{t.paidBreakMinutes} min</b> paid breaks</span>}
+          <span className="pmin"><b>{t.unpaidBreakMinutes} min</b> {unpaidPhrase(unpaid.map((b) => b.label))}</span>
         </>
-      ) : t.breakMinutes > 0 && <span><b>{t.breakMinutes} min</b> breaks</span>}
-      <span><b>{hours(t.roomMinutes)}</b> in rooms</span>
+      ) : t.breakMinutes > 0 && <span className="pmin"><b>{t.breakMinutes} min</b> breaks</span>}
+      <span className="pmin"><b>{hours(t.roomMinutes)}</b> in rooms</span>
       {unpaid.length ? (
-        <span className={t.overShift ? "over" : ""}>
+        <span className={"pmin" + (t.overShift ? " over" : "")}>
           <b>{hours(t.paidMinutes)}</b> paid of {hours(t.paidShiftMinutes)} shift ({doc.shiftStart} – {doc.shiftEnd})
         </span>
       ) : (
-        <span className={t.overShift ? "over" : ""}>
+        <span className={"pmin" + (t.overShift ? " over" : "")}>
           <b>{hours(t.totalMinutes)}</b> of {hours(t.shiftMinutes)} shift
         </span>
       )}
+      <span className="pnomin"><b>{doc.shiftStart} – {doc.shiftEnd}</b> shift</span>
     </div>
   );
 }
