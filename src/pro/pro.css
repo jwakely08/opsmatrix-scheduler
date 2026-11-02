@@ -1582,26 +1582,39 @@ input[type="checkbox"], input[type="radio"] {
 .wi-table tbody tr:nth-child(5) { animation-delay: 120ms; }
 .wi-table tbody tr:nth-child(n+6) { animation-delay: 150ms; }
 
-/* ✎ Rename rooms (Max Space Map View): the rule, the new name, what will change, and the way out */
-.renamebar { flex-wrap: wrap; row-gap: 6px; }
-.renamebar select, .renamebar input { font-size: 12.5px; padding: 4px 8px; max-width: 230px; }
-.renamebar .clonechk {
-  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 99px; cursor: pointer;
-  border: 1px solid rgba(148,163,184,.3); color: #94a3b8; font-size: 12px; background: #1e293b;
+/* ✎ Rename rooms (Max Space Map View): a side panel in three steps — which rooms, what name, check */
+.renamepanel .rstep { display: flex; align-items: center; gap: 10px; margin: 16px 0 8px; font-weight: 700; color: #e2e8f0; font-size: 14px; }
+.renamepanel .rstep b {
+  flex: none; width: 24px; height: 24px; border-radius: 50%; background: #0d9488; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 13px;
 }
-.renamebar .clonechk.on { border-color: #0d9488; color: #5eead4; background: rgba(13,148,136,.2); }
-.renamebar .clonechk input { width: 16px; height: 16px; margin: 0; accent-color: #0d9488; }
-.renamebar em { font-style: normal; font-weight: 600; }
-.renamebar .mergeok { color: #22c55e; }
-.renamebar .renamecount { color: #e2e8f0; }
-.renamebar .renamecount b { color: #5eead4; }
-.renamebar i, .renamelist span {
-  font-style: normal; color: #cbd5e1; background: #1e293b; border-radius: 7px; padding: 2px 8px; font-size: 12px;
+.renamepanel .seg { display: flex; gap: 6px; margin-bottom: 8px; }
+.renamepanel .seg button {
+  flex: 1; padding: 9px 8px; border-radius: 10px; border: 1px solid rgba(148,163,184,.3); background: #1e293b;
+  color: #cbd5e1; font-size: 13px; cursor: pointer;
 }
-.renamebar i s, .renamelist span s { text-decoration: none; color: #94a3b8; }
-.renamebar i b, .renamelist span b { color: #e2e8f0; }
-.renamebar small { flex-basis: 100%; color: #94a3b8; font-size: 11.5px; }
-.renamelist { flex-basis: 100%; max-height: 180px; overflow: auto; display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.renamepanel .seg button.on { border-color: #0d9488; background: rgba(13,148,136,.25); color: #5eead4; }
+.renamepanel .choices { display: flex; flex-direction: column; gap: 6px; }
+.renamepanel .choice {
+  display: flex; gap: 10px; align-items: flex-start; text-align: left; padding: 9px 10px; border-radius: 10px;
+  border: 1px solid rgba(148,163,184,.25); background: #0f172a; color: #cbd5e1; cursor: pointer; font-size: 13px;
+}
+.renamepanel .choice.on { border-color: #0d9488; background: rgba(13,148,136,.18); }
+.renamepanel .choice i { font-style: normal; color: #5eead4; flex: none; }
+.renamepanel .choice span { display: flex; flex-direction: column; gap: 2px; }
+.renamepanel .choice small { color: #94a3b8; font-size: 11.5px; }
+.renamepanel .letterrule { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.renamepanel .letterrule input { width: 96px; font-family: Consolas, "SF Mono", monospace; font-size: 15px; }
+.renamepanel .letterrule i { font-style: normal; color: #94a3b8; }
+.renamepanel .letters small { display: block; margin-top: 4px; }
+.renamepanel .renamecount { color: #e2e8f0; margin: 4px 0; font-size: 14px; }
+.renamepanel .renamecount b { color: #5eead4; font-size: 18px; }
+.renamepanel .rgroups { display: flex; flex-direction: column; gap: 3px; max-height: 190px; overflow: auto; margin: 6px 0; }
+.renamepanel .rgroup { font-size: 12.5px; color: #cbd5e1; background: #1e293b; border-radius: 7px; padding: 4px 8px; }
+.renamepanel .rgroup s { text-decoration: none; color: #94a3b8; }
+.renamepanel .rgroup b { color: #e2e8f0; }
+.renamepanel .rgroup em { font-style: normal; color: #5eead4; margin-left: 6px; }
+.renamepanel .pbtn.wide { margin-top: 6px; }
 
 /* ↻ the end-of-day round on a schedule card: the return visits, after the rooms */
 .schedround { margin-top: 8px; padding-top: 6px; border-top: 1px dashed rgba(148,163,184,.25); }
@@ -1609,8 +1622,3 @@ input[type="checkbox"], input[type="radio"] {
 .schedround .pnote b { color: #5eead4; }
 .schedroom.round b { color: #5eead4; }
 .schedroom.round .ordnum { background: rgba(13,148,136,.25); color: #5eead4; }
-/* the letters table: FPKb → PKT */
-.renameletters { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.renameletters .letterrule { display: inline-flex; align-items: center; gap: 4px; }
-.renameletters .letterrule input { width: 74px; font-family: Consolas, "SF Mono", monospace; }
-.renameletters .letterrule i { font-style: normal; color: #94a3b8; }
