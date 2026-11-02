@@ -10,6 +10,11 @@
 //   • the TIME column walks the clock from the shift's start through those
 //     minutes, so the times are a consequence of the workload, not a guess
 //   • PRIORITY is the room's own field, set during Max Space validation
+//   • the END-OF-DAY ROUND (Josh, 2026-11-02): a task Scope marks "end of the
+//     day" — a second trash pull — comes off the room's own stop and prints as
+//     one return round after every room, in the same order, timed to finish
+//     as the shift ends (before cart teardown). The room keeps the task and
+//     the schedule still covers it; only the running order moves it.
 //
 // This module is pure (no DOM, no storage) so the numbers can be tested.
 import {
@@ -17,7 +22,7 @@ import {
   type ClassicData, type ClassicSchedule, type ClassicSpace, type NonSpaceTask, type Priority
 } from "./classicStore";
 import {
-  generalCleanLine, includedTasksFor, typeIdFromLabel,
+  computeMinutes, generalCleanLine, includedTasksFor, splitEndOfDay, typeIdFromLabel,
   type Rules, type BreakRule, type DutyPosition, type ProcedureStep
 } from "./rules";
 
@@ -38,6 +43,18 @@ export interface DocRow {
   generalClean?: string;
   priority: Priority;
   minutes: number;
+  /** a return visit in the end-of-day round (order = the room's own stop number, so it's found on the map) */
+  round?: boolean;
+}
+
+/** the end-of-day round: every return visit, after the rooms, in the order the rooms were cleaned */
+export interface DocRound {
+  label: string;
+  startTime: string;
+  endTime: string;
+  /** work minutes across the round's stops (breaks inside it are counted with the breaks) */
+  minutes: number;
+  rows: DocRow[];
 }
 
 export interface DocBreak {
@@ -70,7 +87,9 @@ export interface DocDuty extends DocNonSpace {
 export type DocStop =
   | { kind: "duty"; duty: DocDuty }
   | { kind: "room"; row: DocRow }
-  | { kind: "break"; brk: DocBreak };
+  | { kind: "break"; brk: DocBreak }
+  /** the round's heading; its stops follow as "room" entries with row.round set */
+  | { kind: "round"; round: DocRound };
 
 export interface ScheduleDoc {
   num: string;
@@ -83,9 +102,12 @@ export interface ScheduleDoc {
   floor: string;
   date: string;
   color: string;
+  /** the room-by-room run — one stop per room, numbered on the map */
   rows: DocRow[];
+  /** the end-of-day round's return visits, or null when no task on this schedule is timed that way */
+  round: DocRound | null;
   breaks: DocBreak[];
-  /** start duties, rooms, breaks and end duties, in clock order */
+  /** start duties, rooms, breaks, the end-of-day round and end duties, in clock order */
   timeline: DocStop[];
   startDuties: DocDuty[];
   endDuties: DocDuty[];
@@ -310,12 +332,12 @@ export function buildScheduleDoc(
   // runs past midnight keeps moving forward instead of wrapping backwards
   let clock = shift.start;
 
-  /** take any breaks that are now due — always between stops, never inside one */
-  const takeBreaksDue = (force = false) => {
+  /** take any breaks due by `by` (the clock, unless told otherwise) — always between stops, never inside one */
+  const takeBreaksDue = (force = false, by = clock) => {
     while (pending.length) {
       const b = pending[0];
       const due = shift.start + b.offset;
-      if (!force && clock < due) break;
+      if (!force && by < due) break;
       pending.shift();
       const at = Math.max(clock, due);
       const brk: DocBreak = {
@@ -376,15 +398,28 @@ export function buildScheduleDoc(
     ? (sched.routeStopMinutes as Record<string, number> | undefined)
     : undefined) ?? null;
 
+  // the return visits the end-of-day round will make, collected as the rooms go by
+  const returns: { sp: ClassicSpace; tasks: string[]; minutes: number; order: number | null }[] = [];
+
   for (const sp of ordered) {
     const cov = coverageForSpace(data, sp.id).find((c) => c.scheduleId === sched.id);
     if (!cov && !routeMinutes) continue;
 
-    takeBreaksDue();
-
-    const minutes = routeMinutes
+    // what this schedule does here NOW, and what it comes back for at the end of the day
+    const { now, later } = cov && !routeMinutes ? splitEndOfDay(rules, cov.tasks) : { now: cov?.tasks ?? [], later: [] };
+    const whole = routeMinutes
       ? Math.round(Number(routeMinutes[sp.id]) || 0)
       : coverageMinutes(rules, sp, cov!);
+    // the stop's own minutes; the round gets the rest, so the two always add up to the whole
+    const minutes = later.length ? computeMinutes(rules, sp, { tasks: now, includeBase: cov!.primary }).total : whole;
+    if (cov && !cov.primary && !now.length && later.length) {
+      // this schedule only comes back here at the end of the day — no stop of its own in the run
+      returns.push({ sp, tasks: later, minutes: whole, order: null });
+      continue;
+    }
+
+    takeBreaksDue();
+
     const row: DocRow = {
       spaceId: sp.id,
       order: rows.length + 1,
@@ -394,7 +429,7 @@ export function buildScheduleDoc(
       roomType: String(sp.roomType ?? ""),
       // a task the type's General Clean includes is part of that line, not an extra
       tasks: cov ? coverageTaskLabels(rules, {
-        ...cov, tasks: cov.tasks.filter((t) => !includedTasksFor(rules, typeIdFromLabel(rules, String(sp.roomType ?? ""))).includes(t))
+        ...cov, tasks: now.filter((t) => !includedTasksFor(rules, typeIdFromLabel(rules, String(sp.roomType ?? ""))).includes(t))
       }) : ["Route stop"],
       ...(cov?.primary && !rules.general.formulaOff ? { generalClean: generalCleanLine(rules, sp).text } : {}),
       priority: spacePriority(sp),
@@ -403,20 +438,68 @@ export function buildScheduleDoc(
     rows.push(row);
     timeline.push({ kind: "room", row });
     clock += minutes;
+    if (later.length) returns.push({ sp, tasks: later, minutes: Math.max(0, whole - minutes), order: row.order });
   }
 
   // when the last room is done — before any breaks still to come
   const roomsEnd = formatClock(clock);
 
   const ends = tasks.filter((t) => t.position === "end");
+  const endTotal = ends.reduce((s, t) => s + t.item.minutes, 0);
+
+  // ── the end-of-day round: back through the rooms, in the same order, timed
+  // to finish as the shift ends (the end duties come after it). Breaks that
+  // fall inside it stretch it, so it starts that much earlier.
+  let round: DocRound | null = null;
+  let roundStart: number | null = null;
+  if (returns.length) {
+    const roundTotal = returns.reduce((s, r) => s + r.minutes, 0);
+    let anchor = shift.start + span - endTotal - roundTotal;
+    for (let i = 0; i < 5; i++) {
+      // a break still to come that ends after the round would start lands inside it
+      const inside = pending.filter((b) => shift.start + b.offset + b.minutes > anchor).reduce((s, b) => s + b.minutes, 0);
+      const next = shift.start + span - endTotal - roundTotal - inside;
+      if (next === anchor) break;
+      anchor = next;
+    }
+    roundStart = Math.max(clock, anchor);
+    // breaks due before the round still print at their proper times, ahead of it
+    takeBreaksDue(false, roundStart);
+    clock = Math.max(clock, roundStart);
+    const head: DocRound = { label: "End-of-day round", startTime: formatClock(clock), endTime: "", minutes: roundTotal, rows: [] };
+    timeline.push({ kind: "round", round: head });
+    // a room with no stop of its own in the run is numbered after the rooms that have one
+    let extra = rows.length;
+    for (const r of returns) {
+      takeBreaksDue();
+      const row: DocRow = {
+        spaceId: r.sp.id,
+        order: r.order ?? ++extra,
+        startTime: formatClock(clock),
+        roomNumber: String(r.sp.roomNumber ?? ""),
+        roomName: String(r.sp.roomName ?? r.sp.roomNumber ?? ""),
+        roomType: String(r.sp.roomType ?? ""),
+        tasks: coverageTaskLabels(rules, { primary: false, tasks: r.tasks }),
+        priority: spacePriority(r.sp),
+        minutes: r.minutes,
+        round: true
+      };
+      head.rows.push(row);
+      timeline.push({ kind: "room", row });
+      clock += r.minutes;
+    }
+    head.endTime = formatClock(clock);
+    round = head;
+  }
+
   // a short list of rooms can finish before a break comes round — the worker
   // still gets it, so it prints at its proper time rather than vanishing
-  if (rows.length || startDuties.length || ends.length) takeBreaksDue(true);
-  const roomMinutes = rows.reduce((s, r) => s + r.minutes, 0);
+  if (rows.length || round || startDuties.length || ends.length) takeBreaksDue(true);
+  const roundRows = round?.rows ?? [];
+  const roomMinutes = [...rows, ...roundRows].reduce((s, r) => s + r.minutes, 0);
 
   // end-of-shift duties (cart teardown) are the last stops: they finish as
   // the shift ends, or straight after the rooms when the rooms run long
-  const endTotal = ends.reduce((s, t) => s + t.item.minutes, 0);
   const endsStart = Math.max(clock, shift.start + span - endTotal);
   if (ends.length) clock = endsStart;
   for (const t of ends) runDuty(t.item, "end", endDuties);
@@ -425,11 +508,13 @@ export function buildScheduleDoc(
   const nonSpaceMinutes = tasks.reduce((s, t) => s + t.item.minutes, 0);
   const shiftDutyMinutes = [...startDuties, ...endDuties].reduce((s, t) => s + t.minutes, 0);
 
+  // every room this schedule visits, counted once — a round-only room counts too
+  const visited = [...rows, ...roundRows.filter((r) => r.order > rows.length)];
   const priority: Record<Priority, number> = { High: 0, Medium: 0, Low: 0 };
-  for (const r of rows) priority[r.priority]++;
+  for (const r of visited) priority[r.priority]++;
 
   const counts = new Map<string, number>();
-  for (const r of rows) for (const t of r.tasks) counts.set(t, (counts.get(t) ?? 0) + 1);
+  for (const r of [...rows, ...roundRows]) for (const t of r.tasks) counts.set(t, (counts.get(t) ?? 0) + 1);
 
   const breakMinutes = breaks.reduce((s, b) => s + b.minutes, 0);
   const unpaidBreakMinutes = breaks.filter((b) => b.unpaid).reduce((s, b) => s + b.minutes, 0);
@@ -453,6 +538,7 @@ export function buildScheduleDoc(
       { month: "long", day: "numeric", year: "numeric" }),
     color: String(sched.color ?? "#0d9488"),
     rows,
+    round,
     breaks,
     timeline,
     startDuties,
@@ -460,14 +546,15 @@ export function buildScheduleDoc(
     roomsEnd,
     dayEnd: formatClock(clock),
     nonSpace,
+    // the anytime duties fit between the rooms and whatever comes last: the round, the end duties
     nonSpaceWindow: nonSpace.length
-      ? { start: roomsEnd, end: formatClock(ends.length ? endsStart : shift.end) }
+      ? { start: roomsEnd, end: formatClock(roundStart ?? (ends.length ? endsStart : shift.end)) }
       : null,
     procedure: proc && proc.show !== false && steps.length
       ? { steps, example: proc.example === true }
       : null,
     totals: {
-      rooms: rows.length,
+      rooms: visited.length,
       roomMinutes,
       nonSpaceMinutes,
       shiftDutyMinutes,

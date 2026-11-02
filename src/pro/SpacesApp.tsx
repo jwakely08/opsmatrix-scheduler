@@ -231,12 +231,12 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
               return (
                 <button key={t.id} className={"ptask" + (on ? " on" : "")}
                   onClick={() => set({ spaceTasks: on ? req.filter((x) => x !== t.id) : [...req, t.id] })}>
-                  {t.floorCare ? "🧽 " : ""}{t.label}{auto ? " •" : ""}
+                  {t.floorCare ? "🧽 " : ""}{t.label}{t.when === "end-of-day" ? " ↻" : ""}{auto ? " •" : ""}
                 </button>
               );
             })}
           </div>
-          <small>• = automatic for this room type or floor type. Who does each task is decided in Max Schedules.</small>
+          <small>• = automatic for this room type or floor type. ↻ = done on the end-of-day round, after all the rooms. Who does each task is decided in Max Schedules.</small>
         </div>
 
         <label className="pfield">Notes <small>show wherever this room appears — including while scheduling</small>

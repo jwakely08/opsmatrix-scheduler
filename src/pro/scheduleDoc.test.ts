@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { buildScheduleDoc, parseClock, formatClock, shiftFor, shiftDutyPhrase, scheduleCapacity } from "./scheduleDoc";
-import { setCoverage, moveInSchedule, spacePriority, type ClassicData } from "./classicStore";
-import { defaultRules, productiveFromScope } from "./rules";
+import { setCoverage, moveInSchedule, spacePriority, scheduleMinutes, type ClassicData } from "./classicStore";
+import { defaultRules, productiveFromScope, splitEndOfDay } from "./rules";
 
 /**
  * A tiny but realistic hospital floor: two patient rooms and a corridor,
@@ -491,5 +491,98 @@ describe("the cleaning procedure on the sheet", () => {
       .toEqual({ steps: [{ title: "Knock and announce" }], example: false });
     const hidden = { ...own, procedure: { ...own.procedure, show: false } };
     expect(buildScheduleDoc(data, hidden, data.v7.schedules![0], { date: DATE }).procedure).toBeNull();
+  });
+});
+
+// ── the end-of-day round (Josh, 2026-11-02: "the second trash pick up is supposed to happen at
+// the end of the day") — a task Scope times that way leaves the room's own stop and prints as
+// one return round after every room, timed to finish as the shift ends
+const TRASH2 = { id: "trash-2", label: "2nd Trash Pull", sqftPerMin: null, flatMin: 2, autoFor: [], addable: true, when: "end-of-day" as const };
+const ROUND_RULES = { ...RULES, tasks: [...RULES.tasks, TRASH2] };
+
+describe("the end-of-day round", () => {
+  it("splits a room's tasks by when they happen", () => {
+    expect(splitEndOfDay(ROUND_RULES, ["high-dusting", "trash-2"])).toEqual({ now: ["high-dusting"], later: ["trash-2"] });
+    expect(splitEndOfDay(RULES, ["trash-pull"])).toEqual({ now: ["trash-pull"], later: [] });
+  });
+
+  it("takes the end-of-day task off the room's own stop and prints it as a round that ends with the shift", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, ["trash-2"]);
+    setCoverage(data, "sp-102", "sched-a", true, ["trash-2", "high-dusting"]);
+    const doc = buildScheduleDoc(data, ROUND_RULES, data.v7.schedules![0], { date: DATE });
+
+    // the run itself: the rooms, without the round's task
+    expect(doc.rows.map((r) => r.tasks)).toEqual([["General Clean"], ["General Clean", "High Dusting"]]);
+    expect(doc.rows.map((r) => r.minutes)).toEqual([11, 14]);
+    expect(doc.roomsEnd).toBe("7:25 AM");
+    // the round: the same rooms in the same order, wearing their own stop numbers, ending at 3:00
+    expect(doc.round).toMatchObject({ label: "End-of-day round", startTime: "2:56 PM", endTime: "3:00 PM", minutes: 4 });
+    expect(doc.round!.rows.map((r) => [r.order, r.roomNumber, r.tasks, r.minutes, r.round]))
+      .toEqual([[1, "101", ["2nd Trash Pull"], 2, true], [2, "102", ["2nd Trash Pull"], 2, true]]);
+    expect(doc.timeline.map((s) => s.kind)).toEqual(["room", "room", "round", "room", "room"]);
+    expect(doc.dayEnd).toBe("3:00 PM");
+    // still two rooms, and the minutes add up to what the schedule card shows
+    expect(doc.totals.rooms).toBe(2);
+    expect(doc.totals.roomMinutes).toBe(Math.round(scheduleMinutes(data, ROUND_RULES, data.v7.schedules![0])));
+    expect(doc.totals.taskCounts).toContainEqual({ label: "2nd Trash Pull", count: 2 });
+  });
+
+  it("a schedule that only comes back for the round lists the room there, numbered after its own rooms", () => {
+    const data = fixture();
+    data.v7.schedules!.push({
+      id: "sched-b", num: "102", name: "West Wing", shift: "1st Shift",
+      color: "#3b82f6", spaceOrder: [], roomTasks: {}
+    });
+    setCoverage(data, "sp-101", "sched-a", true, []);            // EVS 101 cleans it
+    setCoverage(data, "sp-102", "sched-b", true, []);            // EVS 102's own room
+    setCoverage(data, "sp-101", "sched-b", false, ["trash-2"]);  // and EVS 102 comes back to 101 at the end of the day
+    const b = buildScheduleDoc(data, ROUND_RULES, data.v7.schedules![1], { date: DATE });
+    expect(b.rows.map((r) => r.roomNumber)).toEqual(["102"]);
+    expect(b.round!.rows.map((r) => [r.order, r.roomNumber, r.minutes])).toEqual([[2, "101", 2]]);
+    expect(b.totals.rooms).toBe(2);
+    // EVS 101's sheet knows nothing of it
+    const a = buildScheduleDoc(data, ROUND_RULES, data.v7.schedules![0], { date: DATE });
+    expect(a.round).toBeNull();
+    expect(a.rows[0].tasks).toEqual(["General Clean"]);
+  });
+
+  it("comes after the breaks that fall before it, and before the end-of-shift duties", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, ["trash-2"]);
+    setCoverage(data, "sp-102", "sched-a", true, ["trash-2"]);
+    data.nonSpace.push({
+      id: "ns-end", name: "Cart Teardown", hours: 0.25, scheduleId: "sched-a", roomIds: [],
+      defId: "cart-teardown", count: 1, minutesPer: 15
+    });
+    const rules = { ...RULES_BREAKS, tasks: [...RULES_BREAKS.tasks, TRASH2] };
+    const doc = buildScheduleDoc(data, rules, data.v7.schedules![0], { date: DATE });
+    expect(doc.breaks.map((b) => b.startTime)).toEqual(["9:30 AM", "12:30 PM", "2:00 PM"]);
+    expect(doc.round).toMatchObject({ startTime: "2:41 PM", endTime: "2:45 PM" });
+    expect(doc.endDuties[0]).toMatchObject({ startTime: "2:45 PM", endTime: "3:00 PM" });
+    expect(doc.dayEnd).toBe("3:00 PM");
+    expect(doc.timeline.map((s) => s.kind))
+      .toEqual(["room", "room", "break", "break", "break", "round", "room", "room", "duty"]);
+  });
+
+  it("starts earlier when a break would land inside it, so it still ends on time", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, ["trash-2"]);
+    setCoverage(data, "sp-102", "sched-a", true, ["trash-2"]);
+    setCoverage(data, "sp-c1", "sched-a", true, ["trash-2"]);
+    const rules = { ...ROUND_RULES, breaks: [{ id: "late", label: "Break", minutes: 10, start: "2:46 PM" }] };
+    const doc = buildScheduleDoc(data, rules, data.v7.schedules![0], { date: DATE });
+    // 6 minutes of round with a 10-minute break inside it: it starts at 2:44, not 2:54
+    expect(doc.round).toMatchObject({ startTime: "2:44 PM", endTime: "3:00 PM", minutes: 6 });
+    expect(doc.breaks[0]).toMatchObject({ startTime: "2:46 PM", endTime: "2:56 PM" });
+    expect(doc.dayEnd).toBe("3:00 PM");
+  });
+
+  it("the ongoing-duties window closes when the round begins", () => {
+    const data = fixture();
+    setCoverage(data, "sp-101", "sched-a", true, ["trash-2"]);
+    data.nonSpace.push({ id: "ns1", name: "Discharges", hours: 2, scheduleId: "sched-a", roomIds: [] });
+    const doc = buildScheduleDoc(data, ROUND_RULES, data.v7.schedules![0], { date: DATE });
+    expect(doc.nonSpaceWindow).toEqual({ start: "7:11 AM", end: "2:58 PM" });
   });
 });
