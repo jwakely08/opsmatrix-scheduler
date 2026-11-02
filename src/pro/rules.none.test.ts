@@ -3,7 +3,7 @@
 // should just be high dusting and trash pull and spot mopping").
 import { describe, it, expect } from "vitest";
 import {
-  computeMinutes, defaultRules, gcFormula, gcFormulaText, gcMinutes, gcMinutesFor, gcText, hasGeneralClean,
+  computeMinutes, defaultRules, gcFormula, gcFormulaText, gcMinutes, gcMinutesFor, gcText, generalCleanLine, hasGeneralClean,
   includedTasksFor, includedTasksForRoom, migrateRules, requiredTasks, type Rules
 } from "./rules";
 import { buildScheduleDoc } from "./scheduleDoc";
@@ -87,8 +87,13 @@ describe("a General Clean timed by its tasks (Josh: 'General Clean is a category
     const m = computeMinutes(rules, { ...corridor, spaceTasks: [] });
     // high dusting 1,200/120 = 10 + trash pull 2 + spot mopping 1,200/300 = 4 → 16
     expect(m.total).toBe(16);
-    expect(m.lines).toHaveLength(1);
-    expect(m.lines[0].label).toBe("General Clean — Corridor: High Dusting 10 + Trash Pull 2 + Spot Mopping 4 = 16 min");
+    // one line per step, each at its own rate; no baseline (the steps are the whole)
+    expect(m.lines.map((l) => [l.label, l.minutes])).toEqual([
+      ["High Dusting — part of General Clean · 1 min per 120 sq ft", 10],
+      ["Trash Pull — part of General Clean · 2 min", 2],
+      ["Spot Mopping — part of General Clean · 1 min per 300 sq ft", 4]
+    ]);
+    expect(generalCleanLine(rules, { ...corridor, spaceTasks: [] }).text).toBe("Corridor: High Dusting 10 + Trash Pull 2 + Spot Mopping 4 = 16 min");
     expect(hasGeneralClean(rules, corridor)).toBe(true);
     const f = gcFormula(rules, rules.roomTypes.find((t) => t.id === "corridor")!);
     expect(gcFormulaText(f)).toBe("the sum of its General Clean tasks");

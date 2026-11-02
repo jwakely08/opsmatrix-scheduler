@@ -1647,3 +1647,8 @@ input[type="checkbox"], input[type="radio"] {
 /* the account's General Clean list: its summary sits under the chips, not beside them */
 .gcglobal .ptasks.inline { margin: 6px 0; }
 .gcglobal small.pnote { display: block; margin-top: 8px; }
+/* a General Clean step switched off in this room, and a task the room could take on */
+.ptask.off { opacity: .55; text-decoration: line-through; }
+.ptask.dim { opacity: .6; border-style: dashed; }
+.ptask small { font-size: 10.5px; color: #94a3b8; margin-left: 3px; }
+.whyminutes .whyline.note { color: #94a3b8; font-style: italic; }

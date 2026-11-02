@@ -98,9 +98,11 @@ export function BuildingBadge({ building, onChange }: {
 
 // ── the map canvas (shared by Map + Spaces tabs, and Floor Care's builder) ──
 
-export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlines, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker, keepView, follow, compass }: {
+export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlines, overlayFor, flagFor, selectedId, onRoom, legend, mode, badge, onCanvas, marker, keepView, follow, compass, minutesFor }: {
   /** offer the compass: the floor can face north, or turn with the walker (Max Space, Rover) */
   compass?: boolean;
+  /** the minutes a room's label shows; default = the room's stored total (Max Schedules passes EVS cleaning minutes) */
+  minutesFor?: (sp: ClassicSpace) => number;
   /** the view is the user's from the first fit on: a resize never refits (Rover's room card
    *  opening under the map, Josh 2026-10-28: "it zooms back out… I lose track of which room") */
   keepView?: boolean;
@@ -547,7 +549,7 @@ export function MapCanvas({ plan, plans, onPlan, spaces, shapes, fillFor, outlin
             // a phone fitting the whole floor renders every room small — on a
             // narrow canvas, labels appear sooner so the map reads like desktop
             if ((b.maxX - b.minX) * view.k < (mapW < 700 ? 24 : 44)) return null;
-            const mins = Number(sp.estimatedCleaningMinutes) || 0;
+            const mins = minutesFor ? minutesFor(sp) : (Number(sp.estimatedCleaningMinutes) || 0);
             return (
               <g key={"l" + sp.id} className="prolabel" transform={`translate(${sh.c.x} ${sh.c.y})${turn ? ` rotate(${-turn})` : ""} scale(${1 / Math.max(0.34, view.k)})`}>
                 {flagFor?.(sp) && <text className="proflag" y={-22}>{flagFor(sp)}</text>}

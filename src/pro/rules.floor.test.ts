@@ -90,8 +90,11 @@ describe("the floor trigger (Josh's design: mop/vacuum out of General Clean)", (
     const sp = room("Exam Room", HARD);
     sp.spaceTasks = autoTasksForSpace(r, sp);
     const lines = computeMinutes(r, sp).lines;
-    expect(lines.map((l) => l.label)).toEqual([expect.stringMatching(/^General Clean/), "Mopping — 1 min per 68.67 sq ft"]);
-    expect(lines[1].minutes).toBeCloseTo(412 / 68.67, 6);
+    // the General Clean (its baseline + trash pull, its one step here), then mopping at its own rate
+    expect(lines.map((l) => l.label)).toEqual([
+      expect.stringMatching(/^General Clean baseline/), "Trash Pull — part of General Clean · 2 min", "Mopping — 1 min per 68.67 sq ft"
+    ]);
+    expect(lines[2].minutes).toBeCloseTo(412 / 68.67, 6);
   });
 });
 

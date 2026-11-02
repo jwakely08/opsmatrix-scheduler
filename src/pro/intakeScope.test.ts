@@ -147,7 +147,10 @@ describe("intakeToScope — rates, general clean, procedure", () => {
     // the facility's list is the account's; every type follows it
     expect([...(rules.general.includedTasks ?? [])].sort()).toEqual(["damp-mop", "high-dusting", "trash-pull", "vacuum"]);
     expect([...includedTasksFor(rules, "office")].sort()).toEqual(["damp-mop", "high-dusting", "trash-pull", "vacuum"]);
-    expect(computeMinutes(rules, { roomType: "Office", squareFeet: 300, spaceTasks: ["high-dusting"] }).lines).toHaveLength(1);
+    // high dusting is part of the General Clean here, so it is priced inside it, not on top
+    const m = computeMinutes(rules, { roomType: "Office", squareFeet: 300, spaceTasks: ["high-dusting"] });
+    expect(m.lines.every((l) => l.label.includes("part of General Clean"))).toBe(true);
+    expect(m.lines.reduce((s, l) => s + l.minutes, 0)).toBeCloseTo(300 * 60 / 4250, 6);
   });
 
   it("writes the facility's own procedure, in working order", () => {
