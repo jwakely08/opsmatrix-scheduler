@@ -1,0 +1,136 @@
+// Checking the numbers (Josh, 2026-11-02: "patient rooms similar in square footage are off from each
+// other by a minute or two… a small utility room gets 11 minutes but the break room gets 1… one
+// labeled nurse's station is 52 minutes… we need to look through these room types and the algorithm").
+//
+// Two views of the same engine (rules.ts computeMinutes), nothing new invented:
+//   • a ROOM's minutes, split into what EVS cleans (the General Clean formula + its extras) and the
+//     floor-care tasks riding on it (Max Floor Care's time, which the map label still counts);
+//   • a ROOM TYPE's rooms side by side — how big they run, how many minutes they get, the rate that
+//     implies, and the rooms that stand out from the rest, each with the reason in plain words
+//     (far bigger or smaller than the typical room, extra tasks, fixed minutes).
+// Pure and unit-tested; Scope's room-type cards and Max Space's room sidebar show it.
+import type { ClassicSpace } from "./classicStore";
+import {
+  computeMinutes, gcFormula, gcMinutes, isFloorCareTask, requiredTasks, typeIdFromLabelStrict, type Rules
+} from "./rules";
+
+export interface MinuteLine { label: string; minutes: number; floorCare: boolean }
+
+export interface RoomMinutes {
+  /** what the map label shows: everything, rounded */
+  total: number;
+  /** the General Clean formula + the extras EVS does — what a schedule gets */
+  cleaning: number;
+  /** floor-care tasks on the room — priced in Max Floor Care */
+  floorCare: number;
+  lines: MinuteLine[];
+}
+
+/** one room's minutes, each line labelled as the engine words it, floor care told apart */
+export function roomMinutes(rules: Rules, sp: ClassicSpace): RoomMinutes {
+  const req = requiredTasks(rules, sp);
+  const clean = computeMinutes(rules, sp, { tasks: req.filter((t) => !isFloorCareTask(rules, t)), includeBase: true });
+  const fc = computeMinutes(rules, sp, { tasks: req.filter((t) => isFloorCareTask(rules, t)), includeBase: false });
+  return {
+    total: computeMinutes(rules, sp).total,
+    cleaning: clean.total,
+    floorCare: fc.total,
+    lines: [
+      ...clean.lines.map((l) => ({ ...l, floorCare: false })),
+      ...fc.lines.map((l) => ({ ...l, floorCare: true }))
+    ]
+  };
+}
+
+export interface RoomNote {
+  id: string;
+  roomNumber: string;
+  roomName: string;
+  sqft: number;
+  /** cleaning minutes (floor care left out) */
+  minutes: number;
+  floorCare: number;
+  reasons: string[];
+}
+
+export interface TypeCheck {
+  rooms: number;
+  sqft: { min: number; median: number; max: number } | null;
+  minutes: { min: number; median: number; max: number } | null;
+  /** cleaning minutes a typical room of this type gets per 100 sq ft, from the rooms themselves */
+  perHundred: number | null;
+  /** rooms far from the rest, worst first */
+  unusual: RoomNote[];
+  /** rooms carrying floor-care tasks, and those tasks' minutes in all — Max Floor Care's, not EVS's */
+  floorCareRooms: number;
+  floorCareMinutes: number;
+}
+
+export const EMPTY_CHECK: TypeCheck = { rooms: 0, sqft: null, minutes: null, perHundred: null, unusual: [], floorCareRooms: 0, floorCareMinutes: 0 };
+const EMPTY = EMPTY_CHECK;
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
+
+/**
+ * The rooms of one type, looked at together. A room stands out when it is far bigger or smaller
+ * than the typical room (2.5× / under 0.4× the median, once there are 8 rooms to judge by), or
+ * when its minutes don't come from the formula alone — extras, or a room the formula times by
+ * size that still lands far from the rest.
+ */
+export function checkType(rules: Rules, spaces: ClassicSpace[], typeId: string): TypeCheck {
+  const rt = rules.roomTypes.find((x) => x.id === typeId);
+  const rooms = spaces.filter((sp) => typeIdFromLabelStrict(rules, sp.roomType) === typeId);
+  if (!rt || !rooms.length) return { ...EMPTY, rooms: rooms.length };
+  const f = gcFormula(rules, rt);
+  const rows = rooms.map((sp) => {
+    const m = roomMinutes(rules, sp);
+    const sqft = Number(sp.squareFeet) || 0;
+    return { sp, sqft, m, formula: gcMinutes(f, sqft) };
+  });
+  const sqfts = rows.map((r) => r.sqft), mins = rows.map((r) => r.m.cleaning);
+  const medSqft = median(sqfts), medMin = median(mins);
+  const judgeSize = rows.length >= 8 && medSqft > 0;
+
+  const unusual: RoomNote[] = [];
+  for (const r of rows) {
+    const reasons: string[] = [];
+    if (judgeSize && r.sqft > medSqft * 2.5) reasons.push(`${fmt(r.sqft)} sq ft — ${Math.round(r.sqft / medSqft)}× the typical ${fmt(medSqft)} sq ft`);
+    else if (judgeSize && r.sqft > 0 && r.sqft < medSqft * 0.4) reasons.push(`${fmt(r.sqft)} sq ft — well under the typical ${fmt(medSqft)} sq ft; is the shape right?`);
+    if (r.sqft <= 0) reasons.push("no square footage yet");
+    const extra = r.m.lines.filter((l) => !l.floorCare && !/^General Clean/.test(l.label));
+    const extraMin = extra.reduce((s, l) => s + l.minutes, 0);
+    if (extraMin >= 1.5) reasons.push(`+${fmt(extraMin)} min of extras: ${extra.map((l) => l.label.split(" — ")[0]).join(", ")}`);
+    if (!reasons.length && Math.abs(r.m.cleaning - medMin) >= 3 && rows.length >= 8) {
+      reasons.push(r.m.cleaning > medMin ? `${r.m.cleaning} min — most ${rt.label}s get about ${fmt(medMin)}` : `${r.m.cleaning} min — most ${rt.label}s get about ${fmt(medMin)}`);
+    }
+    if (!reasons.length) continue;
+    unusual.push({
+      id: r.sp.id, roomNumber: String(r.sp.roomNumber ?? ""), roomName: String(r.sp.roomName ?? ""),
+      sqft: r.sqft, minutes: r.m.cleaning, floorCare: r.m.floorCare, reasons
+    });
+  }
+  unusual.sort((a, b) => Math.abs(b.minutes - medMin) - Math.abs(a.minutes - medMin) || b.sqft - a.sqft);
+
+  const fcRows = rows.filter((r) => r.m.floorCare > 0);
+  return {
+    rooms: rows.length,
+    sqft: { min: Math.min(...sqfts), median: medSqft, max: Math.max(...sqfts) },
+    minutes: { min: Math.min(...mins), median: medMin, max: Math.max(...mins) },
+    perHundred: medSqft > 0 ? Math.round((medMin / medSqft) * 100 * 10) / 10 : null,
+    unusual,
+    floorCareRooms: fcRows.length,
+    floorCareMinutes: fcRows.reduce((s, r) => s + r.m.floorCare, 0)
+  };
+}
+
+/** every type's check at once — one pass over the rooms */
+export function checkAllTypes(rules: Rules, spaces: ClassicSpace[]): Map<string, TypeCheck> {
+  const out = new Map<string, TypeCheck>();
+  for (const rt of rules.roomTypes) out.set(rt.id, checkType(rules, spaces, rt.id));
+  return out;
+}
