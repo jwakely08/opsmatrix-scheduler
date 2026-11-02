@@ -1,7 +1,10 @@
-// ✎ Rename rooms (Josh, 2026-11-02): in Max Space's Map View — pick the rooms by rule (this floor
-// or the whole building, one room type or all, only rough names), choose the new name's pattern,
-// see exactly what changes, then one tap renames them all. A tap on the map leaves a room out or
-// puts one back; Undo takes the whole rename back. renameRooms.ts does the work.
+// ✎ Rename rooms (Josh, 2026-11-02): in Max Space's Map View — a side panel in three steps: which
+// rooms (this floor or the whole building, one room type or all, only unfinished names or every
+// name), what the new name should be (the room type; type + number; new letters + number + the name
+// it has now, through a letters table; or a pattern), then check the count and the before → after
+// list and tap Rename. A tap on the map leaves a room out or puts one back; Undo takes the whole
+// rename back. renameRooms.ts does the work. (The first version was a one-line bar in the filter
+// row; on the iPad its dropdown read as plain text and "rough names" meant nothing — Josh.)
 import React, { useMemo, useState } from "react";
 import type { ClassicData, ClassicSpace } from "./classicStore";
 import { typeIdFromLabelStrict, type Rules } from "./rules";
@@ -40,7 +43,7 @@ export function useRenameMode(opts: {
     setLettersRaw(next);
     try { localStorage.setItem(LETTERS_KEY, JSON.stringify(next)); } catch { /* storage off */ }
   };
-  // the letters preset keeps every room's name, rough or not — so the rough-only filter comes off with it
+  // the letters preset keeps every room's name, unfinished or not — so that filter comes off with it
   const setPreset = (id: string) => { setPresetRaw(id); if (id === "letters") setRoughOnly(false); };
   /** rooms tapped on the map: true = in, false = out, whatever the rule says */
   const [overrides, setOverrides] = useState<Map<string, boolean>>(new Map());
@@ -101,89 +104,112 @@ export function useRenameMode(opts: {
 
 export type RenameMode = ReturnType<typeof useRenameMode>;
 
-/** the rule, the new name, what will change, and the way out */
-export function RenameBar({ rename: r, rules, floorName }: { rename: RenameMode; rules: Rules; floorName: string }) {
+/** what each choice gives, in one line, so the choice explains itself */
+const CHOICE_HELP: Record<string, string> = {
+  type: "“Patient Room”, “Restroom” — whatever type the room has",
+  "type-number": "“Patient Room FPKb-101”",
+  letters: "FPKb-101 named “TLT” becomes “PKT101 TLT” — you choose the letters",
+  custom: "Your own pattern"
+};
+
+/** the panel: three steps, then the way out */
+export function RenamePanel({ rename: r, rules, floorName }: { rename: RenameMode; rules: Rules; floorName: string }) {
   const n = r.plan.changes.length;
   const alone = [
-    r.plan.noType ? `${r.plan.noType} with no room type` : "",
-    r.plan.soiled ? `${r.plan.soiled} soiled utility` : "",
-    r.plan.noRule ? `${r.plan.noRule} with letters not in the table` : ""
-  ].filter(Boolean).join(", ");
-  const more = r.groups.length - 3;
+    r.plan.noType ? `${r.plan.noType} with no room type to name ${r.plan.noType === 1 ? "it" : "them"} after` : "",
+    r.plan.soiled ? `${r.plan.soiled} soiled utility (the name has to keep that word)` : "",
+    r.plan.noRule ? `${r.plan.noRule} whose letters aren't in the table` : ""
+  ].filter(Boolean);
   const wantsLetters = /\{prefix\}/i.test(r.pattern);
   const editLetters = (i: number, patch: Partial<LetterRule>) =>
     r.setLetters(r.letters.map((row, j) => (j === i ? { ...row, ...patch } : row)));
+  const shown = r.showAll ? r.groups : r.groups.slice(0, 4);
+
   return (
-    <span className="linkhint schedlive renamebar">
-      <span>✎ Rename</span>
-      <select value={r.scope} onChange={(e) => r.setScope(e.target.value as "floor" | "building")} aria-label="Which rooms">
-        <option value="floor">This floor{floorName ? ` — ${floorName}` : ""}</option>
-        <option value="building">Whole building</option>
-      </select>
-      <select value={r.typeId} onChange={(e) => r.setTypeId(e.target.value)} aria-label="Room type">
-        <option value="">Every room type</option>
-        {rules.roomTypes.map((rt) => <option key={rt.id} value={rt.id}>{rt.label}</option>)}
-      </select>
-      <label className={"clonechk" + (r.roughOnly ? " on" : "")}
-        title="Blank names, the number again, codes like PK102PK103, abbreviations like PAT. RM.">
-        <input type="checkbox" checked={r.roughOnly} onChange={(e) => r.setRoughOnly(e.target.checked)} />
-        Only rough names
+    <aside className="pro-side renamepanel">
+      <div className="pshead">
+        <h2>✎ Rename rooms</h2>
+        <button className="pbtn ghost" onClick={r.stop}>✕</button>
+      </div>
+      <p className="pnote">Give many rooms a new name in one go. Nothing changes until you tap Rename, and Undo puts it all back.</p>
+
+      <div className="rstep"><b>1</b><span>Which rooms?</span></div>
+      <div className="seg" role="group" aria-label="Which rooms">
+        <button className={r.scope === "floor" ? "on" : ""} onClick={() => r.setScope("floor")}>This floor{floorName ? ` — ${floorName}` : ""}</button>
+        <button className={r.scope === "building" ? "on" : ""} onClick={() => r.setScope("building")}>Whole building</button>
+      </div>
+      <label className="pfield">Room type
+        <select value={r.typeId} onChange={(e) => r.setTypeId(e.target.value)} aria-label="Room type">
+          <option value="">Every room type</option>
+          {rules.roomTypes.map((rt) => <option key={rt.id} value={rt.id}>{rt.label}</option>)}
+        </select>
       </label>
-      <span>→ new name:</span>
-      <select value={r.preset} onChange={(e) => r.setPreset(e.target.value)} aria-label="New name">
-        {NAME_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-      </select>
+      <label className="pfield checkline">
+        <input type="checkbox" checked={r.roughOnly} onChange={(e) => r.setRoughOnly(e.target.checked)} aria-label="Only rooms whose name looks unfinished" />
+        <span>Only rooms whose name looks unfinished — blank, the room number again, codes like PK102PK103, abbreviations like PAT. RM.</span>
+      </label>
+
+      <div className="rstep"><b>2</b><span>What should the name be?</span></div>
+      <div className="choices" role="radiogroup" aria-label="New name">
+        {NAME_PRESETS.map((p) => (
+          <button key={p.id} role="radio" aria-checked={r.preset === p.id} className={"choice" + (r.preset === p.id ? " on" : "")}
+            onClick={() => r.setPreset(p.id)}>
+            <i>{r.preset === p.id ? "●" : "○"}</i>
+            <span><b>{p.label}</b><small>{CHOICE_HELP[p.id]}</small></span>
+          </button>
+        ))}
+      </div>
       {r.preset === "custom" && (
-        <input value={r.custom} onChange={(e) => r.setCustom(e.target.value)} style={{ minWidth: 170 }}
-          placeholder="{type} {number}" aria-label="Custom name pattern"
-          title={"Words plus any of " + PLACEHOLDERS + " — {prefix} and {num} are the room number's letters and number, {name} the name as it is now, {n} counts 1, 2, 3…"} />
+        <label className="pfield">Pattern
+          <input value={r.custom} onChange={(e) => r.setCustom(e.target.value)} placeholder="{type} {number}" aria-label="Custom name pattern" />
+          <small>Words plus any of {PLACEHOLDERS}. {"{prefix}"} and {"{num}"} are the room number's letters and number, {"{name}"} the name as it is now, {"{n}"} counts 1, 2, 3…</small>
+        </label>
       )}
       {wantsLetters && (
-        <span className="renameletters" title="The letters a room number starts with, and the letters the name should get instead. A room whose letters aren't in the table is left alone.">
-          <span>letters:</span>
+        <div className="pfield letters">
+          <span>Letters at the start of the room number → letters for the name</span>
           {r.letters.map((row, i) => (
-            <span key={i} className="letterrule">
+            <div key={i} className="letterrule">
               <input value={row.from} placeholder="FPKb" aria-label="Letters in the room number"
                 onChange={(e) => editLetters(i, { from: e.target.value })} />
               <i>→</i>
               <input value={row.to} placeholder="PKT" aria-label="Letters for the name"
                 onChange={(e) => editLetters(i, { to: e.target.value })} />
               {r.letters.length > 1 && (
-                <button className="chipx" aria-label="Remove this letters rule"
+                <button className="chipx" aria-label="Remove this row"
                   onClick={() => r.setLetters(r.letters.filter((_, j) => j !== i))}>✕</button>
               )}
-            </span>
+            </div>
           ))}
-          <button className="pbtn small" onClick={() => r.setLetters([...r.letters, { from: "", to: "" }])}>+ letters</button>
-        </span>
-      )}
-      <em className="renamecount">
-        <b>{n}</b> room{n === 1 ? "" : "s"} will change{alone ? ` · left alone: ${alone}` : ""}
-      </em>
-      {r.groups.slice(0, 3).map((g) => (
-        <i key={g.from + "→" + g.to}>
-          <s>{g.from || "(blank)"}</s> → <b>{g.to}</b>{g.count > 1 ? ` ×${g.count}` : ""}
-        </i>
-      ))}
-      {more > 0 && (
-        <button className="pbtn small" onClick={() => r.setShowAll(!r.showAll)}>
-          {r.showAll ? "Hide the list" : `+${more} more…`}
-        </button>
-      )}
-      {r.note && <em className={r.note.startsWith("✓") || r.note.startsWith("↶") ? "mergeok" : ""}>{r.note}</em>}
-      <button className="pbtn small primary" disabled={!n} onClick={r.apply}>✓ Rename {n || ""}</button>
-      {r.canUndo && <button className="pbtn small" onClick={r.undo}>↶ Undo</button>}
-      <button className="pbtn small" onClick={r.stop}>Done</button>
-      <small>The rooms that will change are outlined on the map. Tap one to leave it out, or tap any other room to add it.</small>
-      {r.showAll && (
-        <div className="renamelist">
-          {r.groups.map((g) => (
-            <span key={g.from + "→" + g.to}>
-              <s>{g.from || "(blank)"}</s> → <b>{g.to}</b>{g.count > 1 ? ` ×${g.count}` : ""}
-            </span>
-          ))}
+          <button className="pbtn small" onClick={() => r.setLetters([...r.letters, { from: "", to: "" }])}>+ another</button>
+          <small>A room whose letters aren't listed is left alone. Capitals don't matter.</small>
         </div>
       )}
-    </span>
+
+      <div className="rstep"><b>3</b><span>Check, then rename</span></div>
+      <p className="renamecount"><b>{n}</b> room{n === 1 ? "" : "s"} will change</p>
+      {alone.length > 0 && <p className="pnote">Left alone: {alone.join("; ")}.</p>}
+      {shown.length > 0 && (
+        <div className="rgroups">
+          {shown.map((g) => (
+            <div className="rgroup" key={g.from + "→" + g.to}>
+              <s>{g.from || "(blank)"}</s> → <b>{g.to}</b>{g.count > 1 && <em>×{g.count}</em>}
+            </div>
+          ))}
+          {r.groups.length > 4 && (
+            <button className="plink" onClick={() => r.setShowAll(!r.showAll)}>
+              {r.showAll ? "Show fewer" : `Show all ${r.groups.length}`}
+            </button>
+          )}
+        </div>
+      )}
+      <small className="pnote">The rooms that will change are outlined on the map. Tap one to leave it out; tap any other room to add it.</small>
+      {r.note && <p className={"pnote" + (r.note.startsWith("✓") || r.note.startsWith("↶") ? " keysaved" : "")}>{r.note}</p>}
+      <button className="pbtn primary wide" disabled={!n} onClick={r.apply}>
+        ✓ Rename{n ? ` ${n} room${n === 1 ? "" : "s"}` : ""}
+      </button>
+      {r.canUndo && <button className="pbtn wide" onClick={r.undo}>↶ Undo the last rename</button>}
+      <button className="pbtn wide" onClick={r.stop}>Done</button>
+    </aside>
   );
 }

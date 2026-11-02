@@ -22,7 +22,7 @@ import {
 } from "./SpacesApp";
 import { mergeRooms, type MergeStores } from "./mergeRooms";
 import { useCloneMode, CloneBar } from "./CloneMode";
-import { useRenameMode, RenameBar } from "./RenameMode";
+import { useRenameMode, RenamePanel } from "./RenameMode";
 import { IntakeSetup, IntakeProfileCard } from "./IntakeSetup";
 import { loadRoutes, saveRoutes, type RouteStore } from "./routes";
 import { loadFloorCare, saveFloorCare, type FcStore } from "./floorcare";
@@ -614,9 +614,6 @@ export function MapsApp() {
             );
           })()}
           {tab === "spaces" && spacesView === "map" && clone.on && <CloneBar clone={clone} rules={rules} />}
-          {tab === "spaces" && spacesView === "map" && rename.on && (
-            <RenameBar rename={rename} rules={rules} floorName={String(plan?.floor ?? "")} />
-          )}
         </div>
       )}
 
@@ -807,7 +804,11 @@ export function MapsApp() {
           />
         )}
 
-        {tab === "spaces" && spacesView === "map" && roomSelected && (
+        {/* ✎ Rename takes the sidebar's place while it's on: three steps beside the map */}
+        {tab === "spaces" && spacesView === "map" && rename.on && (
+          <RenamePanel rename={rename} rules={rules} floorName={String(plan?.floor ?? "")} />
+        )}
+        {tab === "spaces" && spacesView === "map" && roomSelected && !rename.on && (
           <SpaceSidebar
             key={roomSelected.id}
             space={roomSelected} rules={rules}

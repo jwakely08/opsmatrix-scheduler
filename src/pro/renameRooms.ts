@@ -21,12 +21,12 @@ export interface RenamePlan {
 
 /** the ready-made patterns, in the order the panel offers them */
 export const NAME_PRESETS: { id: string; label: string; pattern: string }[] = [
-  { id: "type", label: "Room type", pattern: "{type}" },
-  { id: "type-number", label: "Room type + number", pattern: "{type} {number}" },
+  { id: "type", label: "The room's type", pattern: "{type}" },
+  { id: "type-number", label: "The room's type + its number", pattern: "{type} {number}" },
   // Josh, 2026-11-02: "change the room number letter abbreviations to a specific value — FPKb to
   // PKT — then the number value, then whatever is already there for room name (TLT for a restroom)"
-  { id: "letters", label: "Letters + number + name", pattern: "{prefix}{num} {name}" },
-  { id: "custom", label: "Custom…", pattern: "" }
+  { id: "letters", label: "New letters + number + the name it has now", pattern: "{prefix}{num} {name}" },
+  { id: "custom", label: "My own pattern…", pattern: "" }
 ];
 
 /** one row of the letters table: the letters a room number starts with → the letters the name gets */
