@@ -1,0 +1,40 @@
+# One-time setup for the "Help from Claude" mailbox (functions/handoff): creates the KV namespace the
+# Pages Function binds as HANDOFF, using the same Cloudflare token the staging deploy uses — so no
+# secret ever leaves GitHub. Run it by hand once (Actions → this workflow → Run workflow), copy the
+# namespace id it prints into wrangler.toml, and never again.
+name: Handoff mailbox — KV setup (run once)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kv:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: List the account's KV namespaces (idempotent — reuse HANDOFF if it already exists)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: kv namespace list
+      - name: Create the HANDOFF namespace (fails harmlessly if it already exists)
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: kv namespace create HANDOFF
+      - name: List again, so the id is in the log either way
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: kv namespace list
