@@ -190,7 +190,8 @@ const sheetSafe = (s: string) =>
 export function planClientPages(input: ClientExportInput): ClientPagePlan {
   const head: CellPatch[] = [
     { ref: "B2", text: input.scheduleName },
-    { ref: "E2", text: input.orgName }
+    // the organization's name only when one is saved — blank leaves the template's own text
+    ...(input.orgName ? [{ ref: "E2", text: input.orgName }] : [])
   ];
   const days = daysLabel(input.days);
   if (days) head.push({ ref: "B3", text: days });
