@@ -1644,3 +1644,6 @@ input[type="checkbox"], input[type="radio"] {
 /* the print preview's "Show minutes" switch */
 .printbar .printopt { display: inline-flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 13px; margin-right: 10px; }
 .printbar .printopt input { width: 18px; height: 18px; accent-color: #0d9488; }
+/* the account's General Clean list: its summary sits under the chips, not beside them */
+.gcglobal .ptasks.inline { margin: 6px 0; }
+.gcglobal small.pnote { display: block; margin-top: 8px; }
