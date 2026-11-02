@@ -6,6 +6,11 @@ name: Handoff mailbox — KV setup (run once)
 
 on:
   workflow_dispatch:
+  # GitHub only lets a hand-run workflow start once it exists on the default branch, so the first
+  # run rides on a push of this branch; the trigger below comes off again once the id is known
+  push:
+    branches: [claude/handoff]
+    paths: [.github/workflows/handoff-kv-setup.yml]
 
 permissions:
   contents: read
