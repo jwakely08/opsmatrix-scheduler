@@ -9,8 +9,8 @@ import React, { useMemo, useState } from "react";
 import type { ClassicData, ClassicSpace } from "./classicStore";
 import { typeIdFromLabelStrict, type Rules } from "./rules";
 import {
-  NAME_PRESETS, PLACEHOLDERS, applyRename, looksRough, planRename, renameGroups, undoRename,
-  type LetterRule, type RenameChange
+  LETTER_ENDINGS, NAME_PRESETS, PLACEHOLDERS, applyRename, looksRough, planRename, renameGroups, typeKey, typeWord,
+  undoRename, type LetterRule, type RenameChange, type TypeAbbr
 } from "./renameRooms";
 
 /** the letters table is remembered per device — the same abbreviations come up building after building */
@@ -22,6 +22,18 @@ function loadLetters(): LetterRule[] {
   } catch { /* storage off */ }
   return [{ from: "", to: "" }];
 }
+/** so are the room types' short forms (Patient Room → PT RM), keyed by the type's name */
+const ABBR_KEY = "om_rename_type_abbr";
+function loadAbbr(): TypeAbbr {
+  try {
+    const v = JSON.parse(localStorage.getItem(ABBR_KEY) ?? "null");
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      return Object.fromEntries(Object.entries(v).map(([k, s]) => [typeKey(k), String(s ?? "")]));
+    }
+  } catch { /* storage off */ }
+  return {};
+}
+type Ending = (typeof LETTER_ENDINGS)[number]["id"];
 
 export function useRenameMode(opts: {
   /** the rooms on the floor being shown */
@@ -43,7 +55,15 @@ export function useRenameMode(opts: {
     setLettersRaw(next);
     try { localStorage.setItem(LETTERS_KEY, JSON.stringify(next)); } catch { /* storage off */ }
   };
-  // the letters preset keeps every room's name, unfinished or not — so that filter comes off with it
+  // what follows the letters and number, and the room types' short forms for the "shortened" ending
+  const [ending, setEnding] = useState<Ending>("name");
+  const [typeAbbr, setTypeAbbrRaw] = useState<TypeAbbr>(loadAbbr);
+  const setAbbr = (label: string, short: string) => {
+    const next = { ...typeAbbr, [typeKey(label)]: short };
+    setTypeAbbrRaw(next);
+    try { localStorage.setItem(ABBR_KEY, JSON.stringify(next)); } catch { /* storage off */ }
+  };
+  // the letters preset renames every room picked, unfinished name or not — so that filter comes off with it
   const setPreset = (id: string) => { setPresetRaw(id); if (id === "letters") setRoughOnly(false); };
   /** rooms tapped on the map: true = in, false = out, whatever the rule says */
   const [overrides, setOverrides] = useState<Map<string, boolean>>(new Map());
@@ -51,7 +71,9 @@ export function useRenameMode(opts: {
   const [note, setNote] = useState("");
   const [showAll, setShowAll] = useState(false);
 
-  const pattern = preset === "custom" ? custom : (NAME_PRESETS.find((p) => p.id === preset)?.pattern ?? "{type}");
+  const pattern = preset === "custom" ? custom
+    : preset === "letters" ? (LETTER_ENDINGS.find((e) => e.id === ending) ?? LETTER_ENDINGS[0]).pattern
+      : (NAME_PRESETS.find((p) => p.id === preset)?.pattern ?? "{type}");
   const pool = scope === "floor" ? floorSpaces : buildingSpaces;
   const byRule = (sp: ClassicSpace) =>
     (!typeId || typeIdFromLabelStrict(rules, sp.roomType) === typeId) &&
@@ -61,7 +83,18 @@ export function useRenameMode(opts: {
     [pool, typeId, roughOnly, overrides, rules] // eslint-disable-line react-hooks/exhaustive-deps
   );
   const pickedIds = useMemo(() => new Set(picked.map((s) => s.id)), [picked]);
-  const plan = useMemo(() => planRename(picked, pattern, letters), [picked, pattern, letters]);
+  /** the room types among the picked rooms, most rooms first — the rows of the short-forms table */
+  const pickedTypes = useMemo(() => {
+    const m = new Map<string, { label: string; count: number }>();
+    for (const sp of picked) {
+      const t = typeWord(sp);
+      if (!t) continue;
+      const e = m.get(typeKey(t));
+      if (e) e.count++; else m.set(typeKey(t), { label: t, count: 1 });
+    }
+    return [...m.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  }, [picked]);
+  const plan = useMemo(() => planRename(picked, pattern, letters, typeAbbr), [picked, pattern, letters, typeAbbr]);
   const groups = useMemo(() => renameGroups(plan.changes), [plan]);
 
   const reset = (next: boolean) => {
@@ -72,7 +105,8 @@ export function useRenameMode(opts: {
 
   return {
     on, scope, setScope, typeId, setTypeId, roughOnly, setRoughOnly, preset, setPreset, custom, setCustom,
-    letters, setLetters, pattern, picked: pickedIds, plan, groups, note, showAll, setShowAll,
+    letters, setLetters, ending, setEnding, typeAbbr, setAbbr, pickedTypes,
+    pattern, picked: pickedIds, plan, groups, note, showAll, setShowAll,
     canUndo: Boolean(last?.length),
     start: () => reset(true),
     stop: () => reset(false),
@@ -108,7 +142,7 @@ export type RenameMode = ReturnType<typeof useRenameMode>;
 const CHOICE_HELP: Record<string, string> = {
   type: "“Patient Room”, “Restroom” — whatever type the room has",
   "type-number": "“Patient Room FPKb-101”",
-  letters: "FPKb-101 named “TLT” becomes “PKT101 TLT” — you choose the letters",
+  letters: "FPKb-101 becomes PKT101, then an ending you pick: its current name (TLT), the room type shortened (PT RM), the full type, or nothing",
   custom: "Your own pattern"
 };
 
@@ -121,6 +155,7 @@ export function RenamePanel({ rename: r, rules, floorName }: { rename: RenameMod
     r.plan.noRule ? `${r.plan.noRule} whose letters aren't in the table` : ""
   ].filter(Boolean);
   const wantsLetters = /\{prefix\}/i.test(r.pattern);
+  const wantsAbbr = /\{typeabbr\}/i.test(r.pattern);
   const editLetters = (i: number, patch: Partial<LetterRule>) =>
     r.setLetters(r.letters.map((row, j) => (j === i ? { ...row, ...patch } : row)));
   const shown = r.showAll ? r.groups : r.groups.slice(0, 4);
@@ -183,6 +218,31 @@ export function RenamePanel({ rename: r, rules, floorName }: { rename: RenameMod
           ))}
           <button className="pbtn small" onClick={() => r.setLetters([...r.letters, { from: "", to: "" }])}>+ another</button>
           <small>A room whose letters aren't listed is left alone. Capitals don't matter.</small>
+        </div>
+      )}
+      {r.preset === "letters" && (
+        <div className="pfield">
+          <span>Then, after the number</span>
+          <div className="seg wrap" role="group" aria-label="Ending">
+            {LETTER_ENDINGS.map((e) => (
+              <button key={e.id} className={r.ending === e.id ? "on" : ""} onClick={() => r.setEnding(e.id)}>{e.label}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {wantsAbbr && (
+        <div className="pfield abbrs">
+          <span>Short form for each room type here</span>
+          {r.pickedTypes.map((t) => (
+            <div key={t.label} className="letterrule">
+              <span className="tlabel">{t.label}<em>×{t.count}</em></span>
+              <i>→</i>
+              <input value={r.typeAbbr[typeKey(t.label)] ?? ""} placeholder={t.label} aria-label={"Short form for " + t.label}
+                onChange={(e) => r.setAbbr(t.label, e.target.value)} />
+            </div>
+          ))}
+          {!r.pickedTypes.length && <small>No rooms picked yet — pick the floor and room type above.</small>}
+          <small>Leave one blank to use the full name. Remembered for next time.</small>
         </div>
       )}
 
