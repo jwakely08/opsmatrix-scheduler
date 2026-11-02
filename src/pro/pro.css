@@ -1609,3 +1609,8 @@ input[type="checkbox"], input[type="radio"] {
 .schedround .pnote b { color: #5eead4; }
 .schedroom.round b { color: #5eead4; }
 .schedroom.round .ordnum { background: rgba(13,148,136,.25); color: #5eead4; }
+/* the letters table: FPKb → PKT */
+.renameletters { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.renameletters .letterrule { display: inline-flex; align-items: center; gap: 4px; }
+.renameletters .letterrule input { width: 74px; font-family: Consolas, "SF Mono", monospace; }
+.renameletters .letterrule i { font-style: normal; color: #94a3b8; }
