@@ -92,7 +92,7 @@ const FLOOR_TASK_DEFAULTS: Record<string, { autoForFloor: FloorKind[]; floorSkip
  * How a room type builds its General Clean time (Josh, 2026-10-12):
  * by size (sq ft ÷ rate), a fixed number of minutes per room, or both.
  */
-export type GcMethod = "size" | "fixed" | "both";
+export type GcMethod = "size" | "fixed" | "both" | "none";
 
 /** the unit a rate is TYPED in — a hospital's numbers go in exactly as given */
 export type RateUnit = "sqftPerHour" | "sqftPerMin" | "minPer100" | "minPer1000";
@@ -104,6 +104,10 @@ export interface RoomTypeRule {
    * The room type's General Clean formula — General Clean ACTIVATES it.
    * Floor type never changes it, and nothing else adds to it: a room that
    * needs more gets an extra task, a room that differs gets its own type.
+   * "none" (Josh, 2026-11-02: "you're not going to clean a corridor like a
+   * patient room") = this type has NO General Clean — its time is its tasks
+   * alone (high dusting, trash pull, spot mopping on a corridor), nothing is
+   * "included", and schedules never print General Clean for it.
    * Optional only because rules saved before 2026-10-12 lack it; loadRules
    * fills it in (gcFormula reads an unmigrated type the same way).
    */
@@ -445,6 +449,7 @@ export function gcFormula(rules: Rules, rt: RoomTypeRule): GcFormula {
 
 /** minutes the formula gives a room of `sqft` — unrounded, so audits reproduce */
 export function gcMinutes(f: GcFormula, sqft: number): number {
+  if (f.method === "none") return 0;
   const fixed = f.method === "size" ? 0 : f.fixedMin;
   const size = f.method === "fixed" || !(f.sqftPerHour > 0) ? 0 : (Number(sqft) || 0) * 60 / f.sqftPerHour;
   return fixed + size;
@@ -469,6 +474,7 @@ const timesUnit = (f: GcFormula) => f.rateUnit === "minPer100" || f.rateUnit ===
 export function gcText(typeLabel: string, f: GcFormula, sqft: number): string {
   const total = fmtNum(gcMinutes(f, sqft));
   const size = `${fmtNum(Number(sqft) || 0)} sq ft ${timesUnit(f) ? "×" : "÷"} ${rateText(f)}`;
+  if (f.method === "none") return `${typeLabel}: no General Clean — its tasks make up the time`;
   if (f.method === "fixed") return `${typeLabel}: ${fmtNum(f.fixedMin)} min`;
   if (f.method === "size") return `${typeLabel}: ${size} = ${total} min`;
   return `${typeLabel}: ${fmtNum(f.fixedMin)} min + ${size} = ${total} min`;
@@ -477,9 +483,21 @@ export function gcText(typeLabel: string, f: GcFormula, sqft: number): string {
 /** the formula in words, no room: "4 min + sq ft ÷ 2,150 sq ft/hr" */
 export function gcFormulaText(f: GcFormula): string {
   const size = `sq ft ${timesUnit(f) ? "×" : "÷"} ${rateText(f)}`;
+  if (f.method === "none") return "no General Clean — tasks only";
   if (f.method === "fixed") return `${fmtNum(f.fixedMin)} min per room`;
   if (f.method === "size") return size;
   return `${fmtNum(f.fixedMin)} min + ${size}`;
+}
+
+/**
+ * Does this room get a General Clean at all? No when the account deleted the formula, or when the
+ * room's type is timed by its tasks alone ("none"). A room whose type is unknown prices as an
+ * office, General Clean and all.
+ */
+export function hasGeneralClean(rules: Rules, space: { roomType?: string }): boolean {
+  if (rules.general.formulaOff) return false;
+  const rt = rules.roomTypes.find((x) => x.id === typeIdFromLabel(rules, space.roomType ?? ""));
+  return !rt || gcFormula(rules, rt).method !== "none";
 }
 
 /** "ISSA Medical / clinical" while the formula is still ISSA's own, else null */
@@ -499,9 +517,10 @@ export function resetToIssa(rules: Rules, rt: RoomTypeRule, categoryId?: string)
   rt.rateUnit = "sqftPerHour";
 }
 
-/** tasks a type's General Clean already covers */
+/** tasks a type's General Clean already covers — nothing, for a type with no General Clean */
 export function includedTasksFor(rules: Rules, typeId: string): string[] {
   const rt = rules.roomTypes.find((x) => x.id === typeId);
+  if (rt && gcFormula(rules, rt).method === "none") return [];
   return rt?.includedTasks ?? defaultIncluded(rules);
 }
 
@@ -1019,9 +1038,10 @@ export function computeMinutes(
   const typeId = typeIdFromLabel(rules, space.roomType ?? "");
   const rt = rules.roomTypes.find((x) => x.id === typeId);
 
-  if (includeBase && !rules.general.formulaOff) {
+  if (includeBase && hasGeneralClean(rules, space)) {
     // ONE line: the room type's own formula, worked out. Floor type never
     // changes it and there is no minimum — the time is the pure formula.
+    // (A type timed by its tasks alone has no line here at all.)
     const g = generalCleanLine(rules, space);
     lines.push({ label: "General Clean — " + g.text, minutes: g.minutes });
   }

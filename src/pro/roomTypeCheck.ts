@@ -11,7 +11,7 @@
 // Pure and unit-tested; Scope's room-type cards and Max Space's room sidebar show it.
 import type { ClassicSpace } from "./classicStore";
 import {
-  computeMinutes, gcFormula, gcMinutes, isFloorCareTask, requiredTasks, typeIdFromLabelStrict, type Rules
+  autoTasksFor, computeMinutes, gcFormula, isFloorCareTask, requiredTasks, typeIdFromLabelStrict, type Rules
 } from "./rules";
 
 export interface MinuteLine { label: string; minutes: number; floorCare: boolean }
@@ -79,18 +79,23 @@ const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 /**
  * The rooms of one type, looked at together. A room stands out when it is far bigger or smaller
  * than the typical room (2.5× / under 0.4× the median, once there are 8 rooms to judge by), or
- * when its minutes don't come from the formula alone — extras, or a room the formula times by
- * size that still lands far from the rest.
+ * when its minutes aren't what the rulebook gives a room of its size and type — the type's formula
+ * plus the extras the type and its floor hand out automatically: a task added by hand, a usual
+ * task taken off, or a formula that doesn't fit.
  */
 export function checkType(rules: Rules, spaces: ClassicSpace[], typeId: string): TypeCheck {
   const rt = rules.roomTypes.find((x) => x.id === typeId);
   const rooms = spaces.filter((sp) => typeIdFromLabelStrict(rules, sp.roomType) === typeId);
   if (!rt || !rooms.length) return { ...EMPTY, rooms: rooms.length };
-  const f = gcFormula(rules, rt);
+  const label = (id: string) => rules.tasks.find((t) => t.id === id)?.label ?? id;
   const rows = rooms.map((sp) => {
     const m = roomMinutes(rules, sp);
     const sqft = Number(sp.squareFeet) || 0;
-    return { sp, sqft, m, formula: gcMinutes(f, sqft) };
+    // what the rulebook alone would give this room: its type's formula + the type's/floor's automatic tasks
+    const auto = autoTasksFor(rules, rt.id, sp.floorType).filter((t) => !isFloorCareTask(rules, t));
+    const expected = computeMinutes(rules, { ...sp, spaceTasks: auto }, { tasks: auto, includeBase: true }).total;
+    const own = requiredTasks(rules, sp).filter((t) => !isFloorCareTask(rules, t));
+    return { sp, sqft, m, expected, added: own.filter((t) => !auto.includes(t)), missing: auto.filter((t) => !own.includes(t)) };
   });
   const sqfts = rows.map((r) => r.sqft), mins = rows.map((r) => r.m.cleaning);
   const medSqft = median(sqfts), medMin = median(mins);
@@ -102,11 +107,14 @@ export function checkType(rules: Rules, spaces: ClassicSpace[], typeId: string):
     if (judgeSize && r.sqft > medSqft * 2.5) reasons.push(`${fmt(r.sqft)} sq ft — ${Math.round(r.sqft / medSqft)}× the typical ${fmt(medSqft)} sq ft`);
     else if (judgeSize && r.sqft > 0 && r.sqft < medSqft * 0.4) reasons.push(`${fmt(r.sqft)} sq ft — well under the typical ${fmt(medSqft)} sq ft; is the shape right?`);
     if (r.sqft <= 0) reasons.push("no square footage yet");
-    const extra = r.m.lines.filter((l) => !l.floorCare && !/^General Clean/.test(l.label));
-    const extraMin = extra.reduce((s, l) => s + l.minutes, 0);
-    if (extraMin >= 1.5) reasons.push(`+${fmt(extraMin)} min of extras: ${extra.map((l) => l.label.split(" — ")[0]).join(", ")}`);
-    if (!reasons.length && Math.abs(r.m.cleaning - medMin) >= 3 && rows.length >= 8) {
-      reasons.push(r.m.cleaning > medMin ? `${r.m.cleaning} min — most ${rt.label}s get about ${fmt(medMin)}` : `${r.m.cleaning} min — most ${rt.label}s get about ${fmt(medMin)}`);
+    const diff = r.m.cleaning - r.expected;
+    if (Math.abs(diff) >= 2) {
+      if (r.added.length) reasons.push(`${diff > 0 ? "+" : ""}${fmt(diff)} min: added by hand — ${r.added.map(label).join(", ")}`);
+      else if (r.missing.length) reasons.push(`${fmt(diff)} min: without the usual ${r.missing.map(label).join(", ")}`);
+      else reasons.push(`${r.m.cleaning} min — the rulebook gives ${fmt(r.expected)} for a ${rt.label} this size`);
+    } else if (!reasons.length && r.added.length && r.m.lines.some((l) => !l.floorCare && r.added.some((t) => l.label.startsWith(label(t))))) {
+      // a small added task still deserves a mention, so nothing is hidden
+      reasons.push(`added by hand — ${r.added.map(label).join(", ")}`);
     }
     if (!reasons.length) continue;
     unusual.push({
