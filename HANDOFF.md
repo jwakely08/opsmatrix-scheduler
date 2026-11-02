@@ -1005,3 +1005,23 @@ git add -A && git commit && git push          # Pages deploys automatically (~35
 5. Never claim success without running the tests and verifying in the browser; report failures honestly (Josh explicitly audited honesty once — see §8 history note).
 6. Commit + push only when green; every push goes live.
 7. Never commit, bundle, or default an API key; never load third-party scripts from a CDN into pages that hold the key (vendor them, like pdf.js).
+
+## 12ab. "HELP FROM CLAUDE" — the on/off switch for Claude to edit a device's data (2026-11-02)
+
+Josh: "I want you to be able to edit the schedules for me currently on the OpsMatrix iPad session, at
+request only… find an on/off switch." Scope → **Help from Claude** (under Data backup). OFF — the
+default, the app exactly as before: nothing leaves the device. ON — the device makes a 16-character
+code (A–Z, 2–7) and keeps its workspace (every store but the Calibration Editor's pictures; the API key
+stripped as always) in the OpsMatrix mailbox under that code, re-sending on change (15 s fingerprint
+tick + visibilitychange), and polls the mailbox for a change set Claude left: a banner on every hub page
+says what's in it, Apply replaces only the carried stores (device key re-injected) and reloads, Discard
+drops it; each set is offered once. OFF empties the mailbox; auto-off after 12 h; mailbox TTL 48 h.
+- Mailbox: `functions/handoff/[[path]].js` — a Cloudflare Pages Function in the `opsmatrix` Pages project
+  over KV binding `HANDOFF` (routes in the file header). CORS for the OpsMatrix origins only. The code is
+  the only key. One-time setup: `.github/workflows/handoff-kv-setup.yml` creates the namespace with the
+  deploy token (needs `Workers KV Storage → Edit` on it); its id goes in `wrangler.toml`.
+- Device: `src/pro/handoff.ts` (pure helpers + Mailbox client, tested) and `src/pro/HandoffCard.tsx`
+  (`useHandoff` engine at MapsApp level, card, banner, ✉ chip). Device-local keys `om_handoff`
+  (state) and `om_handoff_url` (mailbox override for tests) — not workspace stores.
+- Claude's side: `scripts/handoff-cli.mjs status|get|send|clear|close <code>` — `get` writes a
+  restorable backup file, `send` wraps `baseRev` from status so a stale set is flagged; counts only.
