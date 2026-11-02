@@ -6,8 +6,19 @@ import React, { useMemo, useState } from "react";
 import type { ClassicData, ClassicSpace } from "./classicStore";
 import { typeIdFromLabelStrict, type Rules } from "./rules";
 import {
-  NAME_PRESETS, applyRename, looksRough, planRename, renameGroups, undoRename, type RenameChange
+  NAME_PRESETS, PLACEHOLDERS, applyRename, looksRough, planRename, renameGroups, undoRename,
+  type LetterRule, type RenameChange
 } from "./renameRooms";
+
+/** the letters table is remembered per device — the same abbreviations come up building after building */
+const LETTERS_KEY = "om_rename_letters";
+function loadLetters(): LetterRule[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(LETTERS_KEY) ?? "null");
+    if (Array.isArray(v) && v.length) return v.map((r) => ({ from: String(r?.from ?? ""), to: String(r?.to ?? "") }));
+  } catch { /* storage off */ }
+  return [{ from: "", to: "" }];
+}
 
 export function useRenameMode(opts: {
   /** the rooms on the floor being shown */
@@ -22,8 +33,15 @@ export function useRenameMode(opts: {
   const [scope, setScope] = useState<"floor" | "building">("floor");
   const [typeId, setTypeId] = useState("");
   const [roughOnly, setRoughOnly] = useState(true);
-  const [preset, setPreset] = useState("type");
+  const [preset, setPresetRaw] = useState("type");
   const [custom, setCustom] = useState("{type} {number}");
+  const [letters, setLettersRaw] = useState<LetterRule[]>(loadLetters);
+  const setLetters = (next: LetterRule[]) => {
+    setLettersRaw(next);
+    try { localStorage.setItem(LETTERS_KEY, JSON.stringify(next)); } catch { /* storage off */ }
+  };
+  // the letters preset keeps every room's name, rough or not — so the rough-only filter comes off with it
+  const setPreset = (id: string) => { setPresetRaw(id); if (id === "letters") setRoughOnly(false); };
   /** rooms tapped on the map: true = in, false = out, whatever the rule says */
   const [overrides, setOverrides] = useState<Map<string, boolean>>(new Map());
   const [last, setLast] = useState<RenameChange[] | null>(null);
@@ -40,7 +58,7 @@ export function useRenameMode(opts: {
     [pool, typeId, roughOnly, overrides, rules] // eslint-disable-line react-hooks/exhaustive-deps
   );
   const pickedIds = useMemo(() => new Set(picked.map((s) => s.id)), [picked]);
-  const plan = useMemo(() => planRename(picked, pattern), [picked, pattern]);
+  const plan = useMemo(() => planRename(picked, pattern, letters), [picked, pattern, letters]);
   const groups = useMemo(() => renameGroups(plan.changes), [plan]);
 
   const reset = (next: boolean) => {
@@ -51,7 +69,7 @@ export function useRenameMode(opts: {
 
   return {
     on, scope, setScope, typeId, setTypeId, roughOnly, setRoughOnly, preset, setPreset, custom, setCustom,
-    pattern, picked: pickedIds, plan, groups, note, showAll, setShowAll,
+    letters, setLetters, pattern, picked: pickedIds, plan, groups, note, showAll, setShowAll,
     canUndo: Boolean(last?.length),
     start: () => reset(true),
     stop: () => reset(false),
@@ -88,9 +106,13 @@ export function RenameBar({ rename: r, rules, floorName }: { rename: RenameMode;
   const n = r.plan.changes.length;
   const alone = [
     r.plan.noType ? `${r.plan.noType} with no room type` : "",
-    r.plan.soiled ? `${r.plan.soiled} soiled utility` : ""
+    r.plan.soiled ? `${r.plan.soiled} soiled utility` : "",
+    r.plan.noRule ? `${r.plan.noRule} with letters not in the table` : ""
   ].filter(Boolean).join(", ");
   const more = r.groups.length - 3;
+  const wantsLetters = /\{prefix\}/i.test(r.pattern);
+  const editLetters = (i: number, patch: Partial<LetterRule>) =>
+    r.setLetters(r.letters.map((row, j) => (j === i ? { ...row, ...patch } : row)));
   return (
     <span className="linkhint schedlive renamebar">
       <span>✎ Rename</span>
@@ -114,7 +136,26 @@ export function RenameBar({ rename: r, rules, floorName }: { rename: RenameMode;
       {r.preset === "custom" && (
         <input value={r.custom} onChange={(e) => r.setCustom(e.target.value)} style={{ minWidth: 170 }}
           placeholder="{type} {number}" aria-label="Custom name pattern"
-          title="Words plus {type}, {number}, {n} (1, 2, 3…), {floor} or {dept}" />
+          title={"Words plus any of " + PLACEHOLDERS + " — {prefix} and {num} are the room number's letters and number, {name} the name as it is now, {n} counts 1, 2, 3…"} />
+      )}
+      {wantsLetters && (
+        <span className="renameletters" title="The letters a room number starts with, and the letters the name should get instead. A room whose letters aren't in the table is left alone.">
+          <span>letters:</span>
+          {r.letters.map((row, i) => (
+            <span key={i} className="letterrule">
+              <input value={row.from} placeholder="FPKb" aria-label="Letters in the room number"
+                onChange={(e) => editLetters(i, { from: e.target.value })} />
+              <i>→</i>
+              <input value={row.to} placeholder="PKT" aria-label="Letters for the name"
+                onChange={(e) => editLetters(i, { to: e.target.value })} />
+              {r.letters.length > 1 && (
+                <button className="chipx" aria-label="Remove this letters rule"
+                  onClick={() => r.setLetters(r.letters.filter((_, j) => j !== i))}>✕</button>
+              )}
+            </span>
+          ))}
+          <button className="pbtn small" onClick={() => r.setLetters([...r.letters, { from: "", to: "" }])}>+ letters</button>
+        </span>
       )}
       <em className="renamecount">
         <b>{n}</b> room{n === 1 ? "" : "s"} will change{alone ? ` · left alone: ${alone}` : ""}
