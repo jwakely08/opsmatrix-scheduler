@@ -55,9 +55,10 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
           <h1>DAILY HOUSEKEEPING SCHEDULE</h1>
           <p>Environmental Services · {doc.name}</p>
         </div>
+        {/* no product branding on the printed sheet (Josh, 2026-11-02) — the schedule number stands here */}
         <div className="pbrand">
-          <b>OpsMatrix</b>
-          <span>Schedule #{doc.num}</span>
+          <b>Schedule #{doc.num}</b>
+          <span>{doc.date}</span>
         </div>
       </header>
 
@@ -169,7 +170,7 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
       <SummaryStrip doc={doc} />
 
       <footer className="pfoot">
-        <span>OpsMatrix EVS Management System · For Internal Use Only</span>
+        <span>For Internal Use Only</span>
         <span>See reverse for your area on the floor plan</span>
         <span>Page 1 of 2 · Schedule #{doc.num} · {doc.shift}</span>
       </footer>
@@ -322,7 +323,7 @@ function PageTwo({ doc, plan, spaces }: {
           <h1>YOUR AREA — {doc.name.toUpperCase()}</h1>
           <p>Clean the rooms in the numbered order · Schedule #{doc.num} · {doc.shift}</p>
         </div>
-        <div className="pbrand"><b>OpsMatrix</b><span>{doc.date}</span></div>
+        <div className="pbrand"><b>Schedule #{doc.num}</b><span>{doc.date}</span></div>
       </header>
 
       <div className="pmapbox">
@@ -361,7 +362,7 @@ function PageTwo({ doc, plan, spaces }: {
       <SummaryStrip doc={doc} />
 
       <footer className="pfoot">
-        <span>OpsMatrix EVS Management System · For Internal Use Only</span>
+        <span>For Internal Use Only</span>
         <span>Page 2 of 2 · Schedule #{doc.num}</span>
       </footer>
     </section>

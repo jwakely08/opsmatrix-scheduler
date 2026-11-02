@@ -64,6 +64,13 @@ import {
 
 const WALL_STROKE = 13;
 const GRAY = "#517299"; // unscheduled: holo slate-blue, not dead gray
+/** a schedule's color toned down toward the map's resting grey — the OTHER schedules while one is being edited */
+function dimColor(hex: string): string {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const rest = [0x33, 0x40, 0x4d]; // "#33404d", the unscheduled fill
+  return "#" + m.slice(1).map((h, i) => Math.round((parseInt(h, 16) + rest[i]) / 2).toString(16).padStart(2, "0")).join("");
+}
 /** the print preview's "Show minutes" choice, remembered per device (Josh, 2026-11-02) */
 const PRINT_MINUTES_KEY = "om_print_minutes";
 const RED = "#dc2626";
@@ -565,7 +572,7 @@ export function MapsApp() {
             return (
               <span className="linkhint schedlive">
                 ✏ Editing <b style={{ color: String(schedSelected.color) }}>{schedSelected.num} {schedSelected.name}</b> —
-                click rooms to add/remove
+                click rooms to add/remove · other schedules show lighter in their colors
                 <em className={"schedlivemins" + (liveMins > liveTarget ? " over" : "")}>{liveMins}m of {liveTarget}m</em>
                 <HoursBar minutes={liveMins + liveCap.paidBreakMinutes} />
                 <button className="pbtn small primary" onClick={() => setSchedSel(null)}>Done</button>
@@ -652,8 +659,12 @@ export function MapsApp() {
               const active = !anyFilter || matches(sp);
               if (!active) return "#33404d";
               if (schedSelected) {
-                const cov = coverageForSpace(data, sp.id).find((c) => c.scheduleId === schedSelected.id);
-                return cov ? String(schedSelected.color) : "#33404d";
+                const cov = coverageForSpace(data, sp.id);
+                if (cov.some((c) => c.scheduleId === schedSelected.id)) return String(schedSelected.color);
+                // the other schedules stay in sight in their own colors, toned down, so a room already
+                // taken is plain to see while assigning (Josh, 2026-11-02)
+                const other = cov.find((c) => c.primary) ?? cov[0];
+                return other ? dimColor(scheduleColor(schedules, other.scheduleId)) : "#33404d";
               }
               const primary = coverageForSpace(data, sp.id).find((c) => c.primary);
               return scheduleColor(schedules, primary?.scheduleId);
@@ -1619,7 +1630,9 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
     const orgName = String(((data.v7.settings ?? {}) as Record<string, unknown>).orgName ?? "").trim();
     return {
       scheduleName: [s.num, s.name].filter(Boolean).join(" · "),
-      orgName: orgName || "OpsMatrix",
+      // no product name on a client's sheet (Josh, 2026-11-02): with no organization name saved, the
+      // template's own text stands
+      orgName,
       days: s.days,
       hoursStart: s.hoursStart,
       hoursEnd: s.hoursEnd,
