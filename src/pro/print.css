@@ -114,6 +114,14 @@
 }
 .pdutyrow .c-ord { color: #8a6508; font-size: 9pt; }
 .pdutyrow .c-type { color: #7a5c07; }
+/* ↻ the end-of-day round: back through the rooms after every one is done */
+.pround td {
+  background: #e6f4f1 !important; border-top: 1.5px solid #1a7a7a; border-bottom: 1.5px solid #1a7a7a;
+  text-align: center; font-weight: 700; letter-spacing: .09em; font-size: 8.6pt; color: #145f5f; padding: 6px;
+}
+.pround { break-inside: avoid; page-break-inside: avoid; }
+.prooms tr.proundrow td { background: #f3faf8 !important; }
+.proundrow .c-ord { color: #145f5f; font-size: 9pt; }
 
 .pempty { text-align: center; color: #7b8794; padding: 18px !important; font-style: italic; }
 

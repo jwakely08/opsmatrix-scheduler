@@ -34,8 +34,18 @@ export interface TaskRule {
    */
   frequency?: string;
   frequencyFor?: Record<string, string>;
+  /**
+   * WHEN in the shift the task is done (Josh, 2026-11-02: "the second trash pick up is supposed
+   * to happen at the end of the day"): absent = with the room's own clean; "end-of-day" = on a
+   * return visit in the end-of-day round, after every room is finished. The room still owns the
+   * task and the schedule still covers it — only the printed running order moves it.
+   */
+  when?: TaskWhen;
   builtIn?: boolean;
 }
+
+/** when in the shift a task is done: with the room's clean (the default) or on the end-of-day round */
+export type TaskWhen = "with-room" | "end-of-day";
 
 /** the three floor types a room can have, as a task's floor trigger names them */
 export type FloorKind = "carpet" | "hard-finished" | "hard-unfinished";
@@ -956,6 +966,20 @@ export function includedConflicts(rules: Rules, space: SpaceLike): string[] {
 /** is this task the floor crew's (scheduled ONLY in Max Floor Care)? */
 export function isFloorCareTask(rules: Rules, taskId: string): boolean {
   return Boolean(rules.tasks.find((t) => t.id === taskId)?.floorCare);
+}
+
+/** is this task done on the end-of-day round, not with the room's own clean? */
+export function isEndOfDayTask(rules: Rules, taskId: string): boolean {
+  return rules.tasks.find((t) => t.id === taskId)?.when === "end-of-day";
+}
+
+/**
+ * One schedule's tasks in one room, split by WHEN they happen: `now` with the room's own stop,
+ * `later` on the return visit in the end-of-day round. Order is kept either side.
+ */
+export function splitEndOfDay(rules: Rules, taskIds: string[]): { now: string[]; later: string[] } {
+  const later = taskIds.filter((id) => isEndOfDayTask(rules, id));
+  return { now: taskIds.filter((id) => !later.includes(id)), later };
 }
 
 /**

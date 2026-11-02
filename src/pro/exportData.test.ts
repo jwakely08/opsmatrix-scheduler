@@ -297,3 +297,26 @@ describe("the schedules workbook (raw data to re-create the schedule elsewhere)"
     }
   });
 });
+
+describe("the schedules workbook — the end-of-day round", () => {
+  it("writes the return visit as its own stop row: same Stop #, Visit says which", () => {
+    const d = fixture();
+    const s = createSchedule(d, "EVS 1", "1st Shift", "");
+    s.spaceOrder = ["sp-manual"];
+    s.roomTasks = { "sp-manual": ["general-cleaning", "trash-2"] };
+    const r2 = {
+      ...rules,
+      tasks: [...rules.tasks, { id: "trash-2", label: "2nd Trash Pull", sqftPerMin: null, flatMin: 2, autoFor: [], addable: true, when: "end-of-day" as const }]
+    };
+    const sheets = new Map(schedulesWorkbookSheets(d, r2).map((x) => [x.name, x.rows]));
+    const stops = sheets.get("Room Stops")!;
+    expect(stops[0][stops[0].length - 1]).toBe("Visit");
+    expect(stops.slice(1).map((r) => [r[2], r[13], r[14], r[15]])).toEqual([
+      [1, "General Clean", 5, "Clean"],
+      [1, "2nd Trash Pull", 2, "End-of-day round"]
+    ]);
+    // and the per-task minutes follow each visit
+    const tasks = sheets.get("Task Minutes")!.slice(1);
+    expect(tasks.map((r) => [r[3], r[4]])).toEqual([["General Clean", 5], ["2nd Trash Pull", 2]]);
+  });
+});

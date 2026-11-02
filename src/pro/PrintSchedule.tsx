@@ -43,6 +43,8 @@ function hours(mins: number): string {
 
 function PageOne({ doc }: { doc: ScheduleDoc }) {
   const hasDuties = doc.startDuties.length + doc.endDuties.length > 0;
+  // the run ends when its last stop does: the rooms, or the round / end duties after them
+  const runEnd = hasDuties || doc.round ? doc.dayEnd : doc.roomsEnd;
 
   return (
     <section className="printpage">
@@ -89,7 +91,7 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
 
       <SectionBar
         title={hasDuties ? "YOUR SHIFT — IN ORDER" : "ROOM CLEANING — IN ORDER"}
-        right={`${doc.shiftStart} – ${hasDuties ? doc.dayEnd : doc.roomsEnd}`}
+        right={`${doc.shiftStart} – ${runEnd}`}
       />
 
       <table className="prooms">
@@ -107,11 +109,19 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
           </tr>
         </thead>
         <tbody>
-          {/* rooms, breaks and start/end duties in the order the day happens */}
+          {/* rooms, breaks, the end-of-day round and start/end duties in the order the day happens */}
           {doc.timeline.map((item, i) => item.kind === "room"
-            ? <RoomRow key={item.row.spaceId} r={item.row} />
+            ? <RoomRow key={(item.row.round ? "r" : "") + item.row.spaceId} r={item.row} />
             : item.kind === "duty"
               ? <DutyRow key={"d" + item.duty.id} d={item.duty} />
+              : item.kind === "round"
+                ? (
+                  <tr className="pround" key="round">
+                    <td colSpan={9}>
+                      ↻ {item.round.label.toUpperCase()} — BACK THROUGH YOUR ROOMS · {item.round.startTime} – {item.round.endTime} · {item.round.minutes} MIN
+                    </td>
+                  </tr>
+                )
               : (
                 <tr className="plunch" key={"b" + item.brk.id + i}>
                   <td colSpan={9}>
@@ -167,8 +177,9 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
 
 function RoomRow({ r }: { r: DocRow }) {
   return (
-    <tr>
-      <td className="c-ord"><b>{r.order}</b></td>
+    <tr className={r.round ? "proundrow" : undefined}>
+      {/* a return visit wears the room's own stop number, so it's found on the map */}
+      <td className="c-ord"><b>{r.round ? "↻" : ""}{r.order}</b></td>
       <td className="c-time">{r.startTime}</td>
       <td className="c-num">{r.roomNumber || "—"}</td>
       <td className="c-name">{r.roomName}</td>
@@ -225,6 +236,7 @@ function SummaryStrip({ doc }: { doc: ScheduleDoc }) {
         <span><b>{hours(t.shiftDutyMinutes)}</b> {shiftDutyPhrase(shiftDuties.map((d) => d.name))}</span>
       )}
       {doc.nonSpace.length > 0 && <span><b>{doc.nonSpace.length}</b> ongoing duties</span>}
+      {doc.round && <span><b>{doc.round.rows.length}</b> end-of-day stops</span>}
       {unpaid.length ? (
         <>
           {t.paidBreakMinutes > 0 && <span><b>{t.paidBreakMinutes} min</b> paid breaks</span>}
@@ -265,8 +277,10 @@ function PageTwo({ doc, plan, spaces }: {
   const orderOf = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of doc.rows) m.set(r.spaceId, r.order);
+    // a room this schedule only returns to in the end-of-day round is numbered after the rest
+    for (const r of doc.round?.rows ?? []) if (!m.has(r.spaceId)) m.set(r.spaceId, r.order);
     return m;
-  }, [doc.rows]);
+  }, [doc.rows, doc.round]);
 
   const shapes = useMemo(() => spaces
     .filter((sp) => (sp.visualPts?.length ?? 0) >= 3 &&

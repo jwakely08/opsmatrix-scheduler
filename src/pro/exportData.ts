@@ -20,7 +20,7 @@ import {
   type ClassicData, type ClassicSpace
 } from "./classicStore";
 import { buildScheduleDoc, parseClock, formatClock } from "./scheduleDoc";
-import { computeMinutes, type Rules } from "./rules";
+import { computeMinutes, splitEndOfDay, type Rules } from "./rules";
 
 const txt = (v: unknown) => String(v ?? "").trim();
 export type Cell = string | number;
@@ -172,7 +172,9 @@ export const SCHEDULES_SHEET_HEADERS = [
 export const STOPS_SHEET_HEADERS = [
   "Schedule #", "Schedule Name", "Stop #", "Start Time", "End Time",
   "Room Number", "Room Name", "Building", "Floor", "Department", "Room Type",
-  "Square Feet", "Priority (1-3)", "Tasks This Visit", "Est. Minutes"
+  "Square Feet", "Priority (1-3)", "Tasks This Visit", "Est. Minutes",
+  // "Clean" for the room's own stop; "End-of-day round" for the return visit, same Stop #
+  "Visit"
 ] as const;
 
 export const TASK_MINUTES_HEADERS = [
@@ -232,7 +234,8 @@ export function schedulesWorkbookSheets(data: ClassicData, rules: Rules): NamedS
       doc.totals.nonSpaceMinutes, doc.totals.breakMinutes, doc.totals.totalMinutes
     ]);
 
-    for (const r of doc.rows) {
+    // the room-by-room run, then the end-of-day round's return visits (same Stop #, "Visit" says which)
+    for (const r of [...doc.rows, ...(doc.round?.rows ?? [])]) {
       const sp = byId.get(r.spaceId);
       const end = parseClock(r.startTime);
       stopRows.push([
@@ -240,13 +243,17 @@ export function schedulesWorkbookSheets(data: ClassicData, rules: Rules): NamedS
         end == null ? "" : formatClock(end + r.minutes),
         txt(r.roomNumber), txt(r.roomName), txt(sp?.building), txt(sp?.floor),
         txt(sp?.department), txt(r.roomType), Number(sp?.squareFeet) || "",
-        PRIORITY_NUM[r.priority], r.tasks.join(" + "), r.minutes
+        PRIORITY_NUM[r.priority], r.tasks.join(" + "), r.minutes,
+        r.round ? "End-of-day round" : "Clean"
       ]);
       // per-task minutes: the engine's own itemized lines for this visit
       if (sp) {
         const cov = coverageForSpace(data, sp.id).find((c) => c.scheduleId === sched.id);
         if (cov) {
-          const { lines, total } = computeMinutes(rules, sp, { tasks: cov.tasks, includeBase: cov.primary });
+          const { now, later } = splitEndOfDay(rules, cov.tasks);
+          const { lines } = computeMinutes(rules, sp, r.round
+            ? { tasks: later, includeBase: false }
+            : { tasks: now, includeBase: cov.primary });
           let sum = 0;
           for (const l of lines) {
             taskRows.push([txt(doc.num), r.order, txt(r.roomNumber), lineTaskName(l.label), r1(l.minutes)]);
@@ -254,8 +261,8 @@ export function schedulesWorkbookSheets(data: ClassicData, rules: Rules): NamedS
           }
           // the per-room minimum can top the raw lines up — say so, so the
           // task rows always sum to the stop's minutes
-          if (total - sum >= 0.5) {
-            taskRows.push([txt(doc.num), r.order, txt(r.roomNumber), "Room minimum top-up", r1(total - sum)]);
+          if (r.minutes - sum >= 0.5) {
+            taskRows.push([txt(doc.num), r.order, txt(r.roomNumber), "Room minimum top-up", r1(r.minutes - sum)]);
           }
         }
       }

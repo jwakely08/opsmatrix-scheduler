@@ -22,6 +22,7 @@ import {
 } from "./SpacesApp";
 import { mergeRooms, type MergeStores } from "./mergeRooms";
 import { useCloneMode, CloneBar } from "./CloneMode";
+import { useRenameMode, RenameBar } from "./RenameMode";
 import { IntakeSetup, IntakeProfileCard } from "./IntakeSetup";
 import { loadRoutes, saveRoutes, type RouteStore } from "./routes";
 import { loadFloorCare, saveFloorCare, type FcStore } from "./floorcare";
@@ -52,7 +53,7 @@ import { collectWorkspace, applyWorkspace, backupFilename } from "./workspaceSto
 import {
   loadRules, saveRules, defaultRules, requiredTasks, autoTasksFor, autoTasksForSpace, tasksAfterFloorChange,
   taskSourceLabel, FLOOR_KINDS, typeIdFromLabel, isCarpet, spaceCleanability, splitRequiredTasks, isFloorCareTask,
-  nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, DEFAULT_INCLUDED_TASKS, RATE_UNITS, computeMinutes,
+  isEndOfDayTask, splitEndOfDay, nonSpaceOccurrenceMinutes, FREQUENCIES, ISSA_CATEGORIES, DEFAULT_INCLUDED_TASKS, RATE_UNITS, computeMinutes,
   gcFormula, gcMinutes, rateFromUnit, rateInUnit, includedTasksFor, includedConflicts, rawSpaceTasks,
   issaSourceLabel, categoryFor, resetToIssa, typeIdFromLabelStrict, RULES_KEY, exampleProcedure,
   type Rules, type RoomTypeRule, type GcMethod, type GcFormula, type RateUnit,
@@ -223,6 +224,18 @@ export function MapsApp() {
   const clone = useCloneMode(data.v7.spaces ?? [], commit, rules);
   const stopClone = clone.stop;
   useEffect(() => { stopClone(); }, [navToken]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ✎ Rename (Josh, 2026-11-02): in Max Space's Map View, rename rooms by rule — this floor or the
+  // whole building, one type or all — with the result shown before it happens (RenameMode.tsx)
+  const buildingSpaces = useMemo(() => {
+    const ids = new Set(activeBuilding === null ? [] : plans.filter((p) => planBuilding(p) === activeBuilding).map((p) => p.id));
+    const name = String(activeBuilding ?? "").trim().toLowerCase();
+    return (data.v7.spaces ?? []).filter((s) =>
+      ids.has(String(s.visualPlanId ?? "")) || (Boolean(name) && String(s.building ?? "").trim().toLowerCase() === name));
+  }, [data.v7.spaces, plans, activeBuilding]);
+  const rename = useRenameMode({ floorSpaces: spaces, buildingSpaces, rules, commit });
+  const stopRename = rename.stop;
+  useEffect(() => { stopRename(); }, [navToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commitRules = useCallback((next: Rules) => {
     const prev = loadRules(); // the rulebook as it stood before this change
@@ -486,7 +499,7 @@ export function MapsApp() {
               onClick={() => {
                 setDeptMode(!deptMode); setDeptPick(new Set()); setRoomSel(null);
                 setMergeMode(false); setMergeFirst(null); setMergeNote(null); setMergeUndo(null);
-                clone.stop();
+                clone.stop(); rename.stop();
               }}>
               🏷 Departments
             </button>
@@ -497,7 +510,7 @@ export function MapsApp() {
               onClick={() => {
                 setMergeMode(!mergeMode); setMergeFirst(null); setMergeNote(null); setMergeUndo(null);
                 setDeptMode(false); setDeptPick(new Set()); setRoomSel(null);
-                clone.stop();
+                clone.stop(); rename.stop();
               }}>
               ⧉ Merge
             </button>
@@ -509,8 +522,21 @@ export function MapsApp() {
                 if (clone.on) clone.stop(); else clone.start();
                 setDeptMode(false); setDeptPick(new Set()); setRoomSel(null);
                 setMergeMode(false); setMergeFirst(null); setMergeNote(null); setMergeUndo(null);
+                rename.stop();
               }}>
               ⎘ Clone
+            </button>
+          )}
+          {tab === "spaces" && spacesView === "map" && (
+            <button className={"pbtn small" + (rename.on ? " primary" : "")}
+              title="Rename rooms by rule — every patient room on this floor at once — and see the result before it happens"
+              onClick={() => {
+                if (rename.on) rename.stop(); else rename.start();
+                setDeptMode(false); setDeptPick(new Set()); setRoomSel(null);
+                setMergeMode(false); setMergeFirst(null); setMergeNote(null); setMergeUndo(null);
+                clone.stop();
+              }}>
+              ✎ Rename
             </button>
           )}
           <Sel label="Room type" v={filters.rtype ?? ""} on={(v) => setFilters({ ...filters, rtype: v })}
@@ -588,6 +614,9 @@ export function MapsApp() {
             );
           })()}
           {tab === "spaces" && spacesView === "map" && clone.on && <CloneBar clone={clone} rules={rules} />}
+          {tab === "spaces" && spacesView === "map" && rename.on && (
+            <RenameBar rename={rename} rules={rules} floorName={String(plan?.floor ?? "")} />
+          )}
         </div>
       )}
 
@@ -631,7 +660,8 @@ export function MapsApp() {
             } : deptMode ? (sp) => (deptPick.has(sp.id) ? "#ffffff" : null)
               : mergeMode ? (sp) => (sp.id === mergeFirst ? "#ffffff" : null)
                 : clone.on ? (sp) => (sp.id === clone.source?.id ? "#ffffff" : clone.pasted.has(sp.id) ? "#22c55e" : null)
-                  : undefined}
+                  : rename.on ? (sp) => (rename.picked.has(sp.id) ? "#ffffff" : null)
+                    : undefined}
             outlines={deptBorders}
             flagFor={tab === "map" ? (sp) => {
               // ⚠ = this room isn't fully scheduled yet: its base clean or
@@ -658,6 +688,11 @@ export function MapsApp() {
               // clone mode: the first tap picks the room to copy from, every tap after copies it
               if (tab === "spaces" && clone.on) {
                 if (sp) clone.tap(sp);
+                return;
+              }
+              // rename mode: a tap leaves a room out of the rename, or puts one in
+              if (tab === "spaces" && rename.on) {
+                if (sp) rename.tap(sp);
                 return;
               }
               if (tab === "spaces" && mergeMode) {
@@ -1086,7 +1121,8 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
   const freq = rules.roomTypes.find((r) => r.id === typeIdFromLabel(rules, space.roomType ?? ""))?.frequency;
   const [addOpen, setAddOpen] = useState(false);
   const notes = notesForSpace(data, space);
-  const taskLabelOf = (t: string) => rules.tasks.find((x) => x.id === t)?.label ?? t;
+  // ↻ = done on the end-of-day round, after all the rooms (set per task in Scope)
+  const taskLabelOf = (t: string) => (rules.tasks.find((x) => x.id === t)?.label ?? t) + (isEndOfDayTask(rules, t) ? " ↻" : "");
   const unClean = un.tasks.filter((t) => !isFloorCareTask(rules, t));
   const unFc = un.tasks.filter((t) => isFloorCareTask(rules, t));
 
@@ -1136,6 +1172,9 @@ function ScheduleRoomSidebar({ space, data, rules, schedules, onClose, onEditSpa
           <small className="warntext">
             🧽 Waiting on a <a className="plink" href="./maps.html#floorcare">Max Floor Care</a> schedule: {unFc.map(taskLabelOf).join(", ")}
           </small>
+        )}
+        {req.some((t) => isEndOfDayTask(rules, t)) && (
+          <small className="pnote">↻ = done on the end-of-day round — a return visit after all the rooms, printed at the end of the running order.</small>
         )}
       </div>
 
@@ -1446,12 +1485,12 @@ function SpaceSidebar({ space, rules, deptOptions, onClose, onChange, onOpenEdit
             return (
               <button key={t.id} className={"ptask" + (on ? " on" : "") + (t.floorCare ? " fc" : "")}
                 onClick={() => set({ spaceTasks: on ? req.filter((x) => x !== t.id) : [...req, t.id] })}>
-                {t.label}{auto ? " •" : ""}
+                {t.label}{t.when === "end-of-day" ? " ↻" : ""}{auto ? " •" : ""}
               </button>
             );
           })}
         </div>
-        <small>• = automatic for this room type or floor type. Who does each task is decided on the Map tab — different tasks can go to different schedules.</small>
+        <small>• = automatic for this room type or floor type. ↻ = done on the end-of-day round, after all the rooms. Who does each task is decided on the Map tab — different tasks can go to different schedules.</small>
       </div>
 
       <button className="pbtn primary wide" disabled={!dirty} onClick={save}>
@@ -1602,14 +1641,17 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
                   : null;
                 const c = coverageForSpace(data, sp.id).find((x) => x.scheduleId === s.id);
                 if (!c && !routeStops) return null;
+                // a task timed for the end-of-day round is done on the return visit (listed below), not here
+                const split = c ? splitEndOfDay(rules, c.tasks) : { now: [], later: [] };
                 return (
                   <div key={sp.id} className="schedroom">
                     <span className="ordnum">{i + 1}</span>
                     <b>{sp.roomNumber}</b>
                     <span>{routeStops
                       ? (s.sanitationId ? "Collection stop" : "Porter pass")
-                      : [c!.primary ? "General Clean" : "", ...c!.tasks.map((t) => rules.tasks.find((x) => x.id === t)?.label ?? t)].filter(Boolean).join(" + ") || "no tasks picked yet"}</span>
-                    <em>{routeStops ? Math.round(Number(routeStops[sp.id]) || 0) : coverageMinutes(rules, sp, c!)}m</em>
+                      : [c!.primary ? "General Clean" : "", ...split.now.map((t) => rules.tasks.find((x) => x.id === t)?.label ?? t)].filter(Boolean).join(" + ")
+                        || (split.later.length ? "end-of-day round only — see below" : "no tasks picked yet")}</span>
+                    <em>{routeStops ? Math.round(Number(routeStops[sp.id]) || 0) : coverageMinutes(rules, sp, { ...c!, tasks: split.now })}m</em>
                     {!routeStops && (
                       <span className="ordmove">
                         <button disabled={i === 0} title="Move earlier"
@@ -1621,6 +1663,34 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
                   </div>
                 );
               })}
+              {!s.routeOnly && (() => {
+                // ↻ the end-of-day round: every return visit this schedule makes, in the day's order
+                const visits = members.flatMap((sp) => {
+                  const c = coverageForSpace(data, sp.id).find((x) => x.scheduleId === s.id);
+                  if (!c) return [];
+                  const { now, later } = splitEndOfDay(rules, c.tasks);
+                  if (!later.length) return [];
+                  const mins = coverageMinutes(rules, sp, c) - coverageMinutes(rules, sp, { ...c, tasks: now });
+                  return [{ sp, later, mins }];
+                });
+                if (!visits.length) return null;
+                return (
+                  <div className="schedround">
+                    <p className="pnote">
+                      ↻ <b>End-of-day round</b> — back through these rooms after all the rooms are done, timed to finish as the
+                      shift ends. Which tasks wait for the round is set per task in Scope → Space tasks.
+                    </p>
+                    {visits.map(({ sp, later, mins }) => (
+                      <div key={"round-" + sp.id} className="schedroom round">
+                        <span className="ordnum">↻</span>
+                        <b>{sp.roomNumber}</b>
+                        <span>{later.map((t) => rules.tasks.find((x) => x.id === t)?.label ?? t).join(" + ")}</span>
+                        <em>{mins}m</em>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
               {ns.map((t) => {
                 const counted = Number(t.count) > 0 && Number(t.minutesPer) > 0;
                 return (
@@ -2195,7 +2265,7 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
   const [draft, setDraft] = useState<Rules>(() => JSON.parse(JSON.stringify(rules)));
   const [newType, setNewType] = useState({ label: "", freq: "7x / week", cat: "office" });
   const [focusType, setFocusType] = useState<string | null>(null);
-  const [newTask, setNewTask] = useState({ label: "", per: "", flat: "", floorCare: false });
+  const [newTask, setNewTask] = useState({ label: "", per: "", flat: "", floorCare: false, endOfDay: false });
   const [newNS, setNewNS] = useState({ label: "", hours: "30" });
   const [newQual, setNewQual] = useState({ label: "", minutes: "5" });
   const [newBreak, setNewBreak] = useState({ label: "", start: "", minutes: "15" });
@@ -2360,6 +2430,24 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
             onClick={() => set((r) => { const x = r.tasks.find((y) => y.id === t.id)!; x.floorCare = !x.floorCare; })}>
             Floor care only
           </button>
+          {/* WHEN the task happens (Josh, 2026-11-02): with the room's clean, or on the
+              end-of-day round — a second trash pull after every room is done */}
+          {!t.floorCare && (
+            <button className={"ptask sm" + (t.when === "end-of-day" ? " on" : "")}
+              title="Done on a return visit after all the rooms — the end-of-day round — timed to finish as the shift ends. The room keeps the task; only the printed running order moves it."
+              onClick={() => set((r) => {
+                const x = r.tasks.find((y) => y.id === t.id)!;
+                if (x.when === "end-of-day") delete x.when; else x.when = "end-of-day";
+              })}>
+              ↻ End-of-day round
+            </button>
+          )}
+          {t.when === "end-of-day" && !t.floorCare && (
+            <span className="pfloorrule">
+              ↻ Prints as a return visit in the end-of-day round — after every room, finishing as the shift ends —
+              instead of with the room's own clean. The room keeps the task and the schedule still counts it.
+            </span>
+          )}
           <button className="pbtn small danger" onClick={() => {
             if (!confirm(`Delete the task "${t.label}"? It comes off every room and schedule that uses it${t.floorCare ? ", and out of Max Floor Care" : ""}. Takes effect when you hit Save.`)) return;
             set((r) => { r.tasks = r.tasks.filter((x) => x.id !== t.id); });
@@ -2430,6 +2518,11 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
             onChange={(e) => setNewTask({ ...newTask, floorCare: e.target.checked })} />
           <span>Floor care — schedules only in Max Floor Care</span>
         </label>
+        <label className="checkline" title="A second visit after all the rooms are done, timed to finish as the shift ends — a second trash pull">
+          <input type="checkbox" checked={newTask.endOfDay} disabled={newTask.floorCare}
+            onChange={(e) => setNewTask({ ...newTask, endOfDay: e.target.checked })} />
+          <span>↻ End-of-day round — done on a return visit after all the rooms</span>
+        </label>
         <button className="pbtn small primary" onClick={() => {
           if (!newTask.label.trim()) return;
           set((r) => r.tasks.push({
@@ -2437,9 +2530,10 @@ function ScopeTab({ rules, onChange, onCleanIncluded, data, isAdmin }: {
             sqftPerMin: newTask.per ? Number(newTask.per) : null,
             flatMin: newTask.flat ? Number(newTask.flat) : 0,
             autoFor: [], addable: true,
-            ...(newTask.floorCare ? { floorCare: true } : {})
+            ...(newTask.floorCare ? { floorCare: true } : {}),
+            ...(newTask.endOfDay && !newTask.floorCare ? { when: "end-of-day" as const } : {})
           }));
-          setNewTask({ label: "", per: "", flat: "", floorCare: false });
+          setNewTask({ label: "", per: "", flat: "", floorCare: false, endOfDay: false });
         }}>Create space task</button>
       </div>
       <SectionSave sec="tasks" />
