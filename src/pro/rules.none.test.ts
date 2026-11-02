@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import {
   computeMinutes, defaultRules, gcFormula, gcFormulaText, gcMinutes, gcMinutesFor, gcText, hasGeneralClean,
-  includedTasksFor, includedTasksForRoom, requiredTasks, type Rules
+  includedTasksFor, includedTasksForRoom, migrateRules, requiredTasks, type Rules
 } from "./rules";
 import { buildScheduleDoc } from "./scheduleDoc";
 import { setCoverage, type ClassicData } from "./classicStore";
@@ -14,8 +14,7 @@ function corridorRules(): Rules {
   const r = defaultRules();
   const corridor = r.roomTypes.find((t) => t.id === "corridor")!;
   corridor.method = "none";
-  corridor.includedTasks = [];
-  r.tasks.push({ id: "spot-mop", label: "Spot Mopping", sqftPerMin: 300, flatMin: 0, autoFor: ["corridor"], addable: true });
+  r.tasks.find((t) => t.id === "spot-mop")!.autoFor.push("corridor");
   r.tasks.find((t) => t.id === "high-dusting")!.autoFor.push("corridor");
   r.tasks.find((t) => t.id === "trash-pull")!.autoFor.push("corridor");
   r.breaks = [];
@@ -78,8 +77,7 @@ describe("a General Clean timed by its tasks (Josh: 'General Clean is a category
     const r = defaultRules();
     const corridor = r.roomTypes.find((t) => t.id === "corridor")!;
     corridor.method = "tasks";
-    corridor.includedTasks = ["high-dusting", "trash-pull", "spot-mop"];
-    r.tasks.push({ id: "spot-mop", label: "Spot Mopping", sqftPerMin: 300, flatMin: 0, autoFor: [], addable: true });
+    r.general.includedTasks = ["high-dusting", "trash-pull", "spot-mop"];
     r.breaks = [];
     return r;
   }
@@ -98,7 +96,7 @@ describe("a General Clean timed by its tasks (Josh: 'General Clean is a category
   });
 
   it("a floor-tied step only counts where the floor calls for it", () => {
-    const rules = bundleRules();
+    const rules = defaultRules(); // the account's list: trash pull, mopping, vacuuming
     const patient = rules.roomTypes.find((t) => t.id === "patient-room")!;
     patient.method = "tasks"; // trash pull, mopping, vacuuming — the default list
     const hard = { roomType: "Patient Room", floorType: "Hard floor — finished", squareFeet: 240 };
@@ -110,7 +108,7 @@ describe("a General Clean timed by its tasks (Josh: 'General Clean is a category
     expect(computeMinutes(rules, carpet).total).toBe(7);
   });
 
-  it("prints General Clean with its steps listed under it", () => {
+  it("prints the General Clean as its steps, not the words", () => {
     const rules = bundleRules();
     const data: ClassicData = {
       v7: {
@@ -126,11 +124,38 @@ describe("a General Clean timed by its tasks (Josh: 'General Clean is a category
     setCoverage(data, "c1", "s", true, []);
     setCoverage(data, "p1", "s", true, ["high-dusting"]);
     const doc = buildScheduleDoc(data, rules, data.v7.schedules![0], { date: new Date(2026, 10, 2) });
-    expect(doc.rows[0].tasks).toEqual(["General Clean"]);
-    expect(doc.rows[0].generalCleanTasks).toEqual(["High Dusting", "Trash Pull", "Spot Mopping"]);
+    expect(doc.rows[0].tasks).toEqual(["High Dusting", "Trash Pull", "Spot Mopping"]);
     expect(doc.rows[0].generalClean).toBe("Corridor: High Dusting 10 + Trash Pull 2 + Spot Mopping 4 = 16 min");
-    // a size-timed type lists the steps its General Clean stands for too — the ones this floor needs
-    expect(doc.rows[1].tasks).toEqual(["General Clean", "High Dusting"]);
-    expect(doc.rows[1].generalCleanTasks).toEqual(["Trash Pull", "Mopping"]);
+    // a size-timed type prints the same account list; its High Dusting is a step already, so it isn't repeated as an extra
+    expect(doc.rows[1].tasks).toEqual(["High Dusting", "Trash Pull", "Spot Mopping"]);
+  });
+});
+
+describe("one General Clean list for the account", () => {
+  it("an older rulebook: the list most types shared becomes the account's, and the standard steps appear", () => {
+    const old = defaultRules();
+    delete (old.general as { includedTasks?: string[] }).includedTasks;
+    old.tasks = old.tasks.filter((x) => x.id !== "spot-mop" && x.id !== "surface-wipe");
+    for (const rt of old.roomTypes) rt.includedTasks = ["trash-pull", "damp-mop", "vacuum", "high-dusting"];
+    old.roomTypes[0].includedTasks = ["trash-pull"]; // one odd type out
+    const r = migrateRules(old);
+    expect(r.general.includedTasks).toEqual(["trash-pull", "damp-mop", "vacuum", "high-dusting"]);
+    // the types that had exactly that list now follow it; the odd one keeps its own
+    expect(r.roomTypes[1].includedTasks).toBeUndefined();
+    expect(r.roomTypes[0].includedTasks).toEqual(["trash-pull"]);
+    expect(includedTasksFor(r, r.roomTypes[1].id)).toEqual(["trash-pull", "damp-mop", "vacuum", "high-dusting"]);
+    expect(r.tasks.map((x) => x.id)).toEqual(expect.arrayContaining(["spot-mop", "surface-wipe"]));
+    expect(r.tasks.find((x) => x.id === "spot-mop")!.sqftPerMin).toBe(300);
+  });
+
+  it("a type follows the account's list unless it has adjusted its own; an à la carte type has none", () => {
+    const r = defaultRules();
+    r.general.includedTasks = ["trash-pull", "high-dusting"];
+    for (const rt of r.roomTypes) delete rt.includedTasks;
+    expect(includedTasksFor(r, "patient-room")).toEqual(["trash-pull", "high-dusting"]);
+    r.roomTypes.find((x) => x.id === "exam-room")!.includedTasks = ["trash-pull"]; // its own list
+    expect(includedTasksFor(r, "exam-room")).toEqual(["trash-pull"]);
+    r.roomTypes.find((x) => x.id === "corridor")!.method = "none";
+    expect(includedTasksFor(r, "corridor")).toEqual([]);
   });
 });

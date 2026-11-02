@@ -41,12 +41,6 @@ export interface DocRow {
    * "Office: 152 sq ft ÷ 4,250 sq ft/hr = 2.1 min" — printed beside it
    */
   generalClean?: string;
-  /**
-   * The steps the room type's General Clean includes, as they apply to this room (Josh, 2026-11-02:
-   * "General Clean is a category that includes all those tasks… those tasks should show up on the
-   * schedule") — printed under the General Clean chip
-   */
-  generalCleanTasks?: string[];
   priority: Priority;
   minutes: number;
   /** a return visit in the end-of-day round (order = the room's own stop number, so it's found on the map) */
@@ -433,16 +427,14 @@ export function buildScheduleDoc(
       roomNumber: String(sp.roomNumber ?? ""),
       roomName: String(sp.roomName ?? sp.roomNumber ?? ""),
       roomType: String(sp.roomType ?? ""),
-      // a task the type's General Clean includes is part of that line, not an extra; a type with no
-      // General Clean (a corridor: high dusting, trash, spot mopping) prints its tasks alone
+      // the General Clean prints as its steps (the account's list, as this room needs them); a task
+      // one of those steps already covers is not an extra; a type with no General Clean (a corridor:
+      // high dusting, trash, spot mopping) prints its tasks alone
       tasks: cov ? coverageTaskLabels(rules, {
         primary: cov.primary && hasGeneralClean(rules, sp),
         tasks: now.filter((t) => !includedTasksFor(rules, typeIdFromLabel(rules, String(sp.roomType ?? ""))).includes(t))
-      }) : ["Route stop"],
-      ...(cov?.primary && hasGeneralClean(rules, sp) ? {
-        generalClean: generalCleanLine(rules, sp).text,
-        generalCleanTasks: includedTasksForRoom(rules, sp).map((t) => t.label)
-      } : {}),
+      }, sp) : ["Route stop"],
+      ...(cov?.primary && hasGeneralClean(rules, sp) ? { generalClean: generalCleanLine(rules, sp).text } : {}),
       priority: spacePriority(sp),
       minutes
     };
@@ -586,16 +578,22 @@ export function buildScheduleDoc(
 }
 
 /**
- * The tasks one schedule performs in one room, in plain English. The base
- * clean always leads, then the room's extras in the rules engine's own order
- * so every printed schedule reads the same way.
+ * The tasks one schedule performs in one room, in plain English. The General
+ * Clean leads — as its steps when the room is known (Josh, 2026-11-02: "it
+ * won't just say general clean, it'll say all the tasks"), as the words
+ * "General Clean" otherwise — then the room's extras in the rules engine's
+ * own order so every printed schedule reads the same way.
  */
 export function coverageTaskLabels(
   rules: Rules,
-  cov: { primary: boolean; tasks: string[] }
+  cov: { primary: boolean; tasks: string[] },
+  space?: ClassicSpace
 ): string[] {
   const out: string[] = [];
-  if (cov.primary) out.push("General Clean");
+  if (cov.primary) {
+    const steps = space ? includedTasksForRoom(rules, space).map((t) => t.label) : [];
+    if (steps.length) out.push(...steps); else out.push("General Clean");
+  }
   for (const t of rules.tasks) {
     if (cov.tasks.includes(t.id)) out.push(t.label);
   }

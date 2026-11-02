@@ -188,15 +188,7 @@ function RoomRow({ r }: { r: DocRow }) {
       <td className="c-type">{r.roomType || "—"}</td>
       <td className="c-task">
         {r.tasks.length
-          ? r.tasks.map((t, i) => (
-            <React.Fragment key={i}>
-              <span className="tchip">{t}</span>
-              {/* the steps the General Clean stands for, as this room needs them */}
-              {t === "General Clean" && r.generalCleanTasks && r.generalCleanTasks.length > 0 && (
-                <span className="tincl">{r.generalCleanTasks.join(" · ")}</span>
-              )}
-            </React.Fragment>
-          ))
+          ? r.tasks.map((t, i) => <span key={i} className="tchip">{t}</span>)
           : <span className="tnone">No tasks assigned yet — see supervisor</span>}
       </td>
       <td className="c-pri"><span className={"pri " + PRIORITY_CLASS[r.priority]}>{r.priority.toUpperCase()}</span></td>

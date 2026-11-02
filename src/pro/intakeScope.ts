@@ -371,7 +371,9 @@ export function intakeToScope(current: Rules, intake: IntakeData, now = new Date
   }
   if (gen.length || F.mopping_in_routine || F.vacuuming_in_routine) {
     const list = rules.tasks.filter((t) => covered.has(t.id)).map((t) => t.id);
-    for (const t of rules.roomTypes) t.includedTasks = [...list];
+    // the facility's General Clean is the account's one list; every type follows it from here
+    rules.general.includedTasks = [...list];
+    for (const t of rules.roomTypes) delete t.includedTasks;
     // included work is never an automatic extra
     for (const t of rules.tasks) if (covered.has(t.id)) t.autoFor = [];
     changes.push({
