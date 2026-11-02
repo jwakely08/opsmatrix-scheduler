@@ -21,7 +21,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  applyRoomType, applyFloorType, spaceIncomplete, syncSpaceMinutes, FLOOR_TYPES,
+  applyRoomType, applyFloorType, spaceIncomplete, syncSpaceMinutes, refreshScheduleCoverage, FLOOR_TYPES,
   type ClassicData, type ClassicPlan, type ClassicSpace
 } from "./classicStore";
 import { typeIdFromLabelStrict, type Rules } from "./rules";
@@ -147,6 +147,7 @@ export function RoverMode({ plan, plans, onPlan, spaces, shapes, rules, commit, 
           else sp.roomType = d.roomType;
         }
         syncSpaceMinutes(sp, rules);
+        refreshScheduleCoverage(data, rules, [sp.id]); // a schedule that has the room follows its new tasks
       });
       lastSavedRef.current = stamp;
     }

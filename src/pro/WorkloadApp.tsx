@@ -28,7 +28,7 @@ import {
 import { suggestRoomTypes } from "../bridge/roomTypeSuggest";
 import { loadApiKey } from "./classicStore";
 import type { ClassicData, ClassicSpace } from "./classicStore";
-import { syncSpaceMinutes, applyRoomType, applyFloorType, FLOOR_TYPES } from "./classicStore";
+import { syncSpaceMinutes, refreshScheduleCoverage, applyRoomType, applyFloorType, FLOOR_TYPES } from "./classicStore";
 
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
 
@@ -320,6 +320,8 @@ function ValidationTab({ spaces, rules, commit }: {
         if (bulkDept.trim()) sp.department = bulkDept.trim();
         syncSpaceMinutes(sp, rules);
       }
+      // schedules that have these rooms follow their new tasks
+      refreshScheduleCoverage(d, rules, [...sel]);
       if (aliasesChanged) saveAliases(aliases);
     });
     setSel(new Set());

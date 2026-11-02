@@ -12,8 +12,9 @@ describe("roomMinutes — one room's minutes, floor care told apart", () => {
     const m = roomMinutes(rules, room("a", 238));
     // 238 sq ft at ISSA clinical 2,150 sq ft/hr = 6.6 → 7
     expect(m).toMatchObject({ total: 7, cleaning: 7, floorCare: 0 });
-    expect(m.lines).toHaveLength(1);
-    expect(m.lines[0].label).toMatch(/^General Clean — Patient Room: 238 sq ft/);
+    // the General Clean divided up: its baseline, then trash pull and mopping (its steps on a hard floor)
+    expect(m.lines.map((l) => l.label.split(" — ")[0])).toEqual(["General Clean baseline", "Trash Pull", "Mopping"]);
+    expect(m.lines[0].label).toMatch(/^General Clean baseline — Patient Room: 238 sq ft/);
   });
 
   it("a corridor: the clean plus the floor crew's scrubbing and dust mopping, kept apart", () => {

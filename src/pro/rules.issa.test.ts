@@ -82,14 +82,21 @@ describe("ISSA defaults", () => {
 describe("the General Clean formula", () => {
   it("one line, worked so it can be redone by hand — Josh's example", () => {
     const { lines, total } = computeMinutes(defaultRules(), room("Office", 152));
-    expect(lines).toEqual([{ label: "General Clean — Office: 152 sq ft ÷ 4,250 sq ft/hr = 2.1 min", minutes: 152 * 60 / 4250 }]);
+    // the whole is the ISSA time; the General Clean's steps share it (their own rates would come to more —
+    // see gcBreakdown.test.ts for the division, and generalCleanLine for the worked line)
+    expect(lines.map((l) => l.label)).toEqual([
+      "Trash Pull — part of General Clean · 2 min · fitted into the ISSA time",
+      "Mopping — part of General Clean · 1 min per 68.67 sq ft · fitted into the ISSA time"
+    ]);
+    expect(lines.reduce((s, l) => s + l.minutes, 0)).toBeCloseTo(152 * 60 / 4250, 6);
     expect(total).toBe(2);
   });
 
   it("fixed minutes per room: size doesn't matter", () => {
     const r = defaultRules();
     Object.assign(type(r, "exam-room"), { method: "fixed", fixedMin: 10 });
-    expect(computeMinutes(r, room("Exam Room", 90)).lines[0].label).toBe("General Clean — Exam Room: 10 min");
+    // the whole (10 min) less its steps' shares is the baseline line; the steps follow
+    expect(computeMinutes(r, room("Exam Room", 90)).lines[0].label).toMatch(/^General Clean baseline — Exam Room: 10 min, minus its steps below = 6\.7 min$/);
     expect(computeMinutes(r, room("Exam Room", 900)).total).toBe(10);
   });
 
@@ -97,7 +104,7 @@ describe("the General Clean formula", () => {
     const r = defaultRules();
     Object.assign(type(r, "exam-room"), { method: "both", fixedMin: 4 });
     const { lines, total } = computeMinutes(r, room("Exam Room", 161));
-    expect(lines[0].label).toBe("General Clean — Exam Room: 4 min + 161 sq ft ÷ 2,150 sq ft/hr = 8.5 min");
+    expect(lines[0].label).toMatch(/^General Clean baseline — Exam Room: 4 min \+ 161 sq ft ÷ 2,150 sq ft\/hr = 8\.5 min, minus/);
     expect(total).toBe(Math.round(4 + 161 * 60 / 2150));
   });
 
@@ -118,7 +125,7 @@ describe("the General Clean formula", () => {
     const r = defaultRules();
     Object.assign(type(r, "exam-room"), { sqftPerHour: rateFromUnit(7, "minPer100"), rateUnit: "minPer100" });
     expect(computeMinutes(r, room("Exam Room", 200)).lines[0].label)
-      .toBe("General Clean — Exam Room: 200 sq ft × 7 min per 100 sq ft = 14 min");
+      .toMatch(/^General Clean baseline — Exam Room: 200 sq ft × 7 min per 100 sq ft = 14 min, minus/);
     expect(computeMinutes(r, room("Exam Room", 200)).total).toBe(14);
   });
 
@@ -127,7 +134,7 @@ describe("the General Clean formula", () => {
     expect(computeMinutes(r, { ...room("Office", 850), floorType: "Carpet" }).total)
       .toBe(computeMinutes(r, room("Office", 850)).total);
     expect(computeMinutes(r, room("Office", 30)).total).toBe(0); // 30 ÷ 4,250/hr = 0.4 → 0, no 3-minute floor
-    expect(computeMinutes(r, room("Office", 30)).lines[0].minutes).toBeCloseTo(30 * 60 / 4250);
+    expect(computeMinutes(r, room("Office", 30)).lines.reduce((s, l) => s + l.minutes, 0)).toBeCloseTo(30 * 60 / 4250);
   });
 
   it("every ISSA type prices at straight ISSA math", () => {
@@ -163,7 +170,8 @@ describe("Included in General Clean", () => {
     const sp = room("Office", 400, ["trash-pull", "high-dusting"]);
     expect(requiredTasks(r, sp)).toEqual(["high-dusting"]);
     expect(includedConflicts(r, sp)).toEqual(["trash-pull"]);
-    expect(computeMinutes(r, sp).lines.map((l) => l.label.split(" — ")[0])).toEqual(["General Clean", "High Dusting"]);
+    // the General Clean shows as its steps (trash pull is one of them — no extra line for it), then the extra
+    expect(computeMinutes(r, sp).lines.map((l) => l.label.split(" — ")[0])).toEqual(["Trash Pull", "Mopping", "High Dusting"]);
     // a schedule subset naming it prices nothing for it either
     expect(computeMinutes(r, sp, { includeBase: false, tasks: ["trash-pull"] }).total).toBe(0);
   });
@@ -207,7 +215,7 @@ describe("migrating saved rules", () => {
     // a custom type with no ISSA match: the old 33 sq ft/min hard-floor rate, shown as typed
     expect(type(r, "rt-sim")).toMatchObject({ method: "both", fixedMin: 2, sqftPerHour: 33 * 60, rateUnit: "sqftPerMin" });
     expect(computeMinutes(r, room("Simulation Room", 330)).lines[0].label)
-      .toBe("General Clean — Simulation Room: 2 min + 330 sq ft ÷ 33 sq ft/min = 12 min");
+      .toMatch(/^General Clean baseline — Simulation Room: 2 min \+ 330 sq ft ÷ 33 sq ft\/min = 12 min, minus/);
     for (const rt of r.roomTypes) {
       expect(rt.qualifierMin, rt.id).toBeUndefined();
       // the list every type shared became the account's; the types now follow it

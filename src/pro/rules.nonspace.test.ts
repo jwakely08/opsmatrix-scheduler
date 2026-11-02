@@ -149,10 +149,12 @@ describe("the General Clean formula toggles", () => {
 
   it("Mopping and Vacuuming are priced only where General Clean does not include them", () => {
     const r = defaultRules();
-    // included by default: listed on the room, it adds nothing
-    expect(computeMinutes(r, { ...room, spaceTasks: ["damp-mop"] }).lines.some((l) => l.label.startsWith("Mopping"))).toBe(false);
+    // included by default: listed on the room, it adds nothing on top (it is a step of the General
+    // Clean, priced inside it — not an extra at its own rate)
+    const extra = (l: { label: string }) => l.label.startsWith("Mopping — 1 min");
+    expect(computeMinutes(r, { ...room, spaceTasks: ["damp-mop"] }).lines.some(extra)).toBe(false);
     r.roomTypes.find((rt) => rt.id === "office")!.includedTasks = ["trash-pull", "vacuum"];
     const mins = computeMinutes(r, { ...room, spaceTasks: ["damp-mop"] });
-    expect(mins.lines.some((l) => l.label.startsWith("Mopping"))).toBe(true);
+    expect(mins.lines.some(extra)).toBe(true);
   });
 });
