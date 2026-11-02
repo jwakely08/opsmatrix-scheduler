@@ -22,7 +22,7 @@ import {
   type ClassicData, type ClassicSchedule, type ClassicSpace, type NonSpaceTask, type Priority
 } from "./classicStore";
 import {
-  computeMinutes, generalCleanLine, includedTasksFor, splitEndOfDay, typeIdFromLabel,
+  computeMinutes, generalCleanLine, hasGeneralClean, includedTasksFor, splitEndOfDay, typeIdFromLabel,
   type Rules, type BreakRule, type DutyPosition, type ProcedureStep
 } from "./rules";
 
@@ -427,11 +427,13 @@ export function buildScheduleDoc(
       roomNumber: String(sp.roomNumber ?? ""),
       roomName: String(sp.roomName ?? sp.roomNumber ?? ""),
       roomType: String(sp.roomType ?? ""),
-      // a task the type's General Clean includes is part of that line, not an extra
+      // a task the type's General Clean includes is part of that line, not an extra; a type with no
+      // General Clean (a corridor: high dusting, trash, spot mopping) prints its tasks alone
       tasks: cov ? coverageTaskLabels(rules, {
-        ...cov, tasks: now.filter((t) => !includedTasksFor(rules, typeIdFromLabel(rules, String(sp.roomType ?? ""))).includes(t))
+        primary: cov.primary && hasGeneralClean(rules, sp),
+        tasks: now.filter((t) => !includedTasksFor(rules, typeIdFromLabel(rules, String(sp.roomType ?? ""))).includes(t))
       }) : ["Route stop"],
-      ...(cov?.primary && !rules.general.formulaOff ? { generalClean: generalCleanLine(rules, sp).text } : {}),
+      ...(cov?.primary && hasGeneralClean(rules, sp) ? { generalClean: generalCleanLine(rules, sp).text } : {}),
       priority: spacePriority(sp),
       minutes
     };

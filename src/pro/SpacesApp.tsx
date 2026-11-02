@@ -19,6 +19,7 @@ import {
 import {
   autoTasksFor, tasksAfterFloorChange, typeIdFromLabel, isCarpet, spaceCleanability, includedTasksFor, type Rules
 } from "./rules";
+import { hasGeneralClean } from "./rules";
 
 const fmt = (n: number) => Math.round(n).toLocaleString();
 
@@ -214,9 +215,9 @@ export function RoomEditor({ data, rules, space, onClose, commit }: {
           <span>Cleanable — counts toward EVS workload{clean === "Needs review" ? " (needs review until the room type is set)" : ""}</span>
         </label>
 
-        <div className="pfield"><span>Tasks this room needs (General Clean is always included)</span>
+        <div className="pfield"><span>Tasks this room needs {hasGeneralClean(rules, draft) ? "(General Clean is always included)" : "(this type has no General Clean — its tasks make up its time)"}</span>
           <div className="ptasks">
-            <span className="ptask locked">General Clean</span>
+            {hasGeneralClean(rules, draft) && <span className="ptask locked">General Clean</span>}
             {rules.tasks.filter((t) => t.addable).map((t) => {
               const on = req.includes(t.id);
               const auto = autoTasks.includes(t.id);
