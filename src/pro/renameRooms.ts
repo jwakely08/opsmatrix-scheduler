@@ -15,14 +15,47 @@ export interface RenamePlan {
   same: number;
   /** picked rooms left alone: the name says "soiled" and Max Sanitation finds its rooms by that word */
   soiled: number;
+  /** picked rooms left alone: the pattern wants {prefix} and no letters rule covers this room's number */
+  noRule: number;
 }
 
 /** the ready-made patterns, in the order the panel offers them */
 export const NAME_PRESETS: { id: string; label: string; pattern: string }[] = [
   { id: "type", label: "Room type", pattern: "{type}" },
   { id: "type-number", label: "Room type + number", pattern: "{type} {number}" },
+  // Josh, 2026-11-02: "change the room number letter abbreviations to a specific value — FPKb to
+  // PKT — then the number value, then whatever is already there for room name (TLT for a restroom)"
+  { id: "letters", label: "Letters + number + name", pattern: "{prefix}{num} {name}" },
   { id: "custom", label: "Custom…", pattern: "" }
 ];
+
+/** one row of the letters table: the letters a room number starts with → the letters the name gets */
+export interface LetterRule { from: string; to: string }
+
+/**
+ * A room number in two parts: the letters (and floor) in front, and the number itself.
+ * "FPKb-101" → FPKb / 101 · "FV4-297A" → FV4 / 297A · "4E-102" → 4E / 102 · "PK102" → PK / 102 · "102" → — / 102
+ */
+export function splitNumber(roomNumber: unknown): { prefix: string; num: string } {
+  const s = String(roomNumber ?? "").trim();
+  const sep = /^([A-Za-z0-9]*?)[\s\-_./]+(.+)$/.exec(s);
+  if (sep) return { prefix: sep[1], num: sep[2].trim() };
+  const run = /^([A-Za-z]+)(\d.*)$/.exec(s);
+  if (run) return { prefix: run[1], num: run[2] };
+  return { prefix: "", num: s };
+}
+
+/**
+ * The letters the name gets for a room number's letters: the rule's, when one matches (case doesn't
+ * matter); null when no rule covers these letters — that room is left alone. An empty table changes
+ * nothing, so the preset can't rename a floor by accident before a rule is typed.
+ */
+export function mappedPrefix(prefix: string, rules: LetterRule[]): string | null {
+  const hit = rules.find((r) => r.from.trim() && r.from.trim().toLowerCase() === prefix.toLowerCase());
+  return hit ? hit.to.trim() : null;
+}
+
+export const PLACEHOLDERS = "{type} {number} {prefix} {num} {name} {n} {floor} {dept}";
 
 /** a room-number-like token the drawing leaves behind: "102", "4E-102", "PK102", "B2" */
 const CODE = /[A-Z]{0,4}[-.]?\d{1,5}[A-Z]?/gi;
@@ -51,11 +84,25 @@ export function typeWord(sp: ClassicSpace): string {
   return /^other$/i.test(t) ? "" : t;
 }
 
-/** fill a pattern for one room; {n} is the room's place in the renamed set, counted from 1 */
-export function renderName(pattern: string, sp: ClassicSpace, n: number): string {
+/**
+ * Fill a pattern for one room; {n} is the room's place in the renamed set, counted from 1. {prefix}
+ * and {num} are the room number's two halves ({prefix} run through the letters rules), {name} the
+ * name as it stands. Null when {prefix} is wanted and no rule covers this room's letters.
+ */
+export function renderName(pattern: string, sp: ClassicSpace, n: number, rules: LetterRule[] = []): string | null {
+  const { prefix, num } = splitNumber(sp.roomNumber);
+  let letters = prefix;
+  if (/\{prefix\}/i.test(pattern)) {
+    const m = mappedPrefix(prefix, rules);
+    if (m === null) return null;
+    letters = m;
+  }
   return pattern
     .replace(/\{type\}/gi, typeWord(sp))
     .replace(/\{number\}/gi, String(sp.roomNumber ?? "").trim())
+    .replace(/\{prefix\}/gi, letters)
+    .replace(/\{num\}/gi, num)
+    .replace(/\{name\}/gi, String(sp.roomName ?? "").replace(/\s+/g, " ").trim())
     .replace(/\{floor\}/gi, String(sp.floor ?? "").trim())
     .replace(/\{dept\}/gi, String(sp.department ?? "").trim())
     .replace(/\{n\}/gi, String(n))
@@ -68,21 +115,29 @@ export function renderName(pattern: string, sp: ClassicSpace, n: number): string
  * whose name says "soiled" keeps it unless the new name says so too (Max Sanitation's routes find
  * their soiled utility rooms by that word).
  */
-export function planRename(picked: ClassicSpace[], pattern: string): RenamePlan {
+export function planRename(picked: ClassicSpace[], pattern: string, rules: LetterRule[] = []): RenamePlan {
   const sorted = [...picked].sort((a, b) => natural(String(a.roomNumber ?? ""), String(b.roomNumber ?? "")));
   const usesType = /\{type\}/i.test(pattern);
+  const usesName = /\{name\}/i.test(pattern);
   const changes: RenameChange[] = [];
-  let noType = 0, same = 0, soiled = 0, k = 0;
+  let noType = 0, same = 0, soiled = 0, noRule = 0, k = 0;
   for (const sp of sorted) {
     if (usesType && !typeWord(sp)) { noType++; continue; }
     const from = String(sp.roomName ?? "");
-    const to = renderName(pattern, sp, k + 1);
+    const to = renderName(pattern, sp, k + 1, rules);
+    if (to === null) { noRule++; continue; }
     if (!to || to === from.trim()) { same++; k++; continue; }
+    // a pattern that keeps the old name must not pile up on a second run: "PKT101 TLT" already
+    // starts with what the pattern puts in front, so it's done
+    if (usesName) {
+      const head = renderName(pattern.replace(/\{name\}/gi, ""), sp, k + 1, rules) ?? "";
+      if (head && from.replace(/\s+/g, " ").trim().toLowerCase().startsWith(head.toLowerCase())) { same++; k++; continue; }
+    }
     if (/soil/i.test(from) && !/soil/i.test(to) && !/soil/i.test(String(sp.roomType ?? ""))) { soiled++; continue; }
     k++;
     changes.push({ id: sp.id, from, to });
   }
-  return { changes, noType, same, soiled };
+  return { changes, noType, same, soiled, noRule };
 }
 
 /** the plan grouped for the preview — "PAT. RM. → Patient Room × 262" — biggest group first */

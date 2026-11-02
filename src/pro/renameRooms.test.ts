@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  applyRename, looksRough, planRename, renameGroups, renderName, undoRename
+  applyRename, looksRough, mappedPrefix, planRename, renameGroups, renderName, splitNumber, undoRename
 } from "./renameRooms";
 import type { ClassicData, ClassicSpace } from "./classicStore";
 
@@ -99,5 +99,55 @@ describe("applyRename / undoRename", () => {
     d.v7.spaces![1].roomName = "Isolation Room"; // Josh fixed this one by hand afterwards
     expect(undoRename(d, plan.changes)).toBe(1);
     expect(d.v7.spaces!.map((s) => s.roomName)).toEqual(["PAT. RM.", "Isolation Room"]);
+  });
+});
+
+describe("letters + number + name (Josh, 2026-11-02: FPKb → PKT, then the number, then the name as it is)", () => {
+  it("splits a room number into its letters and its number", () => {
+    expect(splitNumber("FPKb-101")).toEqual({ prefix: "FPKb", num: "101" });
+    expect(splitNumber("FV4-297A")).toEqual({ prefix: "FV4", num: "297A" });
+    expect(splitNumber("4E-102")).toEqual({ prefix: "4E", num: "102" });
+    expect(splitNumber("PK102")).toEqual({ prefix: "PK", num: "102" });
+    expect(splitNumber("102")).toEqual({ prefix: "", num: "102" });
+    expect(splitNumber(" B2 .  14 ")).toEqual({ prefix: "B2", num: "14" });
+  });
+
+  it("maps the letters through the table, case aside, and says when there's no rule", () => {
+    const rules = [{ from: "fpkb", to: "PKT" }, { from: "", to: "" }];
+    expect(mappedPrefix("FPKb", rules)).toBe("PKT");
+    expect(mappedPrefix("FV4", rules)).toBeNull();
+    expect(mappedPrefix("FV4", [])).toBeNull();                    // an empty table changes nothing
+    expect(mappedPrefix("FV4", [{ from: " ", to: "" }])).toBeNull();
+  });
+
+  it("builds PKT101 TLT from FPKb-101 and TLT", () => {
+    const sp = room("b1", "FPKb-101", "TLT", "Restroom");
+    expect(renderName("{prefix}{num} {name}", sp, 1, [{ from: "FPKb", to: "PKT" }])).toBe("PKT101 TLT");
+    expect(renderName("{prefix}-{num} {name}", sp, 1, [{ from: "FPKb", to: "PKT" }])).toBe("PKT-101 TLT");
+    expect(renderName("{prefix}{num} {name}", room("b2", "FPKb-102", "", "Restroom"), 1, [{ from: "FPKb", to: "PKT" }])).toBe("PKT102");
+    expect(renderName("{prefix}{num} {name}", room("x", "FV4-201", "PAT. RM."), 1, [{ from: "FPKb", to: "PKT" }])).toBeNull();
+  });
+
+  it("plans the basement: rooms with other letters are left alone, and a second run changes nothing", () => {
+    const rules = [{ from: "FPKb", to: "PKT" }];
+    const picked = [
+      room("b1", "FPKb-101", "TLT", "Restroom"),
+      room("b2", "FPKb-103", "SOIL. UTIL.", "Utility Room"),
+      room("b3", "FPKb-102", "", "Storage"),
+      room("x", "FVb-120", "MECH.", "Mechanical Room")
+    ];
+    const plan = planRename(picked, "{prefix}{num} {name}", rules);
+    expect(plan.changes).toEqual([
+      { id: "b1", from: "TLT", to: "PKT101 TLT" },
+      { id: "b3", from: "", to: "PKT102" },
+      { id: "b2", from: "SOIL. UTIL.", to: "PKT103 SOIL. UTIL." }  // keeps the word Max Sanitation looks for
+    ]);
+    expect(plan).toMatchObject({ noRule: 1, same: 0, soiled: 0 });
+    // apply, then plan again: everything already starts with its letters and number
+    const data: ClassicData = { v7: { spaces: picked }, plans: [], nonSpace: [] };
+    applyRename(data, plan.changes);
+    const again = planRename(data.v7.spaces!, "{prefix}{num} {name}", rules);
+    expect(again.changes).toEqual([]);
+    expect(again.same).toBe(3);
   });
 });
