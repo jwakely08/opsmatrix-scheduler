@@ -36,6 +36,7 @@ import { downloadClientSchedule, type ClientExportInput } from "./clientSchedule
 import { downloadTemplateExport } from "./templateExport";
 import { clientScheduleRows } from "./exportData";
 import { pagesToPdf, handOffPdf, inStandaloneApp, preferShareSheet } from "./pdfExport";
+import { PROPRIETARY_KEY, readFlag, writeFlag } from "./flags";
 import { loadTemplates, b64ToBytes, type ClientTemplate } from "./templateStore";
 import { fetchAccountRole, canEditFormula, type AccountRole } from "./accountRole";
 import { cloudConfigured } from "./cloudConfig";
@@ -75,11 +76,8 @@ function dimColor(hex: string): string {
 }
 /** the print preview's "Show minutes" choice, remembered per device (Josh, 2026-11-02) */
 // Josh, 2026-11-02: the clock times, the priority column and the estimated minutes are proprietary until
-// a contract is signed. ONE checkbox on the Schedules tab ("include proprietary details") lets them out —
-// on the printed sheet and in the client Excel export alike; off by default, remembered per device.
-const PROPRIETARY_KEY = "om_proprietary";
-const readFlag = (key: string): boolean => { try { return localStorage.getItem(key) === "1"; } catch { return false; } };
-const writeFlag = (key: string, on: boolean) => { try { localStorage.setItem(key, on ? "1" : "0"); } catch { /* storage off */ } };
+// a contract is signed. ONE checkbox ("include proprietary details") lets them out — on the printed sheet
+// and in every schedule export alike; off by default, remembered per device (flags.ts).
 const RED = "#dc2626";
 
 function uid(p: string) { return p + "-" + Math.random().toString(36).slice(2, 9); }
@@ -1010,9 +1008,9 @@ function PrintPreview({ data, rules, scheduleId, onClose, proprietary, onProprie
         <span className="grow" />
         {/* Josh, 2026-11-02: the one proprietary switch, right here where the sheet is printed (the same
             checkbox sits on the Schedules tab) */}
-        <label className="checkline printopt" title="On: the clock times, the priority column and the estimated minutes print. Off: they stay off the sheet.">
+        <label className="checkline printopt" title="On: the clock times and the estimated minutes print. Off: they stay off the sheet.">
           <input type="checkbox" checked={proprietary} onChange={(e) => onProprietary(e.target.checked)} />
-          <span>Include proprietary details (times, priority, minutes)</span>
+          <span>Include proprietary details (times, minutes)</span>
         </label>
         {!standalone && <button className="pbtn" onClick={() => window.print()}>🖨 Print</button>}
         {pdf
@@ -1025,7 +1023,7 @@ function PrintPreview({ data, rules, scheduleId, onClose, proprietary, onProprie
         {pdfMsg && <span className="hint pdfmsg">{pdfMsg}</span>}
       </div>
       <PrintSchedule doc={doc} plan={plan} spaces={data.v7.spaces ?? []}
-        showMinutes={proprietary} showTimes={proprietary} showPriority={proprietary} />
+        showMinutes={proprietary} showTimes={proprietary} />
     </div>,
     document.body
   );
@@ -1753,9 +1751,9 @@ function SchedulesTab({ data, rules, schedules, employees, commit, onOpenOnMap, 
       {/* Josh, 2026-11-02: "a check box that allows proprietary timing information to be exported; if it's
           not checked, it won't be — we don't change everything, we just give the option" */}
       <label className="checkline exportopt"
-        title="Off: the printed sheet shows no clock times, priority or minutes, and the client export's Est. Minutes column reads —. On: all of it goes out.">
+        title="Off: the printed sheet shows no clock times or minutes, and the client export's Est. Minutes column reads —. On: all of it goes out.">
         <input type="checkbox" checked={proprietary} onChange={(e) => onProprietary(e.target.checked)} />
-        <span>Include proprietary details when printing or exporting — times, priority, estimated minutes</span>
+        <span>Include proprietary details when printing or exporting — times, estimated minutes</span>
         <small>{proprietary ? "on — the printed sheet and the client export carry them" : "off — kept back until a contract is signed"}</small>
       </label>
 

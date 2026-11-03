@@ -83,15 +83,13 @@
 .c-type { width: 74px; color: #52606d; font-size: 8.6pt; }
 .c-task { }
 .c-task2 { }
-.c-pri { width: 58px; text-align: center; }
 .c-min { width: 50px; text-align: right; font-weight: 700; white-space: nowrap; }
 /* "Show minutes" off: every minute figure goes, the times and the rooms stay */
 .printdoc .pnomin { display: none; }
 .printdoc.nominutes .c-min, .printdoc.nominutes .pmin { display: none; }
 .printdoc.nominutes .pnomin { display: inline; }
-/* "Show times" off: the clock column and every run time range go; "Show priority" off: the priority column goes */
+/* "Show times" off (the proprietary switch): the clock column and every run time range go */
 .printdoc.notimes .c-time, .printdoc.notimes .ptime { display: none; }
-.printdoc.nopriority .c-pri { display: none; }
 .c-done { width: 32px; text-align: center; }
 .c-done i { display: inline-block; width: 13px; height: 13px; border: 1.5px solid #9aa5b1; border-radius: 3px; }
 

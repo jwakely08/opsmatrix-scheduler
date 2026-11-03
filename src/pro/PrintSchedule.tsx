@@ -12,25 +12,25 @@
 import React, { useMemo } from "react";
 import {
   rectifyForDisplay, pathFrom, centroidOf, boundsOf,
-  type ClassicPlan, type ClassicSpace, type Priority
+  type ClassicPlan, type ClassicSpace
 } from "./classicStore";
 import { shiftDutyPhrase, type ScheduleDoc, type DocDuty, type DocRow } from "./scheduleDoc";
 
-const PRIORITY_CLASS: Record<Priority, string> = { High: "hi", Medium: "med", Low: "lo" };
+// No priority on the printed sheet at all (Josh, 2026-11-02: "that's not a data point I'm collecting
+// for this project") — it stays in the system and in the Excel exports.
 
-export function PrintSchedule({ doc, plan, spaces, showMinutes = true, showTimes = true, showPriority = true }: {
+export function PrintSchedule({ doc, plan, spaces, showMinutes = true, showTimes = true }: {
   doc: ScheduleDoc;
   plan: ClassicPlan | null;
   spaces: ClassicSpace[];
   /** Josh, 2026-11-02: "I don't want to post how long it takes… toggle that on and off when I print" */
   showMinutes?: boolean;
-  /** Josh, later that day: the clock times through the day and the priority column stay off the sheet
-   *  too, for proprietary reasons, until a contract is signed — the preview's switches bring them back */
+  /** Josh, later that day: the clock times through the day stay off the sheet too, for proprietary
+   *  reasons, until a contract is signed — the proprietary checkbox brings both back */
   showTimes?: boolean;
-  showPriority?: boolean;
 }) {
   return (
-    <div className={"printdoc" + (showMinutes ? "" : " nominutes") + (showTimes ? "" : " notimes") + (showPriority ? "" : " nopriority")}>
+    <div className={"printdoc" + (showMinutes ? "" : " nominutes") + (showTimes ? "" : " notimes")}>
       <PageOne doc={doc} />
       {plan && <PageTwo doc={doc} plan={plan} spaces={spaces} />}
     </div>
@@ -111,7 +111,6 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
             <th className="c-name">ROOM NAME</th>
             <th className="c-type">ROOM TYPE</th>
             <th className="c-task">TASKS FOR THIS CLEAN</th>
-            <th className="c-pri">PRIORITY</th>
             <th className="c-min">EST. MIN</th>
             <th className="c-done">DONE</th>
           </tr>
@@ -125,20 +124,20 @@ function PageOne({ doc }: { doc: ScheduleDoc }) {
               : item.kind === "round"
                 ? (
                   <tr className="pround" key="round">
-                    <td colSpan={9}>
+                    <td colSpan={8}>
                       ↻ {item.round.label.toUpperCase()} — BACK THROUGH YOUR ROOMS<span className="ptime"> · {item.round.startTime} – {item.round.endTime}</span><span className="pmin"> · {item.round.minutes} MIN</span>
                     </td>
                   </tr>
                 )
               : (
                 <tr className="plunch" key={"b" + item.brk.id + i}>
-                  <td colSpan={9}>
+                  <td colSpan={8}>
                     {item.brk.label.toUpperCase()} · {item.brk.startTime} – {item.brk.endTime}<span className="pmin"> · {item.brk.minutes} MIN</span>{item.brk.unpaid ? " · UNPAID" : ""}
                   </td>
                 </tr>
               ))}
           {!doc.rows.length && (
-            <tr><td colSpan={9} className="pempty">
+            <tr><td colSpan={8} className="pempty">
               No rooms on this schedule yet — add them on the map in OpsMatrix.
             </td></tr>
           )}
@@ -197,7 +196,6 @@ function RoomRow({ r }: { r: DocRow }) {
           ? r.tasks.map((t, i) => <span key={i} className="tchip">{t}</span>)
           : <span className="tnone">No tasks assigned yet — see supervisor</span>}
       </td>
-      <td className="c-pri"><span className={"pri " + PRIORITY_CLASS[r.priority]}>{r.priority.toUpperCase()}</span></td>
       <td className="c-min">{r.minutes} min</td>
       <td className="c-done"><i /></td>
     </tr>
@@ -216,7 +214,6 @@ function DutyRow({ d }: { d: DocDuty }) {
       <td className="c-task">
         {d.linkedRooms.length > 0 && <span className="tchip">Rooms: {d.linkedRooms.join(", ")}</span>}
       </td>
-      <td className="c-pri" />
       <td className="c-min">{d.minutes} min</td>
       <td className="c-done"><i /></td>
     </tr>
@@ -240,7 +237,6 @@ function SummaryStrip({ doc }: { doc: ScheduleDoc }) {
   return (
     <div className="pstrip">
       <span><b>{t.rooms}</b> rooms</span>
-      {t.priority.High > 0 && <span><b>{t.priority.High}</b> high priority</span>}
       {shiftDuties.length > 0 && (
         <span className="pmin"><b>{hours(t.shiftDutyMinutes)}</b> {shiftDutyPhrase(shiftDuties.map((d) => d.name))}</span>
       )}
